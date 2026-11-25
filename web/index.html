@@ -2939,7 +2939,10 @@ const Shortcuts = (() => {
       return;
     }
     navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
-      .then((s) => { camStream = s; v.srcObject = s; v.play().catch(() => {}); })
+      .then((s) => {
+        if (document.hidden || !$('cam').classList.contains('on')) { s.getTracks().forEach(t => t.stop()); return; }
+        camStream = s; v.srcObject = s; v.play().catch(() => {});
+      })
       .catch(() => { $('cam-msg').style.display = 'block'; v.style.display = 'none'; });
   }
   function closeCamera() {
@@ -2982,9 +2985,13 @@ const Pull = (() => {
   const np = $('np');
   const bottom = $('bottom');
   let drag = null;
+  let springRaf = 0;
+  let pullY = 0;
 
   screen.addEventListener('pointerdown', (e) => {
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     if (Editor.isOpen()) return;
+    cancelAnimationFrame(springRaf);
     if ($('cam').classList.contains('on') || $('flash').classList.contains('on')) return;
     if (e.target.closest('#np, #bottom, #edit, #clock-wrap, #clock-frame, #cam, #flash, button')) return;
     drag = { y: e.clientY, t: performance.now(), last: e.clientY, id: e.pointerId, armed: false };
@@ -3000,7 +3007,7 @@ const Pull = (() => {
       try { screen.setPointerCapture(drag.id); } catch (_) {}
     }
     // rubber band: 26% of the finger, hard-capped so nothing ever leaves
-    const y = Math.min(150, dy * 0.26);
+    const y = pullY = 150 * (1 - Math.exp(-Math.max(0, dy - 8) / 500));
     clockLayer.style.transform = `translate3d(0,${y}px,0)`;
     top.style.transform = `translate3d(0,${y}px,0)`;
     np.style.transform = `translate3d(0,${y * 0.6}px,0)`;
@@ -3018,22 +3025,21 @@ const Pull = (() => {
     }
     // one tidy spring back
     const t0 = performance.now();
-    const from = { top: clockLayer.style.transform };
+    const fromY = pullY;
     const step = (now) => {
-      const k = Math.min(1, (now - t0) / 320);
-      const e = 1 - Math.pow(1 - k, 3);
-      const y = parseFloat((from.top.match(/-?[\d.]+/) || [0])[0]) * (1 - e);
+      const k = Math.min(1, (now - t0) / 620);
+      const y = fromY * Math.exp(-7 * k) * Math.cos(10 * k);
       clockLayer.style.transform = `translate3d(0,${y}px,0)`;
       top.style.transform = `translate3d(0,${y}px,0)`;
       np.style.transform = `translate3d(0,${y * 0.6}px,0)`;
       bottom.style.transform = `translate3d(0,${y * 0.4}px,0)`;
-      if (k < 1) requestAnimationFrame(step);
+      if (k < 1) springRaf = requestAnimationFrame(step);
       else {                              // wipe the inline styles so layout is pristine
         clockLayer.style.transform = top.style.transform = '';
         np.style.transform = bottom.style.transform = '';
       }
     };
-    requestAnimationFrame(step);
+    springRaf = requestAnimationFrame(step);
   };
   screen.addEventListener('pointerup', settle);
   screen.addEventListener('pointercancel', settle);
