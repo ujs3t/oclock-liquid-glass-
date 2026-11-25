@@ -7,3 +7,6 @@ button{touch-action:manipulation;min-height:44px}
 @media(prefers-reduced-motion:reduce){
  *,*::before,*::after{animation:none !important;transition-duration:.01ms !important;scroll-behavior:auto !important}
 }
+.clock-size-control{display:grid;grid-template-columns:1fr auto;gap:8px;margin:12px 4px;color:#fff;font-size:14px}
+.clock-size-control input{grid-column:1/-1;width:100%;accent-color:#cfeaff;min-height:44px;direction:ltr}
+.clock-size-control small{grid-column:1/-1;color:rgba(255,255,255,.65);font-size:11px;line-height:1.6}

@@ -5,7 +5,7 @@ import vm from 'node:vm';
 const html = readFileSync('web/index.html','utf8');
 test('all inline JavaScript parses', () => {
   for (const match of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)) new vm.Script(match[1]);
-  for (const name of ['mobile.js','mobile-init.js']) new vm.Script(readFileSync('web/'+name,'utf8'));
+  for (const name of ['mobile.js','mobile-init.js','native-glass.js']) new vm.Script(readFileSync('web/'+name,'utf8'));
 });
 test('local fonts and mobile assets are packaged', () => {
   assert.ok(!html.includes('fonts.googleapis.com'));

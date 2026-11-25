@@ -7,6 +7,7 @@
 <title>Lock Screen — Liquid Glass</title>
 <link rel="stylesheet" href="mobile.css">
 <script src="mobile-init.js"></script>
+<script src="native-glass.js"></script>
 <style>
 :root{
   --safe-t: env(safe-area-inset-top, 0px);
@@ -943,6 +944,10 @@ body.editing #bar{opacity:.35}
     </div>
     <div class="edit-label">الخط</div>
     <div class="f-row" id="fonts"></div>
+    <label class="clock-size-control" for="clock-size">حجم الساعة <output id="clock-size-value"></output>
+      <input id="clock-size" type="range" min="56" max="420" step="2" aria-label="حجم الساعة">
+      <small>اضغط مطولًا على الساعة لزيادة الارتفاع والعرض بالمقابض. الحد الأقصى حسب مساحة الشاشة.</small>
+    </label>
     <div class="edit-label">اللون</div>
     <div class="c-row" id="colors"></div>
     <div class="edit-label">الخلفية</div>
@@ -1782,7 +1787,7 @@ const Clock = (() => {
 
     let size = c.size;
     // fit inside the viewport with side breathing room
-    const maxW = hostW * 0.88;
+    const maxW = hostW - 16;
     const dpr = window.devicePixelRatio || 1;
     let ss = Math.min(3, Math.max(2, Math.round(dpr * 1.5)));
 
@@ -1801,7 +1806,7 @@ const Clock = (() => {
     const bottom = $('bottom');
     const obstacle = state.npOn ? card : bottom;
     const obstacleTop = obstacle.getBoundingClientRect().top;
-    const availableH = Math.max(72, Math.min(host.clientHeight * .43,
+    const availableH = Math.max(72, Math.min(host.clientHeight * .8,
       obstacleTop - layer.top - 24));
     const rawH = Math.max(40, lines.length * size * .92 * c.sy);
     const fit = Math.min(1, (maxW - 36) / rawW, (availableH - 36) / rawH);
@@ -1884,14 +1889,14 @@ const Clock = (() => {
   let glassObjects = [];
   function onWorkerResult(e) {
     if (e.data.kind === 'inner') { onInnerResult(e.data); return; }
-    const { jobId, w, h, maxAbsCss, dispBuf, shadBuf, dispBlob, shadBlob } = e.data;
+    const { jobId, w, h, maxAbsCss, dispBuf, shadBuf, dispBlob, shadBlob, dispUrl, shadUrl } = e.data;
     const meta = pendingMeta.get(jobId);
     pendingMeta.delete(jobId);
     if (!meta || jobId !== jobSeq) return;
     const previousObjects = glassObjects;
     glassObjects = dispBlob ? [URL.createObjectURL(dispBlob), URL.createObjectURL(shadBlob)] : [];
-    const disp = glassObjects[0] || bufToUrl(dispBuf, w, h);
-    const shad = glassObjects[1] || bufToUrl(shadBuf, w, h);
+    const disp = dispUrl || glassObjects[0] || bufToUrl(dispBuf, w, h);
+    const shad = shadUrl || glassObjects[1] || bufToUrl(shadBuf, w, h);
     // Give a pending cross-fade time to release the old filter textures.
     setTimeout(() => previousObjects.forEach(url => URL.revokeObjectURL(url)), 2000);
     glassCache = {
@@ -2123,6 +2128,17 @@ const Clock = (() => {
       postInnerFor(meta.innerKey, meta.alpha, meta.w, meta.h, meta.ss);
     }
 
+    if (window.NativeGlassMath?.available) {
+      NativeGlassMath.compute(jobId, meta, params)
+        .then(data => onWorkerResult({ data }))
+        .catch(() => dispatchWebJob(jobId, meta, params));
+      return;
+    }
+    dispatchWebJob(jobId, meta, params);
+  }
+
+  function dispatchWebJob(jobId, meta, params) {
+    if (jobId !== jobSeq) return;
     const wk = ensureWorker();
     if (wk) {
       // send a copy: the main thread keeps the alpha for live inner-shadow repaints
@@ -2376,7 +2392,7 @@ const Clock = (() => {
       $('topline').getBoundingClientRect().bottom + 10,
       $('clock-layer').getBoundingClientRect().top + 2
     );
-    const cardTop = $('np').getBoundingClientRect().top - 16;
+    const cardTop = (state.npOn ? $('np') : $('bottom')).getBoundingClientRect().top - 12;
     boxCache = {
       vw: host.width, vh: host.height,
       pad, topSafe, cardTop: Math.max(topSafe + 80, cardTop)
@@ -2387,14 +2403,14 @@ const Clock = (() => {
     if (!boxCache) measureBox();
     const m = clockMetrics();
     const pad = boxCache.pad;
-    const maxW = Math.max(140, boxCache.vw - 36 - pad);
-    const maxH = Math.max(96, Math.min(boxCache.cardTop - boxCache.topSafe, boxCache.vh * 0.6) - pad);
+    const maxW = Math.max(140, boxCache.vw - 16 - (m.pad || 36));
+    const maxH = Math.max(96, Math.min(boxCache.cardTop - boxCache.topSafe, boxCache.vh * 0.8) - pad);
     return {
       maxW, maxH,
       minW: Math.min(maxW, 110),
       minH: Math.min(maxH, 70),
-      maxSx: clamp(maxW / Math.max(1, m.baseW), 0.3, 2.8),
-      maxSy: clamp(maxH / Math.max(1, m.baseH), 0.4, 3.2),
+      maxSx: clamp(maxW / Math.max(1, m.baseW), 0.3, 6),
+      maxSy: clamp(maxH / Math.max(1, m.baseH), 0.4, 8),
       minSx: clamp(110 / Math.max(1, m.baseW), 0.3, 1.2),
       minSy: clamp(70 / Math.max(1, m.baseH), 0.4, 1.4)
     };
@@ -2414,7 +2430,20 @@ const Clock = (() => {
     save();
   }
 
-  function clampSize(v) { return Math.max(56, Math.min(260, v)); }
+  function clampSize(v) { return Math.max(56, Math.min(420, v)); }
+  const sizeControl = $('clock-size');
+  const sizeValue = $('clock-size-value');
+  function syncSizeControl() {
+    sizeControl.value = String(CONFIG.clock.size);
+    sizeValue.textContent = Math.round(CONFIG.clock.size / 128 * 100) + '%';
+  }
+  syncSizeControl();
+  sizeControl.addEventListener('input', () => {
+    CONFIG.clock.size = clampSize(Number(sizeControl.value));
+    syncSizeControl();
+    persistGeometry();
+    schedule(true, 90);
+  });
 
   /* Undo: keeps the size from before the frame was opened. */
   let lastSize = null;
@@ -2426,6 +2455,7 @@ const Clock = (() => {
     CONFIG.clock.size = lastSize.size;
     CONFIG.clock.sx = lastSize.sx;
     CONFIG.clock.sy = lastSize.sy;
+    syncSizeControl();
     persistGeometry();
     Clock.schedule(true);
     layoutFrame();
@@ -2442,6 +2472,7 @@ const Clock = (() => {
     CONFIG.clock.size = 128;
     CONFIG.clock.sx = 0.94;
     CONFIG.clock.sy = 1.62;
+    syncSizeControl();
     persistGeometry();
     Clock.schedule(true);
     layoutFrame();

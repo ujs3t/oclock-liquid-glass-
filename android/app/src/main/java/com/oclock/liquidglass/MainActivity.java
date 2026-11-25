@@ -11,10 +11,13 @@ import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.View;
 import androidx.webkit.WebViewAssetLoader;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
 
 public class MainActivity extends Activity {
     private static final String ORIGIN = "https://appassets.androidplatform.net";
     private WebView web;
+    private NativeGlass nativeGlass;
     private ValueCallback<Uri[]> files;
     private PermissionRequest camera;
 
@@ -37,7 +40,11 @@ public class MainActivity extends Activity {
             .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this)).build();
         web.setWebViewClient(new WebViewClient() {
             @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-                return assets.shouldInterceptRequest(request.getUrl());
+                Uri uri = request.getUrl();
+                if (nativeGlass != null && ORIGIN.equals(uri.getScheme() + "://" + uri.getHost()) &&
+                    uri.getPath() != null && uri.getPath().startsWith("/native-glass/"))
+                    return nativeGlass.intercept(uri.getPath());
+                return assets.shouldInterceptRequest(uri);
             }
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri uri = request.getUrl();
@@ -76,6 +83,14 @@ public class MainActivity extends Activity {
                 if (camera == request) camera = null;
             }
         });
+        if (NativeGlass.available() && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) &&
+            WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_ARRAY_BUFFER)) {
+            nativeGlass = new NativeGlass();
+            WebViewCompat.addWebMessageListener(web, "AndroidGlass", java.util.Collections.singleton(ORIGIN),
+                (view, message, origin, mainFrame, reply) -> {
+                    if (mainFrame && ORIGIN.equals(origin.toString().replaceAll("/$", ""))) nativeGlass.receive(view, message, reply);
+                });
+        }
         web.loadUrl(ORIGIN + "/assets/index.html");
     }
     private void fullscreen() {
@@ -119,6 +134,7 @@ public class MainActivity extends Activity {
     @Override protected void onDestroy() {
         if (files != null) files.onReceiveValue(null);
         if (camera != null) camera.deny();
+        if (nativeGlass != null) nativeGlass.close();
         web.destroy();
         super.onDestroy();
     }

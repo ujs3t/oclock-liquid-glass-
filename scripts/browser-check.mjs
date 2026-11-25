@@ -44,6 +44,13 @@ try {
     assert.equal(await page.locator('#edit').evaluate(el=>el.classList.contains('open')),true);
     const box=await page.locator('#edit').boundingBox();
     assert.ok(box.x>=-1 && box.x+box.width<=width+1);
+    await page.locator('#clock-size').fill('420');
+    await page.locator('#clock-size').dispatchEvent('input');
+    await page.waitForTimeout(1200);
+    assert.equal(await page.evaluate(()=>CONFIG.clock.size),420);
+    const enlarged=await page.locator('#clock-glass').boundingBox();
+    assert.ok(enlarged.width<=before.screen+1,'enlarged clock stays in bounds');
+    if (width===412) assert.ok(enlarged.width>before.width || enlarged.height>before.quality.textH,'size control really enlarges the clock');
     assert.equal(await page.evaluate(()=>window.appBack()),true);
     assert.equal(await page.evaluate(()=>window.appBack()),false);
     await page.locator('#sh-left').click();
@@ -53,4 +60,7 @@ try {
     console.log(`PASS ${width}x${height} reduced-motion=${reducedMotion}`);
     await page.close();
   }
+} catch(error) {
+  console.error('::error::'+String(error).replaceAll('\n','%0A'));
+  throw error;
 } finally { await browser.close(); }
