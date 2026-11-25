@@ -45,15 +45,25 @@ try {
     const layoutInfo = await page.evaluate(async () => {
       const top = document.getElementById('topline').getBoundingClientRect();
       const clk = document.getElementById('clock-glass').getBoundingClientRect();
+      const sh = document.getElementById('sh-left');
+      const shBox = sh.getBoundingClientRect();
+      const shRimBg = sh.querySelector('.lg-shadow-layer')?.style.backgroundImage || '';
+      const shUrl = shRimBg.slice(4, -1).replace(/^"|"$/g, '');
+      const shImg = new Image(); shImg.src = shUrl; await shImg.decode();
       const dnd = document.getElementById('dnd');
       const dndBox = dnd.getBoundingClientRect();
-      const dndRimBg = dnd.querySelector('.lg-shadow-layer')?.style.backgroundImage || '';
-      const rimUrl = dndRimBg.slice(4, -1).replace(/^"|"$/g, '');
-      const img = new Image(); img.src = rimUrl; await img.decode();
-      return { topBottom: top.bottom, clkTop: clk.top, dndW: dndBox.width, rimW: img.width };
+      let dndRimW = 0;
+      if (dndBox.width > 0) {
+        const dndRimBg = dnd.querySelector('.lg-shadow-layer')?.style.backgroundImage || '';
+        const rimUrl = dndRimBg.slice(4, -1).replace(/^"|"$/g, '');
+        const img = new Image(); img.src = rimUrl; await img.decode();
+        dndRimW = img.width;
+      }
+      return { topBottom: top.bottom, clkTop: clk.top, shW: shBox.width, shRimW: shImg.width, dndW: dndBox.width, dndRimW };
     });
     assert.ok(layoutInfo.clkTop >= layoutInfo.topBottom - 2, 'clock must sit cleanly below topline');
-    assert.ok(layoutInfo.rimW >= layoutInfo.dndW * 1.8, 'dnd rim must be supersampled (>=2x)');
+    assert.ok(layoutInfo.shRimW >= layoutInfo.shW * 1.8, 'sh-left rim must be supersampled (>=2x)');
+    if (layoutInfo.dndW > 0) assert.ok(layoutInfo.dndRimW >= layoutInfo.dndW * 1.8, 'dnd rim must be supersampled (>=2x)');
     await page.evaluate(()=>Clock.schedule(true));
     await page.waitForTimeout(600);
     assert.equal(await page.locator('#clock-inner').evaluate(el=>el.style.backgroundImage),before.rim,'unchanged rim is reused');
