@@ -22,6 +22,8 @@ test('C++ Android engine preserves full-quality reference refraction and rim', (
       let next=it.next(); while(!next.done) next=it.next(); const reference=next.value;
       const output=execFileSync(binary,[String(w),String(h),String(surfaceId)],{input:alpha,maxBuffer:32000000});
       assert.ok(Math.abs(output.readDoubleLE()-reference.maxAbsCss)<1e-8,`${surface} displacement scale`);
+      const minimal=execFileSync(binary,[String(w),String(h),String(surfaceId),'disp-only'],{input:alpha,maxBuffer:32000000});
+      assert.deepEqual(minimal,output.subarray(0,8+w*h*4),'omitting unused shadow cannot change refraction');
       const expected=Buffer.concat([Buffer.from(reference.dispBuf),Buffer.from(reference.shadBuf)]);
       const actual=output.subarray(8); assert.equal(actual.length,expected.length);
       for(let i=0;i<actual.length;i++) assert.ok(Math.abs(actual[i]-expected[i])<=1,`${surface} ${w}x${h} byte ${i}: ${actual[i]} vs ${expected[i]}`);
@@ -34,14 +36,14 @@ test('C++ Android engine preserves full-quality reference refraction and rim', (
 test('Android transport sends binary alpha and native results; failure disables native path', async () => {
   let packet;
   const bridge={postMessage:p=>packet=p};
-  const context={window:{AndroidGlass:bridge},setTimeout,clearTimeout,ArrayBuffer,DataView,Uint8Array,Error,Number,JSON};
+  const context={window:{AndroidGlass:bridge},document:{getElementById:()=>null,addEventListener:()=>{}},setTimeout,clearTimeout,ArrayBuffer,DataView,Uint8Array,Error,Number,JSON};
   vm.runInNewContext(readFileSync('web/native-glass.js','utf8'),context);
   const engine=context.window.NativeGlassMath;
   const job=engine.compute(7,{w:4,h:4,ss:2,alpha:new Uint8Array(16).fill(255)},
     {ior:1.5,thickness:40,bezel:50,shadowThickness:2.5,shadowAngle:55,surface:'convexSquircle'});
   assert.equal(packet.byteLength,96); assert.equal(new DataView(packet).getFloat64(0,true),7);
   assert.equal(new Uint8Array(packet)[80],255);
-  bridge.onmessage({data:JSON.stringify({jobId:7,maxAbsCss:20,dispUrl:'https://appassets.androidplatform.net/native-glass/1/disp.png',shadUrl:'https://appassets.androidplatform.net/native-glass/1/shadow.png',nativeMs:12})});
+  bridge.onmessage({data:JSON.stringify({jobId:7,maxAbsCss:20,dispUrl:'https://appassets.androidplatform.net/native-glass/1/disp.png',nativeMs:12})});
   assert.equal((await job).nativeMs,12); assert.equal(engine.stats.backend,'android-cpp');
   bridge.postMessage=()=>{throw new Error('unsupported');};
   await assert.rejects(engine.compute(8,{w:4,h:4,ss:2,alpha:new Uint8Array(16)},{}));

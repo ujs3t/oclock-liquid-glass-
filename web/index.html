@@ -947,6 +947,7 @@ body.editing #bar{opacity:.35}
     <label class="clock-size-control" for="clock-size">حجم الساعة <output id="clock-size-value"></output>
       <input id="clock-size" type="range" min="56" max="420" step="2" aria-label="حجم الساعة">
       <small>اضغط مطولًا على الساعة لزيادة الارتفاع والعرض بالمقابض. الحد الأقصى حسب مساحة الشاشة.</small>
+      <small id="glass-engine-status" aria-live="polite">محرك حساب الزجاج: Web Worker</small>
     </label>
     <div class="edit-label">اللون</div>
     <div class="c-row" id="colors"></div>
@@ -1896,7 +1897,7 @@ const Clock = (() => {
     const previousObjects = glassObjects;
     glassObjects = dispBlob ? [URL.createObjectURL(dispBlob), URL.createObjectURL(shadBlob)] : [];
     const disp = dispUrl || glassObjects[0] || bufToUrl(dispBuf, w, h);
-    const shad = shadUrl || glassObjects[1] || bufToUrl(shadBuf, w, h);
+    const shad = shadUrl || glassObjects[1] || (shadBuf ? bufToUrl(shadBuf, w, h) : '');
     // Give a pending cross-fade time to release the old filter textures.
     setTimeout(() => previousObjects.forEach(url => URL.revokeObjectURL(url)), 2000);
     glassCache = {

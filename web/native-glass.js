@@ -4,6 +4,11 @@
   let enabled = !!window.AndroidGlass;
   let pending = null;
   const stats = { backend: 'web-worker', nativeMs: 0, fallbacks: 0 };
+  function showBackend() {
+    const label = document.getElementById('glass-engine-status');
+    if (label) label.textContent = 'محرك حساب الزجاج: ' + (stats.backend === 'android-cpp' ? 'Android C++' : 'Web Worker');
+  }
+  document.addEventListener('DOMContentLoaded', showBackend);
   window.NativeGlassMath = {
     get available() { return enabled; },
     stats,
@@ -21,7 +26,7 @@
         const fail = (error) => {
           if (!pending || pending.jobId !== jobId) return;
           clearTimeout(pending.timer); pending = null; enabled = false;
-          stats.fallbacks++; stats.backend = 'web-worker'; reject(error);
+          stats.fallbacks++; stats.backend = 'web-worker'; showBackend(); reject(error);
         };
         pending = {jobId,resolve,reject,fail,timer:setTimeout(()=>fail(new Error('native timeout')),8000)};
         try { window.AndroidGlass.postMessage(packet); } catch(error) { fail(error); }
@@ -34,11 +39,11 @@
     if (!pending || data.jobId !== pending.jobId) return;
     if (data.error || !Number.isFinite(data.maxAbsCss) ||
         !data.dispUrl?.startsWith('https://appassets.androidplatform.net/native-glass/') ||
-        !data.shadUrl?.startsWith('https://appassets.androidplatform.net/native-glass/')) {
+        (data.shadUrl && !data.shadUrl.startsWith('https://appassets.androidplatform.net/native-glass/'))) {
       pending.fail(new Error('invalid native result')); return;
     }
     const job = pending; pending = null; clearTimeout(job.timer);
-    stats.backend = 'android-cpp'; stats.nativeMs = data.nativeMs;
+    stats.backend = 'android-cpp'; stats.nativeMs = data.nativeMs; showBackend();
     job.resolve(data);
   };
 })();

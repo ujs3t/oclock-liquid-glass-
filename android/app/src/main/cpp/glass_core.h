@@ -35,7 +35,7 @@ inline std::vector<float> edt(const std::vector<uint8_t>& alpha,int w,int h,bool
     for(int x=0;x<w;x++) { for(int y=0;y<h;y++) f[y]=grid[y*w+x]; edt1(f,d,v,z,h); for(int y=0;y<h;y++) grid[y*w+x]=float(std::sqrt(double(d[y]))); }
     return grid;
 }
-inline Result compute(const std::vector<uint8_t>& alpha,int w,int h,const Params& p) {
+inline Result compute(const std::vector<uint8_t>& alpha,int w,int h,const Params& p,bool includeShadow=true) {
     if(w<4 || h<4 || int64_t(w)*h>3000000 || alpha.size()!=size_t(w)*h) throw std::invalid_argument("invalid raster size");
     const int count=w*h;
     auto outside=edt(alpha,w,h,true), inside=edt(alpha,w,h,false);
@@ -61,20 +61,20 @@ inline Result compute(const std::vector<uint8_t>& alpha,int w,int h,const Params
         profile[i]=disp; maxAbs=std::max(maxAbs,std::abs(disp));
     }
     if(!maxAbs) maxAbs=1e-6;
-    Result result; result.maxAbsCss=maxAbs/p.ss; result.displacement.resize(count*4); result.shadow.resize(count*4);
+    Result result; result.maxAbsCss=maxAbs/p.ss; result.displacement.resize(count*4); if(includeShadow) result.shadow.resize(count*4);
     double shadowThick=std::max(1.,p.shadowThickness*p.ss),feather=std::max(.9,shadowThick*.15);
     double angle=p.shadowAngle*3.14159265358979323846/180,ax=std::cos(angle),ay=std::sin(angle);
     for(int y=0;y<h;y++) { int ym=std::max(0,y-1),yp=std::min(h-1,y+1);
         for(int x=0;x<w;x++) { int xm=std::max(0,x-1),xp=std::min(w-1,x+1),i=y*w+x,q=i*4; double dd=sdf[i];
-            auto* d=result.displacement.data()+q; auto* s=result.shadow.data()+q;
+            auto* d=result.displacement.data()+q; auto* s=includeShadow ? result.shadow.data()+q : nullptr;
             d[0]=d[1]=d[2]=128; d[3]=255;
-            if(dd>feather) continue;
+            if(dd>(includeShadow ? feather : 0.)) continue;
             double gx=(double(smooth[y*w+xp])-smooth[y*w+xm])*.5,gy=(double(smooth[yp*w+x])-smooth[ym*w+x])*.5;
             double len=std::hypot(gx,gy); if(!len) len=1; double nx=gx/len,ny=gy/len;
             if(dd<=0) { double pos=clamp(std::min(-dd,bezel)/bezel)*126; int a=int(std::floor(pos)),b=std::min(126,a+1); double t=pos-a,disp=profile[a]*(1-t)+profile[b]*t;
                 d[0]=byte(128-nx*(disp/maxAbs)*127); d[1]=byte(128-ny*(disp/maxAbs)*127);
             }
-            if(-dd<=shadowThick+feather) { double band=clamp((shadowThick+dd)/shadowThick),edgeAA=clamp((feather-dd)/(2*feather));
+            if(includeShadow && -dd<=shadowThick+feather) { double band=clamp((shadowThick+dd)/shadowThick),edgeAA=clamp((feather-dd)/(2*feather));
                 s[0]=s[1]=s[2]=255; s[3]=byte(std::pow(band,.6)*edgeAA*std::pow(std::abs(nx*ax+ny*ay),1.8)*255);
             }
         }

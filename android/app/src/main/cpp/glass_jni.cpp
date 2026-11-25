@@ -8,7 +8,7 @@ Java_com_oclock_liquidglass_NativeGlass_compute(JNIEnv* env,jclass,jbyteArray al
         std::vector<uint8_t> input(env->GetArrayLength(alpha));
         env->GetByteArrayRegion(alpha,0,input.size(),reinterpret_cast<jbyte*>(input.data()));
         glass::Params params; params.ss=p[0]; params.ior=p[1]; params.thickness=p[2]; params.bezel=p[3]; params.shadowThickness=p[4]; params.shadowAngle=p[5]; params.surface=int(p[6]);
-        auto result=glass::compute(input,w,h,params);
+        auto result=glass::compute(input,w,h,params,false);
         auto cls=env->FindClass("[B"); auto output=env->NewObjectArray(3,cls,nullptr);
         auto add=[&](int i,const uint8_t* data,size_t size) { auto a=env->NewByteArray(size); env->SetByteArrayRegion(a,0,size,reinterpret_cast<const jbyte*>(data)); env->SetObjectArrayElement(output,i,a); env->DeleteLocalRef(a); };
         add(0,result.displacement.data(),result.displacement.size()); add(1,result.shadow.data(),result.shadow.size());

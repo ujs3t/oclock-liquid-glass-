@@ -65,14 +65,16 @@ final class NativeGlass implements AutoCloseable {
                 if (result == null) throw new IllegalStateException("native raster failed");
                 if (closed || version != generation.get()) return;
                 byte[] displacement = png(result[0], w, h);
-                byte[] shadow = png(result[1], w, h);
+                // The old refraction pipeline also produced an unused rim texture.
+                // Visible white inner lighting is kept in its separate, unchanged Worker.
+                byte[] shadow = result[1].length == 0 ? new byte[0] : png(result[1], w, h);
                 if (closed || version != generation.get()) return;
                 String prefix = "/native-glass/" + version + "/";
                 if (displacement.length + shadow.length > 12 * 1024 * 1024) throw new IllegalStateException("native cache budget exceeded");
                 synchronized (images) {
                     if (closed || version != generation.get()) return;
                     images.put(prefix + "disp.png", displacement);
-                    images.put(prefix + "shadow.png", shadow);
+                    if (shadow.length > 0) images.put(prefix + "shadow.png", shadow);
                     imageBytes += displacement.length + shadow.length;
                     while (images.size() > 6 || imageBytes > 12 * 1024 * 1024) {
                         Map.Entry<String, byte[]> oldest = images.entrySet().iterator().next();
@@ -85,10 +87,10 @@ final class NativeGlass implements AutoCloseable {
                 response.put("w", w); response.put("h", h);
                 response.put("maxAbsCss", ByteBuffer.wrap(result[2]).order(ByteOrder.nativeOrder()).getDouble());
                 response.put("dispUrl", ORIGIN + prefix + "disp.png");
-                response.put("shadUrl", ORIGIN + prefix + "shadow.png");
+                if (shadow.length > 0) response.put("shadUrl", ORIGIN + prefix + "shadow.png");
                 response.put("nativeMs", (System.nanoTime() - start) / 1000000.0);
                 web.post(() -> { if (!closed && version == generation.get()) reply.postMessage(response.toString()); });
-            } catch (RuntimeException error) {
+            } catch (RuntimeException | org.json.JSONException error) {
                 web.post(() -> { if (!closed) reply.postMessage("{\"jobId\":" + id + ",\"error\":\"native raster failed\"}"); });
             }
         });
