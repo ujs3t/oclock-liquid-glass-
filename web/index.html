@@ -1,0 +1,3425 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Lock Screen — Liquid Glass</title>
+<link rel="stylesheet" href="mobile.css">
+<script src="mobile-init.js"></script>
+<style>
+:root{
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --clock-top: #ffffff;
+  --clock-tint: linear-gradient(180deg, rgba(255,255,255,.30), rgba(255,255,255,.10));
+  --ui: #ffffff;
+  --ui-dim: rgba(255,255,255,.72);
+  --glass-bg: rgba(255,255,255,.10);
+  --ease: cubic-bezier(.32,.72,0,1);
+  --spring: cubic-bezier(.34,1.42,.44,1);
+  --bounce: cubic-bezier(.2,1.62,.32,1);
+  --soft: cubic-bezier(.22,.9,.24,1);
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+/* class the Liquid Glass skill expects on every glass target */
+.lg-shadow-layer{
+  position:absolute;inset:0;border-radius:inherit;
+  pointer-events:none;background-repeat:no-repeat;background-size:100% 100%;
+  z-index:2;
+}
+.glass-fallback{
+  backdrop-filter:blur(20px) saturate(1.6) brightness(1.08) !important;
+  -webkit-backdrop-filter:blur(20px) saturate(1.6) brightness(1.08) !important;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.28);
+}
+html,body{height:100%;overflow:hidden;background:#000}
+body{
+  font-family:'Inter',-apple-system,'SF Pro Text',system-ui,sans-serif;
+  color:#fff;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+  overscroll-behavior:none;
+  touch-action:manipulation;
+}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input{font:inherit}
+
+/* ─────────────── Lock screen shell (fills the viewport) ─────────────── */
+#screen{
+  position:fixed;inset:0;
+  overflow:hidden;
+  isolation:isolate;
+  background:#05060a;
+}
+#wall{
+  position:absolute;inset:0;
+  width:100%;height:100%;
+  object-fit:cover;
+  object-position:center;
+  transform:scale(var(--wall-zoom,1)) translate3d(0,0,0);
+  transition:transform .7s var(--ease);
+  will-change:transform;
+}
+#wall-dim{position:absolute;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity .5s var(--ease)}
+#wall-tint{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .6s var(--ease)}
+
+/* Depth effect: cut-out sits ABOVE the clock */
+#subject{
+  position:absolute;inset:0;
+  width:100%;height:100%;
+  object-fit:cover;object-position:center;
+  pointer-events:none;
+  transform:scale(var(--wall-zoom,1)) translate3d(0,0,0);
+  transition:transform .7s var(--ease), opacity .5s var(--ease);
+  will-change:transform;
+  display:none;
+}
+body.has-subject #subject{display:block}
+
+/* ─────────────── Status bar ─────────────── */
+#status{
+  position:absolute;top:0;left:0;right:0;
+  padding:calc(var(--safe-t) + 10px) 26px 0;
+  display:flex;align-items:center;justify-content:space-between;
+  font-size:15px;font-weight:600;letter-spacing:.01em;
+  color:var(--ui);
+  pointer-events:none;
+  z-index:6;
+  text-shadow:0 1px 6px rgba(0,0,0,.25);
+}
+.st-left{display:flex;align-items:center;gap:6px;font-size:14px;font-weight:600}
+.st-right{display:flex;align-items:center;gap:6px}
+#battery{gap:3px}
+.st-icon{display:flex;align-items:center;opacity:.96}
+.st-icon svg{display:block}
+#battery{
+  display:flex;align-items:center;gap:4px;
+  font-size:14px;font-weight:600;
+}
+.bat-shell{
+  width:26px;height:13px;border-radius:4px;
+  border:1.4px solid currentColor;
+  position:relative;opacity:.95;
+}
+.bat-shell::after{
+  content:'';position:absolute;right:-4px;top:4px;
+  width:2px;height:5px;border-radius:0 2px 2px 0;background:currentColor;
+}
+.bat-fill{
+  position:absolute;inset:1.6px;border-radius:2px;
+  background:currentColor;transform-origin:left center;
+  transform:scaleX(.49);
+  transition:transform .6s var(--ease), background .4s;
+}
+.bat-fill.low{background:#ff453a}
+
+/* Dynamic island */
+#island{
+  position:absolute;top:calc(var(--safe-t) + 11px);left:50%;
+  transform:translateX(-50%);
+  width:118px;height:34px;border-radius:20px;
+  background:#000;
+  z-index:7;
+  pointer-events:none;
+  transition:width .5s var(--spring), height .5s var(--spring), border-radius .5s var(--spring);
+  display:flex;align-items:center;justify-content:center;
+  overflow:hidden;
+}
+#island.wide{width:190px;height:38px;border-radius:21px}
+#island-label{
+  font-size:11px;font-weight:600;color:#fff;
+  opacity:0;transform:translateY(2px);
+  transition:opacity .3s .1s var(--ease), transform .3s .1s var(--ease);
+  white-space:nowrap;
+}
+#island.wide #island-label{opacity:1;transform:none}
+@media (min-width:520px){ #island{display:none} }
+
+/* ─────────────── Date + weather ─────────────── */
+#topline{
+  position:absolute;top:calc(var(--safe-t) + 62px);left:0;right:0;
+  display:flex;align-items:center;justify-content:center;gap:9px;
+  font-size:17px;font-weight:600;letter-spacing:-.01em;
+  color:var(--ui);
+  z-index:5;
+  pointer-events:none;
+  text-shadow:0 1px 8px rgba(0,0,0,.28);
+  transition:color .5s var(--ease), opacity .4s var(--ease);
+}
+#topline .sep{opacity:.55;font-weight:400}
+#wx{display:flex;align-items:center;gap:4px;font-weight:500}
+
+/* ─────────────── Clock (TextGlass) ─────────────── */
+#clock-layer{
+  position:absolute;left:0;right:0;
+  top:calc(var(--safe-t) + 86px);
+  display:flex;justify-content:center;
+  z-index:3;
+  pointer-events:none;
+}
+#clock-wrap{
+  position:relative;
+  pointer-events:auto;
+  cursor:default;
+  touch-action:none;
+  will-change:transform;
+  /* the white halo must never be clipped by the glass mask above it */
+  padding:26px 24px;
+  margin:-26px -24px;
+}
+body.resizing #clock-wrap{pointer-events:none}
+#clock-glass{
+  position:relative;
+  background:var(--clock-tint);
+  transition:opacity .26s var(--ease);
+  -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
+  -webkit-mask-size:100% 100%;mask-size:100% 100%;
+  will-change:opacity;
+}
+/* Digits: FLAT masked glyphs — no stroke, no glow, no halo.
+   Exactly like the reference: the numbers are just tinted surfaces. */
+#clock-glow{
+  position:absolute;left:0;top:0;
+  pointer-events:none;
+  transition:filter .35s var(--ease);
+  will-change:filter;
+  z-index:2;
+}
+#clock-shadow{
+  position:absolute;left:0;top:0;
+  width:100%;height:100%;
+  pointer-events:none;
+  background:var(--clock-top,#fff);
+  -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
+  -webkit-mask-size:100% 100%;mask-size:100% 100%;
+}
+/* INNER SHADOW: white map clipped to the glyph silhouette. It only lives
+   INSIDE the digits — no outer halo, no stroke. */
+#clock-inner{
+  position:absolute;left:0;top:0;
+  pointer-events:none;
+  background-repeat:no-repeat;
+  background-size:100% 100%;
+  background-position:0 0;
+  -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
+  -webkit-mask-size:100% 100%;mask-size:100% 100%;
+  transition:opacity .26s var(--ease);
+  will-change:opacity;
+  z-index:1;
+}
+#clock-fb{
+  position:absolute;inset:0;
+  display:none;align-items:center;justify-content:center;
+  font-weight:700;
+  white-space:pre;
+  color:rgba(255,255,255,.88);
+  text-shadow:0 1px 3px rgba(8,12,20,.35), 0 8px 26px rgba(8,12,20,.22);
+  pointer-events:none;
+}
+
+/* ─────────────── Clock resize frame (long-press) ─────────────── */
+#clock-frame{
+  position:absolute;
+  left:0;top:0;
+  width:0;height:0;
+  border:0;
+  border-radius:22px;
+  z-index:4;                      /* above the clock, below the editor */
+  pointer-events:none;
+  opacity:0;
+  transform:scale(.94);
+  transition:opacity .28s var(--ease), transform .38s var(--spring);
+  touch-action:none;
+}
+#clock-frame.on{
+  opacity:1;transform:none;pointer-events:auto;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.35);
+}
+#clock-frame .h{
+  position:absolute;
+  width:20px;height:20px;
+  border-radius:50%;
+  background:#fff;
+  box-shadow:0 2px 8px rgba(0,0,0,.35), 0 0 0 1px rgba(0,0,0,.06);
+  pointer-events:auto;
+  touch-action:none;
+  transition:transform .2s var(--spring), background .2s;
+}
+#clock-frame .h::after{
+  content:'';position:absolute;inset:6px;border-radius:50%;
+  background:rgba(20,22,28,.55);
+}
+#clock-frame.on .h{animation:hPulse 2.4s var(--ease) infinite}
+@keyframes hPulse{0%,100%{box-shadow:0 2px 8px rgba(0,0,0,.35),0 0 0 1px rgba(0,0,0,.06)}
+  50%{box-shadow:0 2px 8px rgba(0,0,0,.35),0 0 0 5px rgba(255,255,255,.22)}}
+#clock-frame .h:active{transform:scale(1.25)}
+#clock-frame .h.nw{left:-10px;top:-10px;cursor:nwse-resize}
+#clock-frame .h.ne{right:-10px;top:-10px;cursor:nesw-resize}
+#clock-frame .h.sw{left:-10px;bottom:-10px;cursor:nesw-resize}
+#clock-frame .h.se{right:-10px;bottom:-10px;cursor:nwse-resize}
+#clock-frame .h.n{left:50%;top:-10px;margin-left:-10px;cursor:ns-resize}
+#clock-frame .h.s{left:50%;bottom:-10px;margin-left:-10px;cursor:ns-resize}
+#clock-frame .h.w{left:-10px;top:50%;margin-top:-10px;cursor:ew-resize}
+#clock-frame .h.e{right:-10px;top:50%;margin-top:-10px;cursor:ew-resize}
+/* edge handles stay invisible: big touch targets, no visual noise */
+#clock-frame .h.n,#clock-frame .h.s,#clock-frame .h.w,#clock-frame .h.e{
+  width:34px;height:34px;background:transparent;box-shadow:none;animation:none;
+}
+#clock-frame .h.n::after,#clock-frame .h.s::after,
+#clock-frame .h.w::after,#clock-frame .h.e::after{display:none}
+#clock-frame-label{
+  position:absolute;left:50%;top:calc(100% + 14px);
+  transform:translateX(-50%);
+  white-space:nowrap;
+  font-size:11.5px;font-weight:600;
+  color:rgba(255,255,255,.9);
+  background:rgba(24,24,28,.72);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  padding:6px 12px;border-radius:12px;
+  opacity:0;
+  transition:opacity .3s var(--ease);
+  pointer-events:none;
+}
+#clock-frame.on #clock-frame-label{opacity:1}
+#clock-frame-reset,#clock-frame-undo{
+  position:absolute;top:calc(100% + 44px);
+  display:none;
+  padding:8px 18px;border-radius:14px;
+  background:rgba(24,24,28,.72);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  font-size:12.5px;font-weight:700;color:#fff;
+  box-shadow:0 4px 16px rgba(0,0,0,.28);
+  touch-action:none;
+}
+#clock-frame-reset{left:50%;transform:translateX(-148%)}
+#clock-frame-undo{left:50%;transform:translateX(48%);font-size:15px;padding:8px 14px}
+#clock-frame.on #clock-frame-reset,
+#clock-frame.on #clock-frame-undo{display:block}
+#clock-frame-reset:active,#clock-frame-undo:active{background:rgba(60,60,68,.9)}
+
+/* ─────────────── Now playing card ─────────────── */
+#np{
+  position:absolute;left:12px;right:12px;
+  bottom:calc(var(--safe-b) + 84px);
+  border-radius:26px;
+  padding:13px 15px 9px;
+  z-index:4;
+  background:var(--glass-bg);
+  isolation:isolate;
+  opacity:0;transform:translateY(14px) scale(.985);
+  transition:opacity .45s var(--ease), transform .55s var(--spring);
+  touch-action:pan-y;
+}
+#np.in{opacity:1;transform:none}
+#np.gone{opacity:0;transform:translateY(10px);pointer-events:none}
+.np-top{display:flex;align-items:center;gap:11px}
+#np-art{
+  width:44px;height:44px;border-radius:9px;
+  object-fit:cover;flex:none;
+  background:linear-gradient(135deg,#ff5f6d,#ffc371);
+  box-shadow:0 2px 10px rgba(0,0,0,.22);
+  transition:transform .5s var(--bounce);
+  will-change:transform;
+}
+.np-meta{flex:1;min-width:0;line-height:1.25}
+#np-title{
+  font-size:15.5px;font-weight:700;letter-spacing:-.015em;
+  white-space:nowrap;overflow:hidden;
+  display:block;
+  -webkit-mask-image:linear-gradient(90deg,#000 88%,transparent 100%);
+  mask-image:linear-gradient(90deg,#000 88%,transparent 100%);
+}
+#np-title.scroll{
+  -webkit-mask-image:none;mask-image:none;
+  animation:marquee 9s linear infinite;
+}
+@keyframes marquee{
+  0%,8%{transform:translateX(0)}
+  46%,54%{transform:translateX(var(--mq,0))}
+  92%,100%{transform:translateX(0)}
+}
+#np-artist{
+  font-size:13.5px;color:var(--ui-dim);font-weight:500;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  display:block;margin-top:1px;
+}
+.np-wave{opacity:.55;flex:none}
+/* progress */
+.np-bar{
+  margin:11px 0 0;
+  height:16px;
+  display:flex;align-items:center;
+  position:relative;
+  cursor:pointer;
+  touch-action:none;
+}
+.np-track{
+  position:relative;flex:1;height:5px;border-radius:3px;
+  background:rgba(255,255,255,.24);
+  overflow:visible;
+}
+.np-fill{
+  position:absolute;inset:0 auto 0 0;
+  border-radius:3px;background:var(--ui);
+  transform-origin:left center;
+  transform:scaleX(0);
+  transition:transform .09s linear;
+  will-change:transform;
+}
+/* The thumb is moved with a transform (compositor only) — animating `left`
+   forced a layout + backdrop re-raster every frame and halved the fps.
+   The visual dot lives in ::after so the scale can spring independently. */
+.np-thumb{
+  position:absolute;top:50%;left:0;
+  width:11px;height:11px;
+  margin:-5.5px 0 0 -5.5px;
+  pointer-events:none;
+}
+.np-thumb::after{
+  content:'';
+  display:block;width:11px;height:11px;border-radius:50%;
+  background:#fff;
+  box-shadow:0 1px 4px rgba(0,0,0,.3);
+  transform:scale(.78);
+  transition:transform .46s var(--bounce);
+}
+.np-bar:hover .np-thumb::after,
+.np-bar:active .np-thumb::after{transform:scale(1.45)}
+.np-bar.scrub .np-thumb::after{transform:scale(1.55)}
+.np-bar.scrub .np-track{box-shadow:0 0 0 4px rgba(255,255,255,.12)}
+.np-times{
+  display:flex;justify-content:space-between;
+  font-size:11px;font-weight:600;
+  color:var(--ui-dim);
+  margin-top:-2px;
+  font-variant-numeric:tabular-nums;
+  letter-spacing:.02em;
+}
+/* controls */
+.np-controls{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-top:6px;
+  padding:0 2px;
+}
+.np-btn{
+  display:grid;place-items:center;
+  width:44px;height:40px;
+  border-radius:12px;
+  color:var(--ui);
+  transition:transform .44s var(--bounce), opacity .26s var(--ease);
+  will-change:transform;
+  -webkit-tap-highlight-color:transparent;
+}
+.np-btn:active{transform:scale(.84)}
+.np-btn.nudge{animation:npNudge .46s var(--bounce) both}
+@keyframes npNudge{
+  0%{transform:scale(.84)}
+  45%{transform:scale(1.14)}
+  72%{transform:scale(.96)}
+  100%{transform:scale(1)}
+}
+.np-btn.nudge-r{animation:npNudgeR .46s var(--bounce) both}
+@keyframes npNudgeR{
+  0%{transform:scale(.84) translateX(0)}
+  45%{transform:scale(1.14) translateX(3px)}
+  72%{transform:scale(.96) translateX(-1px)}
+  100%{transform:scale(1) translateX(0)}
+}
+.np-btn.nudge-l{animation:npNudgeL .46s var(--bounce) both}
+@keyframes npNudgeL{
+  0%{transform:scale(.84) translateX(0)}
+  45%{transform:scale(1.14) translateX(-3px)}
+  72%{transform:scale(.96) translateX(1px)}
+  100%{transform:scale(1) translateX(0)}
+}
+#np.track-swap .np-meta{animation:metaSwap .46s var(--soft) both}
+@keyframes metaSwap{
+  0%{opacity:0;transform:translateY(7px) scale(.97)}
+  100%{opacity:1;transform:translateY(0) scale(1)}
+}
+#np.track-swap #np-art{animation:artSwap .56s var(--bounce) both}
+@keyframes artSwap{
+  0%{transform:scale(.82) rotate(-4deg)}
+  55%{transform:scale(1.06) rotate(1.5deg)}
+  100%{transform:scale(1) rotate(0)}
+}
+.np-btn.small{opacity:.62;width:38px}
+#np-play svg{width:30px;height:30px}
+.np-btn svg{display:block;pointer-events:none}
+/* play/pause morph */
+#np-play .i-pause{opacity:0;transform:scale(.4) rotate(-24deg)}
+#np-play .i-play{opacity:1;transform:scale(1) rotate(0)}
+#np-play .i-pause,#np-play .i-play{
+  transition:opacity .26s var(--ease),transform .52s var(--bounce);
+  grid-area:1/1;
+}
+#np-play.playing .i-pause{opacity:1;transform:scale(1) rotate(0)}
+#np-play.playing .i-play{opacity:0;transform:scale(.4) rotate(24deg)}
+
+/* ─────────────── Bottom shortcuts ─────────────── */
+#bottom{
+  position:absolute;left:0;right:0;
+  bottom:calc(var(--safe-b) + 26px);
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 24px;
+  z-index:5;
+}
+.sh-btn{
+  position:relative;
+  width:52px;height:52px;border-radius:50%;
+  background:var(--glass-bg);
+  display:grid;place-items:center;
+  color:var(--ui);
+  isolation:isolate;
+  transition:transform .42s var(--bounce), background .28s var(--ease),
+             box-shadow .42s var(--bounce);
+  will-change:transform;
+  touch-action:none;
+  -webkit-tap-highlight-color:transparent;
+}
+.sh-btn:active{transform:scale(.86)}
+.sh-btn.on{transform:scale(1.06);box-shadow:0 6px 22px rgba(255,255,255,.22)}
+.sh-btn.pop{animation:shPop .52s var(--bounce) both}
+@keyframes shPop{
+  0%{transform:scale(.86)}
+  42%{transform:scale(1.12)}
+  68%{transform:scale(.97)}
+  100%{transform:scale(1)}
+}
+.sh-btn.on{background:rgba(255,255,255,.92);color:#111}
+.sh-btn svg{display:block;pointer-events:none;width:23px;height:23px}
+.sh-btn .glyph{font-size:22px;line-height:1;pointer-events:none}
+.sh-btn.charging{transform:scale(.93)}
+#dnd{
+  display:flex;align-items:center;gap:6px;
+  height:34px;padding:0 15px;border-radius:17px;
+  background:var(--glass-bg);
+  font-size:13px;font-weight:600;
+  color:var(--ui);
+  isolation:isolate;
+  transition:opacity .3s, transform .3s var(--spring);
+}
+#dnd svg{width:14px;height:14px;opacity:.9}
+#dnd.gone{opacity:0;transform:scale(.9);pointer-events:none}
+
+.s-row{display:flex;flex-direction:column;gap:9px;padding:2px 2px 6px}
+.s-item{
+  display:grid;grid-template-columns:52px 1fr 30px;
+  align-items:center;gap:10px;
+  font-size:12.5px;font-weight:600;color:var(--ui);
+}
+.s-item span{opacity:.85}
+.s-item b{font-variant-numeric:tabular-nums;font-size:12px;opacity:.7;text-align:center}
+.s-item input[type=range]{
+  -webkit-appearance:none;appearance:none;
+  width:100%;height:6px;border-radius:3px;
+  background:rgba(255,255,255,.22);
+  outline:none;
+}
+.s-item input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;
+  width:20px;height:20px;border-radius:50%;
+  background:#fff;border:0;
+  box-shadow:0 1px 5px rgba(0,0,0,.28);
+  transition:transform .4s var(--bounce);
+}
+.s-item input[type=range]:active::-webkit-slider-thumb{transform:scale(1.18)}
+.s-item input[type=range]::-moz-range-thumb{
+  width:20px;height:20px;border-radius:50%;
+  background:#fff;border:0;box-shadow:0 1px 5px rgba(0,0,0,.28);
+}
+
+/* home indicator */
+#bar{
+  position:absolute;bottom:calc(var(--safe-b) + 7px);left:50%;
+  transform:translateX(-50%);
+  width:134px;height:5px;border-radius:3px;
+  background:var(--ui);
+  opacity:.92;
+  z-index:6;
+  pointer-events:none;
+  transition:transform .25s var(--ease), background .4s;
+}
+
+/* ─────────────── Flashlight overlay ─────────────── */
+#flash{
+  position:absolute;inset:0;z-index:8;
+  background:radial-gradient(circle at 50% 82%,#fffef4 0%,#fff 72%);
+  opacity:0;pointer-events:none;
+  transition:opacity .3s var(--ease);
+}
+/* the light is purely visual: it must never swallow a tap meant for the
+   shortcut buttons sitting underneath it */
+#flash.on{opacity:.97;pointer-events:none}
+/* …but its own dismiss button must stay tappable */
+#flash button{pointer-events:auto}
+#flash button{
+  position:absolute;left:50%;bottom:calc(var(--safe-b) + 60px);
+  transform:translateX(-50%);
+  padding:11px 22px;border-radius:22px;
+  background:rgba(0,0,0,.82);color:#fff;
+  font-size:14px;font-weight:600;
+}
+
+/* ─────────────── iPhone long-press feedback ─────────────── */
+#shutter{
+  position:absolute;inset:0;z-index:14;
+  background:#fff;opacity:0;pointer-events:none;
+}
+#cam-iris{
+  position:absolute;inset:0;z-index:13;
+  pointer-events:none;
+  background:radial-gradient(circle at 50% 50%, rgba(0,0,0,0) 42%, rgba(0,0,0,.55) 78%);
+  opacity:0;
+  transition:opacity .5s var(--ease);
+}
+#cam.on #cam-iris{opacity:1}
+#cam-shutter{
+  position:absolute;left:50%;bottom:calc(var(--safe-b) + 42px);
+  transform:translateX(-50%);
+  width:66px;height:66px;border-radius:50%;
+  border:4px solid rgba(255,255,255,.92);
+  background:rgba(255,255,255,.22);
+  z-index:12;
+  transition:transform .22s var(--spring), background .22s;
+}
+#cam-shutter:active{transform:translateX(-50%) scale(.88);background:#fff}
+
+/* ─────────────── Camera sheet ─────────────── */
+#cam{
+  position:absolute;inset:0;z-index:9;
+  background:#000;
+  opacity:0;pointer-events:none;
+  transition:opacity .35s var(--ease);
+  display:grid;place-items:center;
+}
+#cam.on{opacity:1;pointer-events:auto}
+#cam video{width:100%;height:100%;object-fit:cover}
+#cam .cam-msg{color:rgba(255,255,255,.7);font-size:14px;text-align:center;padding:0 30px;line-height:1.6}
+#cam-close{
+  position:absolute;top:calc(var(--safe-t) + 14px);right:18px;
+  width:38px;height:38px;border-radius:50%;
+  background:rgba(255,255,255,.16);
+  display:grid;place-items:center;
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+}
+
+/* ─────────────── Customize: simple bottom bar ─────────────── */
+#edit{
+  position:absolute;left:0;right:0;bottom:0;
+  z-index:10;
+  /* an RTL sheet must never spill past the left edge — clip the horizontal rows */
+  overflow-x:hidden;overflow-y:auto;
+  overscroll-behavior:contain;
+  padding:8px 14px calc(var(--safe-b) + 10px);
+  background:rgba(18,18,22,.72);
+  backdrop-filter:blur(28px) saturate(1.5);
+  -webkit-backdrop-filter:blur(28px) saturate(1.5);
+  border-radius:26px 26px 0 0;
+  transform:translateY(102%);
+  transition:transform .5s var(--spring);
+  will-change:transform;
+}
+#edit.open{transform:none}
+.edit-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 4px 6px;
+}
+.edit-title{font-size:14px;font-weight:600;color:rgba(255,255,255,.62)}
+#edit-done{
+  padding:7px 16px;border-radius:15px;
+  background:rgba(255,255,255,.16);
+  font-size:13.5px;font-weight:600;
+}
+#edit-done:active{background:rgba(255,255,255,.26)}
+.edit-label{
+  font-size:11px;font-weight:600;
+  color:rgba(255,255,255,.42);
+  margin:5px 4px 5px;
+  letter-spacing:.02em;
+}
+/* font row */
+.f-row{
+  display:flex;gap:8px;
+  overflow-x:auto;
+  scrollbar-width:none;
+  -webkit-overflow-scrolling:touch;
+  padding-bottom:2px;
+}
+.f-row::-webkit-scrollbar{display:none}
+.f-chip{
+  flex:none;
+  min-width:54px;height:46px;border-radius:12px;
+  background:rgba(255,255,255,.09);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
+  color:#fff;
+  transition:background .25s var(--ease), transform .25s var(--spring);
+}
+.f-chip b{font-size:19px;font-weight:600;line-height:1;letter-spacing:-.02em}
+.f-chip span{font-size:9px;opacity:.5;font-weight:500}
+.f-chip.sel{background:rgba(255,255,255,.28)}
+.f-chip:active{transform:scale(.94)}
+/* color row */
+.c-row{display:flex;gap:10px;align-items:center;overflow-x:auto;scrollbar-width:none;padding:2px 2px 4px}
+.c-row::-webkit-scrollbar{display:none}
+.c-dot{
+  flex:none;width:26px;height:26px;border-radius:50%;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.22);
+  transition:transform .28s var(--spring), box-shadow .28s;
+  position:relative;
+}
+.c-dot.sel{
+  transform:scale(1.14);
+  box-shadow:inset 0 0 0 2px #fff, 0 0 0 2px rgba(255,255,255,.25);
+}
+.c-dot:active{transform:scale(.9)}
+/* wallpapers */
+.w-row{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding:2px 2px 4px}
+.w-row::-webkit-scrollbar{display:none}
+.w-chip{
+  flex:none;width:42px;height:54px;border-radius:10px;
+  overflow:hidden;position:relative;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.16);
+  transition:transform .28s var(--spring), box-shadow .28s;
+  background-size:cover;background-position:center;
+}
+.w-chip.sel{box-shadow:inset 0 0 0 2px #fff, 0 4px 14px rgba(0,0,0,.4);transform:translateY(-2px)}
+.w-chip:active{transform:scale(.94)}
+.w-chip.upload{display:grid;place-items:center;background:rgba(255,255,255,.09);color:rgba(255,255,255,.66)}
+.w-chip.upload svg{width:20px;height:20px}
+/* toggles */
+.t-row{display:flex;gap:6px;flex-wrap:wrap;padding:1px 2px 2px}
+.t-btn{
+  padding:6px 11px;border-radius:13px;
+  background:rgba(255,255,255,.09);
+  font-size:12.5px;font-weight:600;
+  color:rgba(255,255,255,.7);
+  display:flex;align-items:center;gap:6px;
+  transition:background .25s, color .25s, transform .2s var(--spring);
+}
+.t-btn.on{background:rgba(255,255,255,.9);color:#111}
+.t-btn:active{transform:scale(.95)}
+.t-btn svg{width:15px;height:15px}
+
+/* ─────────────── Toast ─────────────── */
+#toast{
+  position:absolute;left:50%;bottom:calc(var(--safe-b) + 118px);
+  transform:translate(-50%,10px);
+  padding:9px 17px;border-radius:18px;
+  background:rgba(28,28,32,.9);
+  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  font-size:13px;font-weight:600;color:#fff;
+  opacity:0;pointer-events:none;
+  transition:opacity .3s,transform .35s var(--spring);
+  z-index:11;
+  white-space:nowrap;
+  max-width:88vw;overflow:hidden;text-overflow:ellipsis;
+}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+
+/* ─────────────── Non-Chromium notice ─────────────── */
+#notice{
+  position:absolute;bottom:calc(var(--safe-b) + 96px);left:50%;
+  transform:translateX(-50%);
+  max-width:92vw;
+  padding:8px 14px;border-radius:14px;
+  background:rgba(28,28,32,.88);
+  font-size:11.5px;font-weight:500;line-height:1.45;
+  color:rgba(255,255,255,.8);
+  text-align:center;
+  z-index:12;
+  display:none;
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+}
+
+/* During a resize gesture the expensive SVG displacement filter is swapped for a
+   flat tint. The digits are mask-driven so this still looks like the clock, but
+   the compositor has nothing costly to recompute — the drag stays at 60fps. */
+body.swapping #clock-glass{
+  backdrop-filter:none !important;
+  -webkit-backdrop-filter:none !important;
+}
+body.resizing #clock-glass{
+  backdrop-filter:none !important;
+  -webkit-backdrop-filter:none !important;
+  background:linear-gradient(180deg, rgba(96,106,124,.72) 0%, rgba(96,106,124,.52) 100%) !important;
+}
+/* the shadow map is a per-pixel PNG; keep it readable but cheap */
+body.resizing #clock-shadow{opacity:.62}
+body.resizing /* INNER SHADOW: white map clipped to the glyph silhouette. It only lives
+   INSIDE the digits — no outer halo, no stroke. */
+#clock-inner{
+  position:absolute;left:0;top:0;
+  pointer-events:none;
+  background-repeat:no-repeat;
+  background-size:100% 100%;
+  background-position:0 0;
+  -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
+  -webkit-mask-size:100% 100%;mask-size:100% 100%;
+  transition:opacity .26s var(--ease);
+  z-index:1;
+}
+#clock-fb{display:none !important}
+body.resizing #clock-glass,
+body.resizing #clock-shadow{will-change:transform}
+
+/* while customising, clear the deck so nothing is hidden behind the bar */
+body.editing #np{opacity:0;transform:translateY(16px) scale(.98);pointer-events:none;transition:opacity .3s,transform .4s var(--ease)}
+body.editing #bottom{opacity:0;pointer-events:none;transition:opacity .3s}
+body.editing #clock-layer{transform:translateY(-18px) scale(.94);transition:transform .5s var(--spring)}
+body.editing #bar{opacity:.35}
+
+/* reduced motion */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;transition-duration:.01ms !important}
+}
+/* wide screens: keep the lock screen phone-sized and centered */
+@media (min-width:560px){
+  #screen{left:50%;transform:translateX(-50%);width:430px;right:auto;border-radius:44px;box-shadow:0 40px 120px rgba(0,0,0,.8),0 0 0 1px rgba(255,255,255,.1)}
+}
+/* ─────────────── Landscape / short viewports ───────────────
+   Full-bleed, clock shrunk at the top, music card bottom-left,
+   shortcuts bottom-right — no collisions at any size. */
+@media (max-height:560px) and (orientation:landscape){
+  #screen{left:0;right:0;width:auto;transform:none;border-radius:0;box-shadow:none}
+  #island{display:none}
+  #status{padding-top:calc(var(--safe-t) + 4px);font-size:12px}
+  .st-left,.st-right{font-size:12px}
+  #topline{top:calc(var(--safe-t) + 26px);font-size:12px;opacity:.92}
+  #clock-layer{top:calc(var(--safe-t) + 42px);transform:scale(.58);transform-origin:top center}
+  body.editing #clock-layer{transform:translateY(-2px) scale(.5)}
+  #np{
+    bottom:calc(var(--safe-b) + 10px);left:12px;right:auto;
+    width:min(54vw, 340px);padding:8px 12px 6px;border-radius:20px;
+  }
+  #np #np-art{width:32px;height:32px;border-radius:8px}
+  #np #np-title{font-size:13px}
+  #np #np-artist{font-size:11px}
+  #np .np-bar{margin-top:6px;height:12px}
+  #np .np-times{font-size:10px;margin-top:-4px}
+  #np .np-controls{margin-top:1px}
+  #np .np-btn{width:36px;height:30px}
+  #np #np-play svg{width:23px;height:23px}
+  #bottom{
+    left:auto;right:14px;width:auto;
+    bottom:calc(var(--safe-b) + 14px);
+    padding:0;gap:14px;justify-content:flex-end;
+  }
+  #dnd{display:none}
+  #bar{display:none}
+  #clock-frame-label{display:none}
+  #toast{bottom:calc(var(--safe-b) + 90px);left:auto;right:16px;transform:translate(0,10px)}
+  #toast.show{transform:translate(0,0)}
+  #edit{max-height:92vh;overflow-x:hidden;overflow-y:auto;padding-top:4px}
+  .s-row{gap:6px}
+  .s-item{grid-template-columns:46px 1fr 26px;font-size:11.5px}
+  .s-item input[type=range]::-webkit-slider-thumb{width:17px;height:17px}
+  .edit-head{margin-bottom:0}
+  .edit-title{font-size:13px}
+  .edit-label{font-size:11px;margin:2px 0 2px}
+  .f-chip{min-width:46px;height:38px;border-radius:10px}
+  .f-chip b{font-size:16px}
+  .c-dot{width:22px;height:22px}
+  .w-chip{width:34px;height:42px}
+  .t-btn{padding:4px 9px;border-radius:11px;font-size:11.5px}
+}
+
+</style>
+</head>
+<body>
+<div id="screen">
+  <img id="wall" alt="">
+  <div id="wall-tint"></div>
+  <div id="wall-dim"></div>
+  <img id="subject" alt="">
+
+
+  <div id="topline"><span id="date"></span><span class="sep">·</span><span id="wx" dir="ltr"></span></div>
+
+  <div id="clock-layer">
+    <div id="clock-wrap">
+      <div id="clock-glow"><div id="clock-shadow"></div><div id="clock-inner"></div></div>
+      <div id="clock-glass"><div id="clock-fb"></div></div>
+    </div>
+  </div>
+
+  <!-- iOS-style resize frame, shown on long-press -->
+  <div id="clock-frame" aria-hidden="true">
+    <span class="h nw" data-h="nw"></span>
+    <span class="h ne" data-h="ne"></span>
+    <span class="h sw" data-h="sw"></span>
+    <span class="h se" data-h="se"></span>
+    <span class="h n" data-h="n"></span>
+    <span class="h s" data-h="s"></span>
+    <span class="h w" data-h="w"></span>
+    <span class="h e" data-h="e"></span>
+    <div id="clock-frame-label">اسحب المقبض · أو اضغط تصغير</div>
+    <button type="button" id="clock-frame-reset">تصغير</button>
+    <button type="button" id="clock-frame-undo" aria-label="رجوع للحجم السابق">↺</button>
+  </div>
+
+  <div id="np">
+    <div class="np-top" dir="ltr">
+      <img id="np-art" alt="">
+      <div class="np-meta">
+        <span id="np-title"></span>
+        <span id="np-artist"></span>
+      </div>
+      <div class="np-wave" aria-hidden="true">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="9" width="2.4" height="6" rx="1.2"/><rect x="7" y="5.5" width="2.4" height="13" rx="1.2"/><rect x="12" y="8" width="2.4" height="8" rx="1.2"/><rect x="17" y="3.5" width="2.4" height="17" rx="1.2"/></svg>
+      </div>
+    </div>
+    <div class="np-bar" id="np-bar">
+      <div class="np-track"><div class="np-fill" id="np-fill"></div><div class="np-thumb" id="np-thumb"></div></div>
+    </div>
+    <div class="np-times" dir="ltr"><span id="np-elapsed">0:00</span><span id="np-remain">-0:00</span></div>
+    <div class="np-controls">
+      <button class="np-btn small" id="np-star" aria-label="مفضلة">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.6l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.5 6.1 20.6l1.2-6.5L2.5 9.5l6.6-.9z"/></svg>
+      </button>
+      <button class="np-btn" id="np-prev" aria-label="السابق">
+        <svg width="27" height="27" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5.5h2.2v13H6zM19 5.2v13.6L8.6 12z"/></svg>
+      </button>
+      <button class="np-btn" id="np-play" aria-label="تشغيل">
+        <svg class="i-play" width="30" height="30" viewBox="0 0 24 24" fill="currentColor"><path d="M7.5 4.6v14.8L20 12z"/></svg>
+        <svg class="i-pause" width="30" height="30" viewBox="0 0 24 24" fill="currentColor"><rect x="6.4" y="4.6" width="4" height="14.8" rx="1.4"/><rect x="13.6" y="4.6" width="4" height="14.8" rx="1.4"/></svg>
+      </button>
+      <button class="np-btn" id="np-next" aria-label="التالي">
+        <svg width="27" height="27" viewBox="0 0 24 24" fill="currentColor"><path d="M15.8 5.5H18v13h-2.2zM5 5.2v13.6L15.4 12z"/></svg>
+      </button>
+      <button class="np-btn small" id="np-air" aria-label="AirPlay">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor"><path d="M12 16l4.5 5.4h-9z"/><path d="M6 4h12a2 2 0 012 2v9.6a2 2 0 01-2 2h-1.6l-1.6-2H18V6H6v9.6h3.2l-1.6 2H6a2 2 0 01-2-2V6a2 2 0 012-2z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div id="bottom" dir="ltr">
+    <button class="sh-btn" id="sh-left" aria-label="مصباح">
+      <span class="sh-inner"></span>
+    </button>
+    <div id="dnd">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.5 14.6A8.6 8.6 0 019.4 3.5a8.6 8.6 0 1011.1 11.1z"/></svg>
+      <span id="dnd-text">عدم الإزعاج</span>
+    </div>
+    <button class="sh-btn" id="sh-right" aria-label="الكاميرا">
+      <span class="sh-inner"></span>
+    </button>
+  </div>
+
+  <div id="bar"></div>
+  <div id="toast"></div>
+  <div id="notice"></div>
+
+  <div id="flash"><button id="flash-off">إطفاء المصباح</button></div>
+
+  <div id="cam">
+    <video id="cam-video" playsinline autoplay muted></video>
+    <div class="cam-msg" id="cam-msg" style="display:none">الكاميرا غير متاحة على هذا الجهاز</div>
+    <div id="cam-iris"></div>
+    <button type="button" id="cam-shutter" aria-label="التقاط"></button>
+    <div id="shutter"></div>
+    <button id="cam-close" aria-label="إغلاق">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+
+  <div id="status" dir="ltr">
+    <div class="st-left"><span id="carrier">5G</span></div>
+    <div class="st-right">
+      <span class="st-icon" id="i-focus"></span>
+      <span class="st-icon" id="i-signal"></span>
+      <span class="st-icon" id="i-wifi"></span>
+      <div id="battery"><span id="bat-pct">49</span><span class="bat-shell"><span class="bat-fill" id="bat-fill"></span></span></div>
+    </div>
+  </div>
+  <div id="island"><span id="island-label"></span></div>
+
+  <!-- Customize: one simple bar, no sliders -->
+  <div id="edit" role="dialog" aria-label="تخصيص">
+    <div class="edit-head">
+      <span class="edit-title">تخصيص شاشة القفل</span>
+      <button id="edit-done">تم</button>
+    </div>
+    <div class="edit-label">الخط</div>
+    <div class="f-row" id="fonts"></div>
+    <div class="edit-label">اللون</div>
+    <div class="c-row" id="colors"></div>
+    <div class="edit-label">الخلفية</div>
+    <div class="w-row" id="walls"></div>
+    <div class="edit-label">شادو الساعة الداخلي (الساعة فقط)</div>
+    <div class="s-row">
+      <label class="s-item">
+        <span>الشفافية</span>
+        <input type="range" id="in-op" min="0" max="100" step="1" value="55">
+        <b id="in-op-v">55</b>
+      </label>
+      <label class="s-item">
+        <span>السماكة</span>
+        <input type="range" id="in-th" min="0" max="8" step="0.5" value="2.5">
+        <b id="in-th-v">2.5</b>
+      </label>
+      <label class="s-item">
+        <span>الزاوية</span>
+        <input type="range" id="in-ang" min="0" max="360" step="5" value="55">
+        <b id="in-ang-v">55</b>
+      </label>
+    </div>
+    <div class="c-row" id="in-colors"></div>
+    <div class="edit-label">خيارات</div>
+    <div class="t-row" id="toggles"></div>
+  </div>
+</div>
+
+<input type="file" id="f-wall" accept="image/*" hidden>
+<input type="file" id="f-subject" accept="image/png,image/webp" hidden>
+
+<script>
+'use strict';
+
+/* ============================================================================
+   CONFIG — edit these. That's the whole customization surface.
+   ========================================================================= */
+const CONFIG = {
+  clock: {
+    font: 'Bebas Neue',   // 'Bebas Neue' | 'Oswald' | 'Inter' | 'SF'
+    weight: 400,
+    size: 128,            // px
+    sx: 0.94,             // horizontal stretch
+    sy: 1.62,             // vertical stretch (the tall look)
+    tracking: -3,
+    hour24: true,
+    leadingZero: true
+  },
+  glass: {
+    surface: 'convexSquircle',
+    ior: 1.5,
+    thickness: 40,
+    bezel: 50,
+    shadow: { thickness: 1, angle: 55, intensity: 0.36 },        // glass rim shadow (cards only)
+    inner:  { thickness: 2.5, intensity: 0.55, angle: 55, color: '#ffffff' }  // INNER shadow (clock only)
+  },
+  depth: { enabled: false, parallax: 0 },
+  radius: 26,            // card corner radius
+  weather: '☁ −3°'
+};
+
+const STORE_KEY = 'lock_glass_simple_v2';
+
+const DEFAULTS = {
+  font: 'Bebas Neue',
+  color: 'auto',
+  wall: 'angel',
+  customWall: '',
+  subject: '',
+  hour24: true,
+  weatherOn: true,
+  npOn: true,
+  depth: false,
+  dndOn: true,
+  clockSize: 128,
+  clockSx: 0.94,
+  clockSy: 1.62,
+  innerThickness: 2.5,
+  innerIntensity: 0.55,
+  innerColor: '#ffffff',
+  np: { title: 'Grown Woman', artist: 'Beyoncé', elapsed: 58, duration: 315 }
+};
+
+const state = (() => {
+  let s = JSON.parse(JSON.stringify(DEFAULTS));
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) Object.assign(s, JSON.parse(raw));
+  } catch (e) {}
+  return s;
+})();
+
+/* Restore any saved clock geometry so a reload keeps your size. */
+if (typeof state.clockSize === 'number') CONFIG.clock.size = state.clockSize;
+if (typeof state.innerThickness === 'number') {
+  state.innerThickness = Math.max(0, Math.min(8, state.innerThickness));
+  CONFIG.glass.inner.thickness = state.innerThickness;
+}
+if (typeof state.innerAngle === 'number') {
+  CONFIG.glass.inner.angle = ((state.innerAngle % 360) + 360) % 360;
+}
+if (typeof state.innerColor === 'string' && /^#[0-9a-f]{6}$/i.test(state.innerColor)) {
+  CONFIG.glass.inner.color = state.innerColor;
+}
+if (typeof state.innerIntensity === 'number') {
+  state.innerIntensity = Math.max(0, Math.min(1, state.innerIntensity));
+  CONFIG.glass.inner.intensity = state.innerIntensity;
+}
+/* Older saves wrote shadowOpacity/shadowThickness straight into the glass rim
+   shadow, which made every card look wrong. Those two now belong to the clock
+   glow only, so a stale save is dropped instead of poisoning the glass. */
+try { delete state.shadowOpacity; delete state.shadowThickness; } catch (_) {}
+
+if (typeof state.clockSx === 'number')   CONFIG.clock.sx = state.clockSx;
+if (typeof state.clockSy === 'number')   CONFIG.clock.sy = state.clockSy;
+
+let saveTimer = 0;
+function save() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {}
+  }, 180);
+}
+
+const $ = (id) => document.getElementById(id);
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+/* ============================================================================
+   1. LIQUID GLASS RECTANGLE ENGINE — verbatim from the skill file
+   ========================================================================= */
+const NS='http://www.w3.org/2000/svg', XLINK='http://www.w3.org/1999/xlink';
+const clamp255=x=>Math.max(0,Math.min(255,Math.round(x)));
+
+function convexCircle(x){ const c=clamp01(x); return Math.sqrt(Math.max(0,1-(1-c)*(1-c))); }
+function convexSquircle(x){ const c=clamp01(x); return Math.pow(Math.max(0,1-Math.pow(1-c,4)),0.25); }
+function smootherstep(x){ const c=clamp01(x); return c*c*c*(c*(c*6-15)+10); }
+const SURFACES = {
+  convexCircle, convexSquircle,
+  concaveSquircle: x => 1 - convexSquircle(x),
+  lipSquircle: x => { const t = smootherstep(x); const a = convexSquircle(x), b = 1 - a; return a * (1 - t) + b * t; }
+};
+function refract(I,N,n1,n2){
+  const eta=n1/n2, cosI=-(I.x*N.x+I.y*N.y), sin2T=eta*eta*(1-cosI*cosI);
+  if (sin2T>1) return null;
+  const cosT=Math.sqrt(1-sin2T);
+  return {x:eta*I.x+(eta*cosI-cosT)*N.x, y:eta*I.y+(eta*cosI-cosT)*N.y};
+}
+function dispAt(o){
+  const x=clamp01(o.distancePx/o.bezelWidth), h=o.surfaceFn(x)*o.thickness, d=0.001;
+  const x1=Math.max(0,x-d), x2=Math.min(1,x+d);
+  const slope=((o.surfaceFn(x2)-o.surfaceFn(x1))/(x2-x1))*o.thickness/o.bezelWidth;
+  let nx=-slope, nz=1; const len=Math.hypot(nx,nz)||1; nx/=len; nz/=len;
+  const T=refract({x:0,y:-1},{x:nx,y:nz},1,o.refractiveIndex);
+  if(!T||T.y===0) return 0;
+  return (-h/T.y)*T.x;
+}
+function buildProfile(o){
+  const n=127, profile=new Array(n); let maxAbs=0;
+  for(let i=0;i<n;i++){
+    profile[i]=dispAt({distancePx:(i/(n-1))*o.bezelWidth, bezelWidth:o.bezelWidth, thickness:o.thickness, surfaceFn:o.surfaceFn, refractiveIndex:o.ior});
+    maxAbs=Math.max(maxAbs,Math.abs(profile[i]));
+  }
+  return {profile, maxAbs:maxAbs||1e-6, bezelWidth:o.bezelWidth, samples:n};
+}
+function sampleProfile(r,distPx){
+  const c=clamp01(distPx/r.bezelWidth)*r.bezelWidth, p=(c/r.bezelWidth)*(r.samples-1);
+  const i0=Math.floor(p), i1=Math.min(r.samples-1,i0+1), t=p-i0;
+  return r.profile[i0]*(1-t)+r.profile[i1]*t;
+}
+function makeShape(w,h,radius){
+  const hw=w/2, hh=h/2, r=Math.max(0,Math.min(radius,hw,hh));
+  function sdf(px,py){
+    const qx=Math.abs(px)-hw+r, qy=Math.abs(py)-hh+r;
+    return Math.hypot(Math.max(qx,0),Math.max(qy,0))+Math.min(Math.max(qx,qy),0)-r;
+  }
+  function normal(px,py){
+    const e=0.5;
+    const dx=sdf(px+e,py)-sdf(px-e,py), dy=sdf(px,py+e)-sdf(px,py-e);
+    const l=Math.hypot(dx,dy)||1;
+    return {x:dx/l, y:dy/l};
+  }
+  return {sdf, normal};
+}
+function paintDisplacement(data,w,h,shape,radial){
+  const cx=w/2, cy=h/2;
+  for(let y=0;y<h;y++) for(let x=0;x<w;x++){
+    const px=x-cx, py=y-cy, dd=shape.sdf(px,py), i=(y*w+x)*4;
+    if (dd>0){ data[i]=data[i+1]=data[i+2]=128; data[i+3]=255; continue; }
+    const disp=sampleProfile(radial, Math.min(-dd, radial.bezelWidth));
+    const n=shape.normal(px,py);
+    data[i]  =clamp255(128-n.x*(disp/radial.maxAbs)*127);
+    data[i+1]=clamp255(128-n.y*(disp/radial.maxAbs)*127);
+    data[i+2]=128; data[i+3]=255;
+  }
+}
+function paintShadow(data,w,h,shape,s){
+  const cx=w/2, cy=h/2, rad=s.angle*Math.PI/180, ax=Math.cos(rad), ay=Math.sin(rad);
+  const feather=Math.max(0.9, s.thickness*0.15);
+  for(let y=0;y<h;y++) for(let x=0;x<w;x++){
+    const px=x-cx, py=y-cy, dd=shape.sdf(px,py), i=(y*w+x)*4;
+    if (dd>feather || -dd>s.thickness+feather){ data[i+3]=0; continue; }
+    const edge=-dd;
+    const band=clamp01((s.thickness-edge)/s.thickness);
+    const sharp=Math.pow(band,0.6);
+    const edgeAA=clamp01((feather-dd)/(2*feather));
+    const n=shape.normal(px,py);
+    const k=Math.abs(n.x*ax+n.y*ay);
+    data[i]=data[i+1]=data[i+2]=255;
+    data[i+3]=clamp255(sharp*edgeAA*Math.pow(k,1.8)*s.intensity*255);
+  }
+}
+function rasterCanvas(wCss,hCss,radiusCss,ss,painter){
+  const w=Math.max(2,Math.round(wCss*ss)), h=Math.max(2,Math.round(hCss*ss));
+  const cv=document.createElement('canvas'); cv.width=w; cv.height=h;
+  const ctx=cv.getContext('2d'); const img=ctx.createImageData(w,h);
+  painter(img.data,w,h,makeShape(w,h,radiusCss*ss));
+  ctx.putImageData(img,0,0);
+  return cv;
+}
+function defsRoot(){
+  let el=document.getElementById('lg-svg-defs');
+  if(!el){ el=document.createElementNS(NS,'svg'); el.id='lg-svg-defs';
+    el.setAttribute('width','0'); el.setAttribute('height','0');
+    el.style.cssText='position:absolute;overflow:hidden'; document.body.appendChild(el); }
+  return el;
+}
+
+let uidCounter = 0;
+/* Chrome accepts `url(#f) saturate(1.1)`; older engines only accept the bare url(). */
+const supportsChainedFilter = (() => {
+  try {
+    const d = document.createElement('div');
+    d.style.backdropFilter = 'url(#f) blur(1px)';
+    return d.style.backdropFilter.includes('blur');
+  } catch (e) { return false; }
+})();
+
+function applyLiquidGlass(el, opts){
+  opts = opts || {};
+  const o = Object.assign({
+    surface:'convexSquircle', ior:1.5, thickness:40, bezel:50,
+    radius:null, supersample:null
+  }, opts);
+  o.shadow = Object.assign({ thickness:1, angle:55, intensity:0.36 }, opts.shadow);
+
+  const uid = 'lgFilter' + (++uidCounter);
+  let shadowEl = opts.shadowEl || el.querySelector('.lg-shadow-layer');
+  let rafId = 0;
+
+  function rebuild(){
+    const wCss=Math.max(2, el.offsetWidth), hCss=Math.max(2, el.offsetHeight);
+    if (wCss < 2 || hCss < 2) return;
+    const radiusCss = o.radius!=null ? o.radius : Math.min(wCss,hCss)/2;
+    const dpr = window.devicePixelRatio || 1;
+    const ss = o.supersample || Math.min(3, Math.max(2, Math.round(dpr*2)));
+
+    const surfaceFn = SURFACES[o.surface] || SURFACES.convexSquircle;
+    const bezelRaster = o.bezel*ss, thickRaster = o.thickness*ss;
+    const radial = buildProfile({ bezelWidth:bezelRaster, thickness:thickRaster, ior:o.ior, surfaceFn });
+
+    const glassCv = rasterCanvas(wCss,hCss,radiusCss,ss,(data,w,h,shape)=>paintDisplacement(data,w,h,shape,radial));
+    const glassUrl = glassCv.toDataURL('image/png');
+    const maxAbsCss = radial.maxAbs/ss;
+
+    let f = document.getElementById(uid);
+    if (f) f.remove();
+    f = document.createElementNS(NS,'filter');
+    f.setAttribute('id', uid);
+    f.setAttribute('color-interpolation-filters','sRGB');
+    const pad = Math.ceil(maxAbsCss*2)+4;
+    f.setAttribute('filterUnits','userSpaceOnUse');
+    f.setAttribute('x',-pad); f.setAttribute('y',-pad);
+    f.setAttribute('width', wCss+pad*2); f.setAttribute('height', hCss+pad*2);
+
+    const img = document.createElementNS(NS,'feImage');
+    img.setAttribute('href', glassUrl); img.setAttributeNS(XLINK,'xlink:href', glassUrl);
+    img.setAttribute('x',0); img.setAttribute('y',0);
+    img.setAttribute('width', wCss); img.setAttribute('height', hCss);
+    img.setAttribute('preserveAspectRatio','none');
+    img.setAttribute('result','dispMap');
+    f.appendChild(img);
+
+    const dm = document.createElementNS(NS,'feDisplacementMap');
+    dm.setAttribute('in','SourceGraphic'); dm.setAttribute('in2','dispMap');
+    dm.setAttribute('scale', maxAbsCss*2);
+    dm.setAttribute('xChannelSelector','R'); dm.setAttribute('yChannelSelector','G');
+    f.appendChild(dm);
+    defsRoot().appendChild(f);
+
+    const chain = `url(#${uid})`;
+    el.style.backdropFilter = chain + (supportsChainedFilter ? ' saturate(1.15) contrast(1.06)' : '');
+    el.style.webkitBackdropFilter = el.style.backdropFilter;
+
+    if (!shadowEl){
+      shadowEl = document.createElement('span');
+      shadowEl.className='lg-shadow-layer';
+      const cs = getComputedStyle(el);
+      if (cs.position === 'static') el.style.position = 'relative';
+      el.style.isolation = el.style.isolation || 'isolate';
+      el.insertBefore(shadowEl, el.firstChild);
+    }
+    const shadowThickRaster = o.shadow.thickness*ss;
+    const shadowCv = rasterCanvas(wCss,hCss,radiusCss,ss,(data,w,h,shape)=>
+      paintShadow(data,w,h,shape, Object.assign({}, o.shadow, { thickness: shadowThickRaster }))
+    );
+    shadowEl.style.backgroundImage = `url(${shadowCv.toDataURL('image/png')})`;
+  }
+
+  rebuild();
+  const ro = new ResizeObserver(()=>{
+    cancelAnimationFrame(rafId);
+    rafId = requestAnimationFrame(rebuild);
+  });
+  ro.observe(el);
+  return {
+    rebuild,
+    disconnect: ()=> {
+      cancelAnimationFrame(rafId);
+      ro.disconnect();
+      const f = document.getElementById(uid);
+      if (f) f.remove();
+      el.style.backdropFilter = '';
+      el.style.webkitBackdropFilter = '';
+    },
+    setOptions:(patch)=>{ Object.assign(o, patch); if (patch.shadow) Object.assign(o.shadow, patch.shadow); rebuild(); }
+  };
+}
+
+/* Chromium detection: backdrop-filter:url() is Chromium-only. */
+const isChromium = /Chrome\/|Edg\//.test(navigator.userAgent);
+const canGlass = !window.mobileLite && (Boolean(window.chrome) || isChromium) &&
+  (CSS.supports('backdrop-filter','url(#lgProbe)') || CSS.supports('-webkit-backdrop-filter','url(#lgProbe)'));
+
+/* Glass pool: hard cap of 8 simultaneous filter elements. */
+const Glass = (() => {
+  const pool = new Map();
+  const MAX = 8;
+  function attach(el, radius) {
+    if (!el || !canGlass && !el.dataset.alwaysGlass) {
+      if (el) el.classList.add('glass-fallback');
+      return null;
+    }
+    if (pool.has(el)) pool.get(el).disconnect();
+    let h = null;
+    try {
+      h = applyLiquidGlass(el, {
+        surface: CONFIG.glass.surface,
+        ior: CONFIG.glass.ior,
+        thickness: CONFIG.glass.thickness,
+        bezel: CONFIG.glass.bezel,
+        radius,
+        shadow: CONFIG.glass.shadow
+      });
+    } catch (e) { el.classList.add('glass-fallback'); return null; }
+    pool.set(el, h);
+    evict();
+    return h;
+  }
+  function evict() {
+    while (pool.size > MAX) {
+      const [el, h] = pool.entries().next().value;
+      h.disconnect();
+      el.classList.add('glass-fallback');
+      pool.delete(el);
+    }
+  }
+  function detach(el) {
+    if (pool.has(el)) { pool.get(el).disconnect(); pool.delete(el); }
+  }
+  function rebuildAll() {
+    for (const [el, h] of pool) {
+      h.setOptions({
+        surface: CONFIG.glass.surface, ior: CONFIG.glass.ior,
+        thickness: CONFIG.glass.thickness, bezel: CONFIG.glass.bezel,
+        shadow: CONFIG.glass.shadow
+      });
+      el.classList.remove('glass-fallback');
+    }
+  }
+  return { attach, detach, rebuildAll };
+})();
+
+/* ============================================================================
+   2. TEXT GLASS — SDF + EDT + Snell refraction for the clock digits
+   ========================================================================= */
+const WORKER_SRC = `
+'use strict';
+const clamp01=x=>Math.max(0,Math.min(1,x));
+const clamp255=x=>Math.max(0,Math.min(255,Math.round(x)));
+function convexCircle(x){ const c=clamp01(x); return Math.sqrt(Math.max(0,1-(1-c)*(1-c))); }
+function convexSquircle(x){ const c=clamp01(x); return Math.pow(Math.max(0,1-Math.pow(1-c,4)),0.25); }
+function smootherstep(x){ const c=clamp01(x); return c*c*c*(c*(c*6-15)+10); }
+const SURFACES={convexCircle,convexSquircle,concaveSquircle:x=>1-convexSquircle(x),lipSquircle:x=>{const t=smootherstep(x);const a=convexSquircle(x),b=1-a;return a*(1-t)+b*t;}};
+function refract(I,N,n1,n2){const eta=n1/n2,cosI=-(I.x*N.x+I.y*N.y),sin2T=eta*eta*(1-cosI*cosI);if(sin2T>1)return null;const cosT=Math.sqrt(1-sin2T);return {x:eta*I.x+(eta*cosI-cosT)*N.x,y:eta*I.y+(eta*cosI-cosT)*N.y};}
+function dispAt(o){const x=clamp01(o.distancePx/o.bezelWidth),h=o.surfaceFn(x)*o.thickness,d=0.001;const x1=Math.max(0,x-d),x2=Math.min(1,x+d);const slope=((o.surfaceFn(x2)-o.surfaceFn(x1))/(x2-x1))*o.thickness/o.bezelWidth;let nx=-slope,nz=1;const len=Math.hypot(nx,nz)||1;nx/=len;nz/=len;const T=refract({x:0,y:-1},{x:nx,y:nz},1,o.refractiveIndex);if(!T||T.y===0)return 0;return (-h/T.y)*T.x;}
+function buildProfile(o){const n=127,profile=new Array(n);let maxAbs=0;for(let i=0;i<n;i++){profile[i]=dispAt({distancePx:(i/(n-1))*o.bezelWidth,bezelWidth:o.bezelWidth,thickness:o.thickness,surfaceFn:o.surfaceFn,refractiveIndex:o.ior});maxAbs=Math.max(maxAbs,Math.abs(profile[i]));}return {profile,maxAbs:maxAbs||1e-6,bezelWidth:o.bezelWidth,samples:n};}
+function sampleProfile(r,distPx){const c=clamp01(distPx/r.bezelWidth)*r.bezelWidth,p=(c/r.bezelWidth)*(r.samples-1);const i0=Math.floor(p),i1=Math.min(r.samples-1,i0+1),t=p-i0;return r.profile[i0]*(1-t)+r.profile[i1]*t;}
+function edt1d(f,d,v,z,n){let k=0;v[0]=0;z[0]=-1e20;z[1]=1e20;for(let q=1;q<n;q++){let s=((f[q]+q*q)-(f[v[k]]+v[k]*v[k]))/(2*q-2*v[k]);while(s<=z[k]){k--;s=((f[q]+q*q)-(f[v[k]]+v[k]*v[k]))/(2*q-2*v[k]);}k++;v[k]=q;z[k]=s;z[k+1]=1e20;}k=0;for(let q=0;q<n;q++){while(z[k+1]<q)k++;const dx=q-v[k];d[q]=dx*dx+f[v[k]];}}
+function edt2d(binary,w,h,targetVal){const INF=1e12;const grid=new Float32Array(w*h);for(let i=0;i<w*h;i++)grid[i]=(binary[i]===targetVal)?0:INF;const maxDim=Math.max(w,h);const f=new Float32Array(maxDim),d=new Float32Array(maxDim),v=new Int32Array(maxDim),z=new Float32Array(maxDim+1);for(let y=0;y<h;y++){const off=y*w;for(let x=0;x<w;x++)f[x]=grid[off+x];edt1d(f,d,v,z,w);for(let x=0;x<w;x++)grid[off+x]=d[x];}for(let x=0;x<w;x++){for(let y=0;y<h;y++)f[y]=grid[y*w+x];edt1d(f,d,v,z,h);for(let y=0;y<h;y++)grid[y*w+x]=Math.sqrt(d[y]);}return grid;}
+
+function* computeGlassJob(alpha, w, h, ss, params) {
+  const nPx = w * h;
+  const binary = new Uint8Array(nPx);
+  for (let i = 0; i < nPx; i++) binary[i] = alpha[i] >= 128 ? 1 : 0;
+  const distOut = edt2d(binary, w, h, 1);
+  const distIn = edt2d(binary, w, h, 0);
+  const sdf = new Float32Array(nPx);
+  let maxInside = 0;
+  for (let i = 0; i < nPx; i++) {
+    const s = distOut[i] > 0 ? (distOut[i] - 0.5) : -(distIn[i] - 0.5);
+    sdf[i] = s;
+    if (-s > maxInside) maxInside = -s;
+  }
+  const smooth = new Float32Array(nPx);
+  for (let y = 0; y < h; y++) {
+    const ym = y > 0 ? y - 1 : 0, yp = y < h - 1 ? y + 1 : h - 1;
+    for (let x = 0; x < w; x++) {
+      const xm = x > 0 ? x - 1 : 0, xp = x < w - 1 ? x + 1 : w - 1;
+      smooth[y*w+x] = (sdf[ym*w+xm]+2*sdf[ym*w+x]+sdf[ym*w+xp]+2*sdf[y*w+xm]+4*sdf[y*w+x]+2*sdf[y*w+xp]+sdf[yp*w+xm]+2*sdf[yp*w+x]+sdf[yp*w+xp])*0.0625;
+    }
+  }
+  const userBezelRaster = Math.max(2, params.bezel * ss);
+  const bezelRaster = Math.max(2, Math.min(userBezelRaster, Math.max(2, 0.5 * maxInside)));
+  const thickRaster = (params.thickness * ss) * (bezelRaster / userBezelRaster);
+  const surfaceFn = SURFACES[params.surface] || SURFACES.convexSquircle;
+  const radial = buildProfile({ bezelWidth: bezelRaster, thickness: thickRaster, ior: params.ior, surfaceFn });
+  const dispData = new Uint8ClampedArray(nPx * 4);
+  const shadData = new Uint8ClampedArray(nPx * 4);
+  const shadThick = Math.max(1, params.shadowThickness * ss);
+  const feather = Math.max(0.9, shadThick * 0.15);
+  const radAngle = params.shadowAngle * Math.PI / 180;
+  const ax = Math.cos(radAngle), ay = Math.sin(radAngle);
+  for (let y = 0; y < h; y++) {
+    const ym = y > 0 ? y - 1 : 0, yp = y < h - 1 ? y + 1 : h - 1;
+    for (let x = 0; x < w; x++) {
+      const xm = x > 0 ? x - 1 : 0, xp = x < w - 1 ? x + 1 : w - 1;
+      const idx = y*w+x, p = idx*4, dd = sdf[idx];
+      const gx = (smooth[y*w+xp]-smooth[y*w+xm])*0.5;
+      const gy = (smooth[yp*w+x]-smooth[ym*w+x])*0.5;
+      const len = Math.hypot(gx,gy)||1;
+      const nx = gx/len, ny = gy/len;
+      if (dd > 0) {
+        dispData[p]=dispData[p+1]=dispData[p+2]=128; dispData[p+3]=255;
+      } else {
+        const disp = sampleProfile(radial, Math.min(-dd, radial.bezelWidth));
+        dispData[p]   = clamp255(128 - nx*(disp/radial.maxAbs)*127);
+        dispData[p+1] = clamp255(128 - ny*(disp/radial.maxAbs)*127);
+        dispData[p+2] = 128; dispData[p+3] = 255;
+      }
+      if (dd > feather || -dd > shadThick + feather) {
+        shadData[p+3] = 0;
+      } else {
+        const edge = -dd;
+        const band = clamp01((shadThick - edge) / shadThick);
+        const sharp = Math.pow(band, 0.6);
+        const edgeAA = clamp01((feather - dd) / (2 * feather));
+        const k = Math.abs(nx*ax + ny*ay);
+        shadData[p]=shadData[p+1]=shadData[p+2]=255;
+        shadData[p+3]=clamp255(sharp*edgeAA*Math.pow(k,1.8)*255);
+      }
+    }
+  }
+  return { maxAbsCss: radial.maxAbs/ss, dispBuf: dispData.buffer, shadBuf: shadData.buffer };
+}
+
+/* inner-shadow map for the clock digits. Byte-for-byte the same painter the
+   main thread uses; it just runs off-thread and encodes to a PNG blob there,
+   so dragging the sliders never blocks a frame. */
+function paintInnerShadow(alpha, w, h, cfg) {
+  const cover = 2;
+  const iw = Math.max(4, Math.round(w * cover));
+  const ih = Math.max(4, Math.round(h * cover));
+  const thickDev = Math.max(0.75, cfg.thickness * cfg.ss * cover * 0.5);
+  const feather = Math.max(1.2, thickDev * 0.55);
+  const ang = (cfg.angle * Math.PI) / 180;
+  const ax = Math.cos(ang), ay = Math.sin(ang);
+  const hex = (cfg.color || '#ffffff').replace('#', '');
+  const cr = parseInt(hex.slice(0, 2), 16) || 255;
+  const cg = parseInt(hex.slice(2, 4), 16) || 255;
+  const cb = parseInt(hex.slice(4, 6), 16) || 255;
+
+  const src = new OffscreenCanvas(w, h);
+  const sx = src.getContext('2d');
+  const im = sx.createImageData(w, h);
+  for (let i = 0; i < w * h; i++) {
+    im.data[i * 4] = 255; im.data[i * 4 + 1] = 255; im.data[i * 4 + 2] = 255;
+    im.data[i * 4 + 3] = alpha[i];
+  }
+  sx.putImageData(im, 0, 0);
+
+  const dcv = new OffscreenCanvas(iw, ih);
+  const dg = dcv.getContext('2d', { willReadFrequently: true });
+  dg.filter = 'blur(' + Math.max(0.05, thickDev * 0.5).toFixed(2) + 'px)';
+  dg.drawImage(src, 0, 0, iw, ih);
+  dg.filter = 'none';
+  const dd = dg.getImageData(0, 0, iw, ih).data;
+
+  const N = iw * ih;
+  const a = new Float32Array(N);
+  for (let i = 0; i < N; i++) a[i] = dd[i * 4 + 3];
+  const out = new Uint8ClampedArray(N * 4);
+  const fall = 1 / Math.max(1, feather * 2.2);
+  for (let y = 0; y < ih; y++) {
+    const ym = y > 0 ? y - 1 : 0, yp = y < ih - 1 ? y + 1 : ih - 1;
+    for (let x = 0; x < iw; x++) {
+      const xm = x > 0 ? x - 1 : 0, xp = x < iw - 1 ? x + 1 : iw - 1;
+      const i = y * iw + x;
+      const edge = 255 - a[i];
+      if (edge <= 2) continue;
+      const gx = (a[y * iw + xp] - a[y * iw + xm]) * 0.5;
+      const gy = (a[yp * iw + x] - a[ym * iw + x]) * 0.5;
+      const len = Math.hypot(gx, gy) || 1;
+      const k = Math.abs((gx / len) * ax + (gy / len) * ay);
+      const falloff = Math.pow(Math.min(1, edge * fall), 0.85);
+      const q = i * 4;
+      out[q] = cr; out[q + 1] = cg; out[q + 2] = cb;
+      out[q + 3] = Math.pow(k, 1.6) * falloff * 255;
+    }
+  }
+  const ocv = new OffscreenCanvas(iw, ih);
+  const og = ocv.getContext('2d');
+  og.putImageData(new ImageData(out, iw, ih), 0, 0);
+  og.globalCompositeOperation = 'destination-in';
+  og.drawImage(src, 0, 0, iw, ih);
+  return ocv.convertToBlob({ type: 'image/png' });
+}
+
+self.onmessage = function (e) {
+  if (e.data.kind === 'inner') {
+    const jobId = e.data.jobId;
+    paintInnerShadow(new Uint8Array(e.data.alphaBuf), e.data.w, e.data.h, e.data.cfg)
+      .then((blob) => self.postMessage({ kind: 'inner', jobId, key: e.data.key, blob }));
+    return;
+  }
+  const { jobId, alphaBuf, w, h, ss, params } = e.data;
+  const alpha = new Uint8Array(alphaBuf);
+  const it = computeGlassJob(alpha, w, h, ss, params);
+  let r = it.next();
+  while (!r.done) r = it.next();
+  const res = r.value;
+  self.postMessage({ jobId, w, h, maxAbsCss: res.maxAbsCss, dispBuf: res.dispBuf, shadBuf: res.shadBuf },
+    [res.dispBuf, res.shadBuf]);
+};
+`;
+
+const Clock = (() => {
+  const glassEl = $('clock-glass');
+  const shadowEl = $('clock-shadow');
+  const glowEl = $('clock-glow');
+  const innerEl = $('clock-inner');
+  const fbEl = $('clock-fb');
+  const wrap = $('clock-wrap');
+
+  let worker = null;
+  let innerWorker = null;
+  let workerUrl = null;
+  let mainCore = null;
+  let jobSeq = 0;
+  let pendingMeta = new Map();
+  let lastKey = '';
+  let lastMinute = '';
+  let rafPending = 0;
+  let pos = { x: 0, y: 0 };
+
+  function ensureWorker() {
+    if (worker || typeof Worker === 'undefined') return worker;
+    try {
+      const blob = new Blob([WORKER_SRC], { type: 'text/javascript' });
+      workerUrl = URL.createObjectURL(blob);
+      worker = new Worker(workerUrl);
+      worker.onmessage = onWorkerResult;
+      worker.onerror = () => { worker = null; resetInnerPost(); };
+    } catch (e) { worker = null; }
+    return worker;
+  }
+
+  /* A second thread for the digits' rim: the refraction job can occupy the
+     main worker for a few hundred milliseconds, and the rim must never wait
+     behind it (it is what the cross-fade depends on). */
+  function ensureInnerWorker() {
+    if (innerWorker || typeof Worker === 'undefined') return innerWorker;
+    const base = ensureWorker();
+    if (!base || !workerUrl) return null;
+    try {
+      innerWorker = new Worker(workerUrl);
+      innerWorker.onmessage = (e) => { if (e.data && e.data.kind === 'inner') onInnerResult(e.data); };
+      innerWorker.onerror = () => { innerWorker = null; resetInnerPost(); };
+    } catch (e) { innerWorker = null; }
+    return innerWorker;
+  }
+
+  function fontStack() {
+    const f = state.font;
+    if (f === 'SF') return '-apple-system,"SF Pro Display","Inter",system-ui,sans-serif';
+    return `"${f}",-apple-system,"Inter",sans-serif`;
+  }
+
+  function getTime() {
+    const d = new Date();
+    let h = d.getHours();
+    if (!state.hour24) { h = h % 12; if (h === 0) h = 12; }
+    const pad = (n, l) => String(n).padStart(l, '0');
+    const hh = state.hour24 && CONFIG.clock.leadingZero ? pad(h, 2) : String(h);
+    const mm = pad(d.getMinutes(), 2);
+    return { lines: [`${hh}:${mm}`], minuteKey: `${hh}:${mm}` };
+  }
+
+  /* ── INNER SHADOW, fast path ──────────────────────────────────────────────
+     The old version ran a per-pixel loop over ~2M pixels on every rebuild,
+     which is what made the sliders stutter. This one is pure canvas work
+     (a few blur passes), and the finished map is cached by its parameters —
+     moving the opacity slider now costs nothing at all. */
+  let innerCache = { key: '', url: '' };
+  let maskCache = { key: '', meta: null };
+  /* Raster cache for the refraction/displacement image. Its inputs are the
+     glyph alpha buffer + glass params only — so a re-tint or a re-layout can
+     reuse the identical texture instead of running the whole SDF pass again. */
+  let glassCache = { key: '', disp: '', shad: '', maxAbs: 0 };
+
+  /* Inner-shadow map — the exact painter that was already approved:
+     distance field → per-pixel edge normal → directional weight by the chosen
+     angle → tint. Only the caching is new, so a repeat never re-runs the loop. */
+  function innerShadowUrl(maskCanvas, w, h, ss, maskKey) {
+    const cfg = CONFIG.glass.inner;
+    if (!(cfg.thickness > 0)) return '';
+    const key = [w, h, ss, maskKey || '', cfg.thickness, cfg.angle, cfg.color].join('|');
+    if (innerCache.key === key) return innerCache.url;
+    const url = paintInnerCpu(maskCanvas, w, h, ss, cfg);
+    innerCache = { key, url };
+    return url;
+  }
+
+  function paintInnerCpu(maskCanvas, w, h, ss, cfg) {
+    const cover = 2;
+    const iw = Math.max(4, Math.round(w * cover));
+    const ih = Math.max(4, Math.round(h * cover));
+    const thickDev = Math.max(0.75, cfg.thickness * ss * cover * 0.5);
+    const feather = Math.max(1.2, thickDev * 0.55);
+    const ang = (cfg.angle * Math.PI) / 180;
+    const ax = Math.cos(ang), ay = Math.sin(ang);
+    const hex = (cfg.color || '#ffffff').replace('#', '');
+    const cr = parseInt(hex.slice(0, 2), 16) || 255;
+    const cg = parseInt(hex.slice(2, 4), 16) || 255;
+    const cb = parseInt(hex.slice(4, 6), 16) || 255;
+
+    /* 1. distance-to-edge field, from a blurred copy of the silhouette */
+    const dcv = document.createElement('canvas');
+    dcv.width = iw; dcv.height = ih;
+    const dg = dcv.getContext('2d', { willReadFrequently: true });
+    dg.filter = `blur(${(thickDev * 0.5).toFixed(2)}px)`;
+    dg.drawImage(maskCanvas, 0, 0, iw, ih);
+    dg.filter = 'none';
+    const dd = dg.getImageData(0, 0, iw, ih).data;
+
+    /* 2. gradient of that field → per-pixel edge normal */
+    const N = iw * ih;
+    const a = new Float32Array(N);
+    for (let i = 0; i < N; i++) a[i] = dd[i * 4 + 3];
+    const out = new Uint8ClampedArray(N * 4);
+    const fall = 1 / Math.max(1, feather * 2.2);
+    for (let y = 0; y < ih; y++) {
+      const ym = y > 0 ? y - 1 : 0, yp = y < ih - 1 ? y + 1 : ih - 1;
+      for (let x = 0; x < iw; x++) {
+        const xm = x > 0 ? x - 1 : 0, xp = x < iw - 1 ? x + 1 : iw - 1;
+        const i = y * iw + x;
+        const edge = 255 - a[i];
+        if (edge <= 2) continue;
+        const gx = (a[y * iw + xp] - a[y * iw + xm]) * 0.5;
+        const gy = (a[yp * iw + x] - a[ym * iw + x]) * 0.5;
+        const len = Math.hypot(gx, gy) || 1;
+        const k = Math.abs((gx / len) * ax + (gy / len) * ay);
+        const falloff = Math.pow(Math.min(1, edge * fall), 0.85);
+        const q = i * 4;
+        out[q] = cr; out[q + 1] = cg; out[q + 2] = cb;
+        out[q + 3] = Math.pow(k, 1.6) * falloff * 255;
+      }
+    }
+    const ocv = document.createElement('canvas');
+    ocv.width = iw; ocv.height = ih;
+    const og = ocv.getContext('2d');
+    og.putImageData(new ImageData(out, iw, ih), 0, 0);
+    og.globalCompositeOperation = 'destination-in';
+    og.drawImage(maskCanvas, 0, 0, iw, ih);
+    return ocv.toDataURL('image/png');
+  }
+
+  /* ── live inner-shadow updates ──────────────────────────────────────────
+     The per-pixel normal pass is fast, but encoding a 1.5 k-px PNG is not —
+     so the identical painter runs in the existing worker and only the finished
+     image comes back. Slider drags therefore never touch the main thread. */
+  let innerJob = 0;
+  let swapGuard = 0;
+  let innerObj = '';
+
+  function paintInnerNow(alpha, w, h, ss) {
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const ctx = cv.getContext('2d');
+    const img = ctx.createImageData(w, h);
+    for (let i = 0; i < w * h; i++) {
+      img.data[i * 4] = 255; img.data[i * 4 + 1] = 255; img.data[i * 4 + 2] = 255;
+      img.data[i * 4 + 3] = alpha[i];
+    }
+    ctx.putImageData(img, 0, 0);
+    const cfg = CONFIG.glass.inner;
+    const mk = maskCache.key;
+    const url = paintInnerCpu(cv, w, h, ss, cfg);
+    const key = [w, h, ss, mk, cfg.thickness, cfg.angle, cfg.color].join('|');
+    innerCache = { key, url };
+    setInnerImage(url, key);
+  }
+
+  let innerShownKey = '';
+  let innerWaiters = [];
+
+  function setInnerImage(url, key) {
+    if (innerObj) { URL.revokeObjectURL(innerObj); innerObj = ''; }
+    innerEl.style.backgroundImage = url ? `url("${url}")` : 'none';
+    innerShownKey = key || '';
+    if (!key) return;
+    const ready = innerWaiters.filter((w) => w.key === key);
+    innerWaiters = innerWaiters.filter((w) => w.key !== key);
+    ready.forEach((w) => w.once());
+  }
+
+  /* Fade the clock back in only when the matching shadow map is in place, so a
+     font/colour switch can never show a rim that belongs to the old glyphs. */
+  function whenInnerReady(key, cb) {
+    if (innerShownKey === key) { cb(); return; }
+    const w = { key, once: () => { if (w.done) return; w.done = true; cb(); } };
+    innerWaiters.push(w);
+    setTimeout(w.once, 520);        // hard cap: the clock must never stay blank
+  }
+
+  function onInnerResult(d) {
+    if (d.jobId !== innerJob) return;                 // a newer slider position won
+    setInnerImage(URL.createObjectURL(d.blob), d.key);
+  }
+
+  /* Called live by the sliders: no refraction rebuild, no bitmap rebuild. */
+  function refreshInner() {
+    if (!lastMaskCanvas || !lastMaskAlpha) { schedule(true); return; }
+    const cfg = CONFIG.glass.inner;
+    const w = lastMaskCanvas.width, h = lastMaskCanvas.height;
+    innerEl.style.opacity = String(Math.max(0, Math.min(1, cfg.intensity)));
+    if (!(cfg.thickness > 0) || !(cfg.intensity > 0)) { setInnerImage(''); return; }
+    const key = [w, h, lastSS, maskCache.key, cfg.thickness, cfg.angle, cfg.color].join('|');
+    if (key === innerShownKey) return;                     // already on screen
+    postInner(key, w, h);
+  }
+
+  /* Paint (or repaint) the map for a specific key — used by the fade path so a
+     new font can never fade in wearing the previous glyphs' rim. */
+  function refreshInnerFor(key, alpha, w, h, ss) {
+    if (!alpha || !key) return;
+    if (key === innerShownKey) return;
+    if (innerCache.key === key && innerCache.url) { setInnerImage(innerCache.url, key); return; }
+    if (ensureInnerWorker()) postInnerFor(key, alpha, w, h, ss);
+    else paintInnerNow(alpha, w, h, ss);          // no Worker at all: do it now
+  }
+
+  let innerPosted = '';
+  function resetInnerPost() { innerPosted = ''; }
+  function postInnerFor(key, alpha, w, h, ss) {
+    if (!alpha || !key) return;
+    if (key === innerPosted) return;
+    /* during a resize the refraction job is the one that matters — the rim is
+       repainted once, when the gesture ends */
+    if (document.body.classList.contains('resizing')) return;
+    const wk = ensureInnerWorker();
+    if (!wk) return;                                // paintInnerNow handles the fallback
+    innerPosted = key;
+    const cfg = CONFIG.glass.inner;
+    wk.postMessage({
+      kind: 'inner', jobId: ++innerJob, key, w, h,
+      alphaBuf: alpha.slice().buffer,
+      cfg: { thickness: cfg.thickness, angle: cfg.angle, color: cfg.color, ss }
+    });
+  }
+
+  function postInner(key, w, h) {
+    /* during a resize the refraction job is the one that matters — the rim is
+       repainted once, when the gesture ends */
+    if (document.body.classList.contains('resizing')) return;
+    const cfg = CONFIG.glass.inner;
+    const wk = ensureInnerWorker();
+    if (!wk) { paintInnerNow(lastMaskAlpha, w, h, lastSS); return; }
+    if (key === innerPosted) return;                    // already on its way
+    innerPosted = key;
+    const jobId = ++innerJob;
+    wk.postMessage({
+      kind: 'inner', jobId, key, w, h,
+      alphaBuf: lastMaskAlpha.slice().buffer,
+      cfg: { thickness: cfg.thickness, angle: cfg.angle, color: cfg.color, ss: lastSS }
+    });
+  }
+
+  function renderBitmap(lines) {
+    const c = CONFIG.clock;
+    const host = $('screen');
+    const hostW = host.clientWidth || 390;
+
+    let size = c.size;
+    // fit inside the viewport with side breathing room
+    const maxW = hostW * 0.88;
+    const dpr = window.devicePixelRatio || 1;
+    let ss = window.mobileLite ? 1 : Math.min(3, Math.max(2, Math.round(dpr * 1.5)));
+
+    const probe = document.createElement('canvas').getContext('2d');
+    probe.font = `${state.font === 'SF' ? 600 : c.weight} ${size}px ${fontStack()}`;
+    if ('letterSpacing' in probe) probe.letterSpacing = `${c.tracking}px`;
+
+    let maxLineW = 0;
+    for (const ln of lines) maxLineW = Math.max(maxLineW, probe.measureText(ln).width);
+
+    const rawW = Math.max(40, maxLineW * c.sx);
+    if (rawW > maxW) size = Math.floor(size * (maxW / rawW));
+
+    probe.font = `${state.font === 'SF' ? 600 : c.weight} ${size}px ${fontStack()}`;
+    if ('letterSpacing' in probe) probe.letterSpacing = `${c.tracking}px`;
+    maxLineW = 0;
+    for (const ln of lines) maxLineW = Math.max(maxLineW, probe.measureText(ln).width);
+
+    const lineH = size * 0.92;
+    const pad = 18;
+    const wCss = Math.ceil(Math.max(40, maxLineW * c.sx) + pad * 2);
+    const hCss = Math.ceil(Math.max(40, lines.length * lineH * c.sy) + pad * 2);
+
+    const longSide = Math.max(wCss, hCss);
+    if (longSide * ss > 1600) ss = Math.max(1, Math.floor((1600 / longSide) * 10) / 10);
+
+    const w = Math.max(4, Math.round(wCss * ss));
+    const h = Math.max(4, Math.round(hCss * ss));
+
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const ctx = cv.getContext('2d');
+    ctx.scale(ss * c.sx, ss * c.sy);
+    ctx.font = `${state.font === 'SF' ? 600 : c.weight} ${size}px ${fontStack()}`;
+    if ('letterSpacing' in ctx) ctx.letterSpacing = `${c.tracking}px`;
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const cx = (wCss / 2) / c.sx;
+    lines.forEach((ln, i) => ctx.fillText(ln, cx, ((hCss / 2) / c.sy)));
+
+    const maskKey = [size.toFixed(2), w, h, state.font, c.sx, c.sy, c.tracking, lines.join('|')].join('|');
+    if (maskCache.key === maskKey) {
+      return Object.assign({}, maskCache.meta, { innerUrl: innerCache.url });
+    }
+
+    const img = ctx.getImageData(0, 0, w, h);
+    const alpha = new Uint8Array(w * h);
+    for (let i = 0; i < w * h; i++) {
+      alpha[i] = img.data[i * 4 + 3];
+      img.data[i * 4] = 255; img.data[i * 4 + 1] = 255; img.data[i * 4 + 2] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+
+    /* The inner map is a per-pixel pass + a PNG encode. It must never run
+       inside a click handler, so it is produced asynchronously (worker) and
+       the clock only fades back in once it is ready. */
+    const innerKey = [w, h, ss, maskKey, CONFIG.glass.inner.thickness,
+                      CONFIG.glass.inner.angle, CONFIG.glass.inner.color].join('|');
+    const innerUrl = innerCache.key === innerKey ? innerCache.url : '';
+
+    const built = {
+      alpha, w, h, ss, wCss, hCss,
+      alphaKey: maskKey,
+      innerUrl, innerKey,
+      maskCanvas: cv,
+      maskUrl: cv.toDataURL('image/png'),
+      size, lines,
+      textW: Math.max(40, maxLineW * c.sx),
+      textH: Math.max(40, lines.length * lineH * c.sy),
+      lineH,
+      pad: pad * 2
+    };
+    maskCache = { key: maskKey, meta: built };
+    return built;
+  }
+
+  function bufToUrl(buf, w, h) {
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const ctx = cv.getContext('2d');
+    ctx.putImageData(new ImageData(new Uint8ClampedArray(buf), w, h), 0, 0);
+    return cv.toDataURL('image/png');
+  }
+
+  function onWorkerResult(e) {
+    if (e.data.kind === 'inner') { onInnerResult(e.data); return; }
+    const { jobId, w, h, maxAbsCss, dispBuf, shadBuf } = e.data;
+    const meta = pendingMeta.get(jobId);
+    pendingMeta.delete(jobId);
+    if (!meta || jobId !== jobSeq) return;
+    const disp = bufToUrl(dispBuf, w, h);
+    const shad = bufToUrl(shadBuf, w, h);
+    glassCache = {
+      key: [meta.w, meta.h, meta.ss, meta.alphaKey,
+            CONFIG.glass.surface, CONFIG.glass.ior,
+            CONFIG.glass.thickness, CONFIG.glass.bezel].join('|'),
+      disp, shad, maxAbs: maxAbsCss
+    };
+    apply(meta, disp, shad, maxAbsCss);
+  }
+
+  let lastMetrics = null;
+  let lastMaskCanvas = null;
+  let lastMaskAlpha = null;
+  let lastSS = 2;
+
+  function apply(meta, dispUrl, shadUrl, maxAbsCss) {
+    lastMetrics = {
+      textW: meta.textW, textH: meta.textH, pad: meta.pad,
+      baseW: meta.textW / Math.max(0.05, CONFIG.clock.sx),
+      baseH: meta.textH / Math.max(0.05, CONFIG.clock.sy)
+    };
+    /* Assigning an unchanged width/height still re-rasterises the clock's
+       backdrop-filter, so only touch the geometry when it really moved. */
+    const setBox = (el, w, h) => {
+      if (el.style.width !== w + 'px') el.style.width = w + 'px';
+      if (el.style.height !== h + 'px') el.style.height = h + 'px';
+    };
+    /* mask strings are long data URLs — only write them when they differ */
+    const setMask = (el, url) => {
+      if (el.style.maskImage === url) return;
+      el.style.maskImage = url;
+      el.style.webkitMaskImage = url;
+    };
+    const paint = () => {
+      const mask = `url(${meta.maskUrl})`;
+      const sameMask = glassEl.style.maskImage === mask;
+      setBox(glassEl, meta.wCss, meta.hCss);
+      setMask(glassEl, mask);
+      setBox(shadowEl, meta.wCss, meta.hCss);
+      /* ink follows the adaptive colour (dark on light walls, white on dark),
+         so the white halo always reads as a shadow behind the digits */
+      shadowEl.style.background = state.color === 'auto' ? '' : state.color;
+      setMask(shadowEl, mask);
+      /* INNER shadow — same paintShadow maths as the cards, but rendered on a
+         2× canvas so the edge stays crisp (no banding/pixelation), tinted with
+         the colour the user picked and rotated by the chosen angle. */
+      const si = Math.max(0, Math.min(1, CONFIG.glass.inner.intensity));
+      setBox(innerEl, meta.wCss, meta.hCss);
+      innerEl.style.left = '0px';   /* #clock-glow is already aligned with the glass */
+      innerEl.style.top = '0px';
+      /* The inner rim belongs to a specific glyph raster: only swap it when the
+         key changes, and never leave the previous glyphs' rim on screen. */
+      if (innerShownKey !== meta.innerKey) {
+        if (innerCache.key === meta.innerKey && innerCache.url) {
+          setInnerImage(innerCache.url, meta.innerKey);
+        } else {
+          setInnerImage('');
+          refreshInnerFor(meta.innerKey, meta.alpha, meta.w, meta.h, meta.ss);
+        }
+      }
+      setMask(innerEl, mask);
+      innerEl.style.opacity = String(si);
+      setBox(glowEl, meta.wCss, meta.hCss);
+      glowEl.style.left = glassEl.offsetLeft + 'px';
+      glowEl.style.top = glassEl.offsetTop + 'px';
+      glowEl.style.filter = 'none';
+      glassEl.style.background = '';   // --clock-tint (set by Adaptive) drives it
+      glassEl.style.mixBlendMode = 'normal';
+
+      if (canGlass) {
+        fbEl.style.display = 'none';
+        const uid = 'clockFilter';
+        const key = [dispUrl.length, meta.wCss, meta.hCss, maxAbsCss].join('|');
+        const bf = `url(#${uid}) blur(1.5px) saturate(1.2) brightness(0.96)`;
+        let f = document.getElementById(uid);
+        /* A new <filter> node forces the whole clock to re-rasterise. When the
+           displacement map has not changed we keep the node and touch nothing —
+           that is what makes a font/colour change cost no paint at all. */
+        if (!f || f.dataset.key !== key) {
+          if (f) f.remove();
+          f = document.createElementNS(NS, 'filter');
+          f.setAttribute('id', uid);
+          f.setAttribute('color-interpolation-filters', 'sRGB');
+          f.dataset.key = key;
+          const pad = Math.ceil(maxAbsCss * 2) + 6;
+          f.setAttribute('filterUnits', 'userSpaceOnUse');
+          f.setAttribute('x', -pad); f.setAttribute('y', -pad);
+          f.setAttribute('width', meta.wCss + pad * 2);
+          f.setAttribute('height', meta.hCss + pad * 2);
+          const im = document.createElementNS(NS, 'feImage');
+          im.setAttribute('href', dispUrl);
+          im.setAttributeNS(XLINK, 'xlink:href', dispUrl);
+          im.setAttribute('x', 0); im.setAttribute('y', 0);
+          im.setAttribute('width', meta.wCss); im.setAttribute('height', meta.hCss);
+          im.setAttribute('preserveAspectRatio', 'none');
+          im.setAttribute('result', 'dispMap');
+          f.appendChild(im);
+          const dm = document.createElementNS(NS, 'feDisplacementMap');
+          dm.setAttribute('in', 'SourceGraphic');
+          dm.setAttribute('in2', 'dispMap');
+          dm.setAttribute('scale', maxAbsCss * 2);
+          dm.setAttribute('xChannelSelector', 'R');
+          dm.setAttribute('yChannelSelector', 'G');
+          f.appendChild(dm);
+          defsRoot().appendChild(f);
+          if (glassEl.style.backdropFilter !== bf) {
+            glassEl.style.backdropFilter = bf;
+            glassEl.style.webkitBackdropFilter = bf;
+          }
+        }
+      } else {
+        glassEl.style.backdropFilter = 'blur(16px) saturate(1.4) brightness(1.06)';
+        glassEl.style.webkitBackdropFilter = glassEl.style.backdropFilter;
+        fbEl.style.display = 'flex';
+        fbEl.textContent = meta.lines.join('\n');
+        fbEl.style.fontFamily = fontStack();
+        fbEl.style.fontWeight = state.font === 'SF' ? '600' : String(CONFIG.clock.weight);
+        fbEl.style.fontSize = meta.size + 'px';
+        fbEl.style.transform = `scale(${CONFIG.clock.sx}, ${CONFIG.clock.sy})`;
+        fbEl.style.letterSpacing = CONFIG.clock.tracking + 'px';
+      }
+      applyPosition();
+      glowEl.dataset.painted = String(meta.minuteKey || '');
+    };
+
+    if (meta.isTick) {
+      // cross-fade: minute ticks, format changes, font/colour/size edits…
+      // (a live resize sets meta.hardCut so the handles stay glued to the digits)
+      const dur = meta.hardCut ? 1 : 170;
+      /* the clock is about to be invisible for a moment: while it is, the
+         expensive refraction filter is switched off so the browser does not
+         have to re-rasterise it twice for one change */
+      clearTimeout(swapGuard);
+      if (!meta.hardCut) {
+        document.body.classList.add('swapping');
+        // safety: the glass must never stay on the cheap tint
+        swapGuard = setTimeout(() => document.body.classList.remove('swapping'), 1400);
+      }
+      glassEl.style.transition = `opacity ${dur}ms ease`;
+      glowEl.style.transition = `opacity ${dur}ms ease`;
+      innerEl.style.transition = `opacity ${dur}ms ease`;
+      glassEl.style.opacity = '0';
+      glowEl.style.opacity = '0';
+      innerEl.style.opacity = '0';
+      const expect = meta.minuteKey;
+      const innerKeyNeeded = meta.innerKey;
+      setTimeout(() => {
+        /* Paint while the clock is INVISIBLE, then let the browser finish the
+           expensive backdrop-filter raster before anything fades back in — so
+           the re-raster jank lands on a blank frame instead of on the animation. */
+        paint();
+        const fadeInNow = () => {
+          // filter back on first, so the fade-in already shows the real glass
+          clearTimeout(swapGuard);
+          document.body.classList.remove('swapping');
+          glassEl.style.opacity = '1';
+          glowEl.style.opacity = '1';
+          innerEl.style.opacity = String(Math.max(0, Math.min(1, CONFIG.glass.inner.intensity)));
+          setTimeout(() => {
+            glassEl.style.transition = '';
+            glowEl.style.transition = '';
+            innerEl.style.transition = '';
+          }, dur + 60);
+        };
+        const fadeIn = () => {
+          if (innerKeyNeeded && innerShownKey !== innerKeyNeeded &&
+              CONFIG.glass.inner.thickness > 0 && CONFIG.glass.inner.intensity > 0) {
+            whenInnerReady(innerKeyNeeded, fadeInNow);   // capped, never stalls
+          } else fadeInNow();
+        };
+        /* two frames: the first commits the new geometry, the second rasterises
+           it while the clock is still invisible */
+        requestAnimationFrame(() => requestAnimationFrame(fadeIn));
+        // safety net: if a fresher frame never arrived, make sure we are opaque
+        setTimeout(() => {
+          if (glowEl.dataset.painted !== expect) return;
+          glassEl.style.opacity = '1';
+          glowEl.style.opacity = '1';
+        }, 420);
+      }, meta.hardCut ? 0 : 110);
+    } else {
+      requestAnimationFrame(paint);
+    }
+  }
+
+  function build(force) {
+    const t = getTime();
+    const key = [t.lines.join('|'), state.font, CONFIG.clock.size, CONFIG.clock.sx, CONFIG.clock.sy, CONFIG.clock.tracking, state.color].join('#');
+    if (!force && key === lastKey) return;
+    /* Anything that changes the drawing cross-fades: the clock never blinks
+       into a new shape. Only a live resize goes straight through, so the
+       handles can stay glued to the digits while dragging. */
+    const isTick = lastMinute !== '' && (lastMinute !== t.minuteKey || lastKey !== key);
+    const hardCut = document.body.classList.contains('resizing');
+    lastKey = key;
+    lastMinute = t.minuteKey;
+
+    const meta = renderBitmap(t.lines);
+    lastMaskCanvas = meta.maskCanvas; lastMaskAlpha = meta.alpha; lastSS = meta.ss;
+    meta.isTick = isTick && !hardCut;
+    meta.hardCut = hardCut;
+    const jobId = ++jobSeq;
+    pendingMeta.set(jobId, meta);
+
+    const params = {
+      surface: CONFIG.glass.surface,
+      ior: CONFIG.glass.ior,
+      thickness: CONFIG.glass.thickness,
+      bezel: CONFIG.glass.bezel,
+      shadowThickness: CONFIG.glass.inner.thickness,
+      shadowAngle: CONFIG.glass.inner.angle
+    };
+
+    /* ── glass raster cache ─────────────────────────────────────────── */
+    const gk = [meta.w, meta.h, meta.ss, meta.alphaKey,
+                params.surface, params.ior, params.thickness, params.bezel].join('|');
+    if (glassCache.key === gk && glassCache.disp) {
+      // reuse: no worker round-trip, no SDF, no EDT, no PNG encode
+      pendingMeta.delete(jobId);
+      apply(meta, glassCache.disp, glassCache.shad, glassCache.maxAbs);
+      return;
+    }
+
+    /* start the rim for these new glyphs immediately: it is what the
+       cross-fade waits for, and the worker needs a head start */
+    if (CONFIG.glass.inner.thickness > 0 && innerCache.key !== meta.innerKey) {
+      postInnerFor(meta.innerKey, meta.alpha, meta.w, meta.h, meta.ss);
+    }
+
+    const wk = ensureWorker();
+    if (wk) {
+      // send a copy: the main thread keeps the alpha for live inner-shadow repaints
+      const ab = meta.alpha.slice().buffer;
+      wk.postMessage({ jobId, alphaBuf: ab, w: meta.w, h: meta.h, ss: meta.ss, params }, [ab]);
+    } else {
+      runOnMain(jobId, meta, params);
+    }
+  }
+
+  /* No Worker: run the identical generator in idle chunks. */
+  function getMainCore() {
+    if (mainCore) return mainCore;
+    const src = WORKER_SRC.slice(0, WORKER_SRC.indexOf('self.onmessage'));
+    mainCore = new Function(src + '\nreturn computeGlassJob;')();
+    return mainCore;
+  }
+  function runOnMain(jobId, meta, params) {
+    const it = getMainCore()(meta.alpha, meta.w, meta.h, meta.ss, params);
+    const pump = (dl) => {
+      if (jobId !== jobSeq) return;
+      let r;
+      do {
+        r = it.next();
+        if (r.done) {
+          const res = r.value;
+          apply(meta, bufToUrl(res.dispBuf, meta.w, meta.h), bufToUrl(res.shadBuf, meta.w, meta.h), res.maxAbsCss);
+          return;
+        }
+      } while (dl && dl.timeRemaining() > 4);
+      if (window.requestIdleCallback) requestIdleCallback(pump, { timeout: 90 });
+      else setTimeout(() => pump(null), 6);
+    };
+    if (window.requestIdleCallback) requestIdleCallback(pump, { timeout: 90 });
+    else setTimeout(() => pump(null), 0);
+  }
+
+  /* Coalesce bursts: dragging a slider fires dozens of events, we render one
+     frame after the user actually pauses for a moment. */
+  let buildTimer = 0;
+  function schedule(force, delay) {
+    cancelAnimationFrame(rafPending);
+    clearTimeout(buildTimer);
+    if (delay) {
+      buildTimer = setTimeout(() => { rafPending = requestAnimationFrame(() => build(force)); }, delay);
+      return;
+    }
+    rafPending = requestAnimationFrame(() => build(force));
+  }
+
+  let preview = { x: 1, y: 1 };
+
+  function applyPosition() {
+    const sc = preview.x === 1 && preview.y === 1 ? '' : ` scale(${preview.x}, ${preview.y})`;
+    wrap.style.transform = `translate3d(${pos.x}px, ${pos.y}px, 0)${sc}`;
+    if (frame.classList.contains('on') && !frameDirty) {
+      frameDirty = true;
+      requestAnimationFrame(syncFrameBox);
+    }
+    // keep the Now Playing card clear of a dragged clock
+    const r = wrap.getBoundingClientRect();
+    document.documentElement.style.setProperty('--clock-h', Math.round(r.height) + 'px');
+  }
+
+  /* The clock is PINNED: dragging never moves it. A long press is the only
+     gesture, and it just opens the resize handles. */
+  let holdTimer = 0;
+  let holdFrom = null;
+  let holdFired = false;
+
+  /* Long-press = resize. It must survive tiny finger wobble (phones always
+     report a few px), so the hold is only cancelled after a real movement. */
+  wrap.addEventListener('pointerdown', (e) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+    holdFired = false;
+    holdFrom = { x: e.clientX, y: e.clientY };
+    try { wrap.setPointerCapture(e.pointerId); } catch (_) {}
+    rememberLastSize();                 // snapshot for the ↺ undo button
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(() => {
+      holdFired = true;
+      openResize();
+    }, 360);
+  });
+  const endHold = () => { clearTimeout(holdTimer); holdTimer = 0; holdFrom = null; };
+  wrap.addEventListener('pointerup', endHold);
+  wrap.addEventListener('pointercancel', endHold);
+  wrap.addEventListener('pointerleave', endHold);
+  wrap.addEventListener('lostpointercapture', endHold);
+  wrap.addEventListener('pointermove', (e) => {
+    if (!holdFrom) return;
+    // real drag, not wobble → this is not a long press
+    if (Math.hypot(e.clientX - holdFrom.x, e.clientY - holdFrom.y) > 14) endHold();
+  });
+  /* a plain tap (no hold) does nothing, but must not leave a timer behind */
+  wrap.addEventListener('click', () => { if (!holdFired) clearTimeout(holdTimer); });
+
+  /* ── Long-press resize: drag any handle to stretch/shrink the digits.
+     Only the pixel size changes — the chosen font, weight and stretch stay. ── */
+  const frame = $('clock-frame');
+  const sizeKey = 'clockSize';
+  let rs = null;
+
+  function layoutFrame() {
+    // use the element's own box so a CSS preview scale doesn't inflate the frame,
+    // and measure the GLASS (not the padded wrapper) so the handles sit on the digits
+    const host = $('screen').getBoundingClientRect();
+    const g = glassEl.getBoundingClientRect();
+    const r = g.width > 8 ? g : wrap.getBoundingClientRect();
+    frame.style.left = (r.left - host.left) + 'px';
+    frame.style.top = (r.top - host.top) + 'px';
+    frame.style.width = r.width + 'px';
+    frame.style.height = r.height + 'px';
+  }
+
+  function openResize() {
+    boxCache = null;            // re-measure the safe area once
+    clampInsideScreen();
+    layoutFrame();
+    frame.classList.add('on');
+    frame.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('resizing');
+    vib(18);
+    if (navigator.vibrate) { try { navigator.vibrate([0, 14, 40, 14]); } catch (_) {} }
+    clearTimeout(openResize._t);
+    // auto-dismiss after a while so it never lingers
+    openResize._t = setTimeout(closeResize, 9000);
+  }
+  function closeResize() {
+    frame.classList.remove('on');
+    frame.setAttribute('aria-hidden', 'true');
+    if (!rs) document.body.classList.remove('resizing');
+    clearTimeout(openResize._t);
+    if (rs) {
+      rs = null;
+      preview = { x: 1, y: 1 };
+      applyPosition();
+      Clock.schedule(true);
+    }
+  }
+
+  frame.querySelectorAll('[data-h]').forEach((h) => {
+    h.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      clearTimeout(openResize._t);
+      const dir = h.dataset.h;
+      rs = {
+        dir,
+        x0: e.clientX, y0: e.clientY,
+        size: CONFIG.clock.size,
+        sx: CONFIG.clock.sx,
+        sy: CONFIG.clock.sy,
+        w: clockMetrics().textW,
+        h: clockMetrics().textH,
+        pendX: 0, pendY: 0,
+        raf: 0
+      };
+      h.setPointerCapture(e.pointerId);
+    });
+
+    h.addEventListener('pointermove', (e) => {
+      if (!rs) return;
+      // accumulate deltas from the start point so the result is stable, not drifting
+      rs.pendX = e.clientX - rs.x0;
+      rs.pendY = e.clientY - rs.y0;
+      if (!rs.raf) rs.raf = requestAnimationFrame(applyHandleDelta);
+    });
+
+    const done = () => {
+      if (!rs) return;
+      cancelAnimationFrame(rs.raf);
+      rs = null;
+      preview = { x: 1, y: 1 };
+      applyPosition();
+      persistGeometry();
+      // hand the expensive filter back only after the new raster is ready,
+      // so the release never flashes a flat tint
+      Clock.schedule(true);
+      setTimeout(() => document.body.classList.remove('resizing'), 90);
+      vib(8);
+    };
+    h.addEventListener('pointerup', done);
+    h.addEventListener('pointercancel', done);
+  });
+
+  /* Geometry of the digits themselves (not the padded canvas), used as the
+     starting box and to compute the safety limits. */
+  function clockMetrics() {
+    if (!lastMetrics) {
+      const r = wrap.getBoundingClientRect();
+      return { textW: r.width || 200, textH: r.height || 200 };
+    }
+    return lastMetrics;
+  }
+
+  /* One rAF per frame. Each axis is independent; whatever the pointer does,
+     the result is clamped so the digits can never leave the screen, reach the
+     status bar / island, or overlap the music card. */
+  function applyHandleDelta() {
+    if (!rs) return;
+    rs.raf = 0;
+    const { dir, pendX: dx, pendY: dy } = rs;
+    const horiz = /e|w/.test(dir);
+    const vert = /n|s/.test(dir);
+    const lim = limits();
+
+    if (horiz) {
+      const nextW = clamp(rs.w + dx * (dir.includes('w') ? -1 : 1), lim.minW, lim.maxW);
+      CONFIG.clock.sx = clamp(rs.sx * (nextW / rs.w), lim.minSx, lim.maxSx);
+    }
+    if (vert) {
+      const nextH = clamp(rs.h + dy * (dir.includes('n') ? -1 : 1), lim.minH, lim.maxH);
+      CONFIG.clock.sy = clamp(rs.sy * (nextH / rs.h), lim.minSy, lim.maxSy);
+    }
+    renderPreview();
+  }
+
+  function renderPreview() {
+    if (!rs) return;
+    preview = {
+      x: CONFIG.clock.sx / rs.sx,
+      y: CONFIG.clock.sy / rs.sy
+    };
+    // one composited write, no layout reads in the hot path
+    wrap.style.transform =
+      `translate3d(${pos.x}px, ${pos.y}px, 0) scale(${preview.x}, ${preview.y})`;
+    if (frameDirty) return;
+    frameDirty = true;
+    requestAnimationFrame(syncFrameBox);
+  }
+
+  let frameDirty = false;
+  function syncFrameBox() {
+    frameDirty = false;
+    if (!frame.classList.contains('on')) return;
+    layoutFrame();
+  }
+
+  /* Safe box, recomputed every time the frame opens. */
+  let boxCache = null;
+
+  /* Measured once when the frame opens (or on rotate) — never in the drag loop. */
+  function measureBox() {
+    const host = $('screen').getBoundingClientRect();
+    const m = clockMetrics();
+    const pad = (m.pad || 32) + 8;
+    const topSafe = Math.max(
+      $('topline').getBoundingClientRect().bottom + 10,
+      $('clock-layer').getBoundingClientRect().top + 2
+    );
+    const cardTop = $('np').getBoundingClientRect().top - 16;
+    boxCache = {
+      vw: host.width, vh: host.height,
+      pad, topSafe, cardTop: Math.max(topSafe + 80, cardTop)
+    };
+  }
+
+  function limits() {
+    if (!boxCache) measureBox();
+    const m = clockMetrics();
+    const pad = boxCache.pad;
+    const maxW = Math.max(140, boxCache.vw - 36 - pad);
+    const maxH = Math.max(96, Math.min(boxCache.cardTop - boxCache.topSafe, boxCache.vh * 0.6) - pad);
+    return {
+      maxW, maxH,
+      minW: Math.min(maxW, 110),
+      minH: Math.min(maxH, 70),
+      maxSx: clamp(maxW / Math.max(1, m.baseW), 0.3, 2.8),
+      maxSy: clamp(maxH / Math.max(1, m.baseH), 0.4, 3.2),
+      minSx: clamp(110 / Math.max(1, m.baseW), 0.3, 1.2),
+      minSy: clamp(70 / Math.max(1, m.baseH), 0.4, 1.4)
+    };
+  }
+
+  /* If a saved size is too big for this screen, bring it back in bounds. */
+  function clampInsideScreen() {
+    boxCache = null;
+    const lim = limits();
+    CONFIG.clock.sx = clamp(CONFIG.clock.sx, lim.minSx, lim.maxSx);
+    CONFIG.clock.sy = clamp(CONFIG.clock.sy, lim.minSy, lim.maxSy);
+    state.clockSx = CONFIG.clock.sx;
+    state.clockSy = CONFIG.clock.sy;
+    save();
+    Clock.schedule(true);
+  }
+
+  function persistGeometry() {
+    state.clockSize = CONFIG.clock.size;
+    state.clockSx = CONFIG.clock.sx;
+    state.clockSy = CONFIG.clock.sy;
+    save();
+  }
+
+  function clampSize(v) { return Math.max(56, Math.min(260, v)); }
+
+  /* Undo: keeps the size from before the frame was opened. */
+  let lastSize = null;
+  function rememberLastSize() {
+    lastSize = { size: CONFIG.clock.size, sx: CONFIG.clock.sx, sy: CONFIG.clock.sy };
+  }
+  function undoSize() {
+    if (!lastSize) return;
+    CONFIG.clock.size = lastSize.size;
+    CONFIG.clock.sx = lastSize.sx;
+    CONFIG.clock.sy = lastSize.sy;
+    persistGeometry();
+    Clock.schedule(true);
+    layoutFrame();
+    vib(10);
+  }
+  $('clock-frame-undo').addEventListener('click', (e) => {
+    e.stopPropagation();
+    undoSize();
+  });
+  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+
+  $('clock-frame-reset').addEventListener('click', (e) => {
+    e.stopPropagation();
+    CONFIG.clock.size = 128;
+    CONFIG.clock.sx = 0.94;
+    CONFIG.clock.sy = 1.62;
+    persistGeometry();
+    Clock.schedule(true);
+    layoutFrame();
+    vib(10);
+  });
+
+  /* Anywhere else closes the frame. */
+  document.addEventListener('pointerdown', (e) => {
+    if (!frame.classList.contains('on')) return;
+    if (e.target.closest('#clock-frame')) return;
+    closeResize();
+  });
+
+  function hexA(hex, a) {
+    const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '#ffffff');
+    if (!m) return `rgba(255,255,255,${a})`;
+    return `rgba(${parseInt(m[1],16)},${parseInt(m[2],16)},${parseInt(m[3],16)},${a})`;
+  }
+
+  return {
+    schedule, applyPosition, refreshInner,
+    getPos: () => pos,
+    setPos: (p) => { pos = p; applyPosition(); },
+    openResize, closeResize,
+    guard: clampInsideScreen,
+    metrics: () => clockMetrics(),
+    limits: () => limits(),
+    relayout: () => { if (frame.classList.contains('on')) layoutFrame(); }
+  };
+})();
+
+/* Small spring helper used by a few UI bits. */
+const springs = new Map();
+let springRaf = 0, springLast = 0;
+function springTo(key, from, to, k = 0.3, cb) {
+  springs.set(key, { v: from, t: to, vel: 0, k, cb });
+  if (!springRaf) { springLast = 0; springRaf = requestAnimationFrame(springStep); }
+}
+function springStep(now) {
+  if (!springLast) springLast = now;
+  const dt = Math.min(0.032, Math.max(0.001, (now - springLast) / 1000));
+  springLast = now;
+  for (const [key, s] of springs) {
+    const force = -(s.k * 220) * (s.v - s.t) - (2 * Math.sqrt(s.k * 220) * 0.82) * s.vel;
+    s.vel += force * dt;
+    s.v += s.vel * dt;
+    if (Math.abs(s.v - s.t) < 0.05 && Math.abs(s.vel) < 0.6) {
+      s.v = s.t; s.cb(s.v); springs.delete(key); continue;
+    }
+    s.cb(s.v);
+  }
+  springRaf = springs.size ? requestAnimationFrame(springStep) : 0;
+}
+
+/* ============================================================================
+   3. WALLPAPERS (drawn once, cached as data URL)
+   ========================================================================= */
+const Wallpapers = (() => {
+  function draw(name) {
+    const c = document.createElement('canvas');
+    c.width = 900; c.height = 1800;
+    const x = c.getContext('2d');
+    const W = c.width, H = c.height;
+
+    const sky = (stops) => {
+      const g = x.createLinearGradient(0, 0, W * 0.35, H);
+      stops.forEach(([p, col]) => g.addColorStop(p, col));
+      x.fillStyle = g; x.fillRect(0, 0, W, H);
+    };
+    const blob = (cx, cy, r, col) => {
+      const g = x.createRadialGradient(cx, cy, r * 0.05, cx, cy, r);
+      g.addColorStop(0, col); g.addColorStop(1, 'rgba(0,0,0,0)');
+      x.fillStyle = g; x.beginPath(); x.arc(cx, cy, r, 0, 7); x.fill();
+    };
+
+    if (name === 'angel') {
+      sky([[0,'#a9c1dd'],[0.34,'#dfcbd7'],[0.64,'#9db0c9'],[0.86,'#5a6a81'],[1,'#333e51']]);
+      blob(220, 400, 420, 'rgba(255,255,255,.55)');
+      blob(660, 300, 380, 'rgba(255,255,255,.42)');
+      blob(450, 980, 520, 'rgba(255,255,255,.22)');
+      for (let i = 0; i < 5; i++) {
+        const y0 = 760 + i * 110;
+        const g = x.createLinearGradient(0, y0 - 70, 0, y0 + 70);
+        g.addColorStop(0, 'rgba(255,255,255,0)');
+        g.addColorStop(0.5, `rgba(255,255,255,${0.26 - i * 0.04})`);
+        g.addColorStop(1, 'rgba(255,255,255,0)');
+        x.fillStyle = g;
+        x.beginPath(); x.moveTo(0, y0);
+        for (let px = 0; px <= W; px += 40) x.lineTo(px, y0 + Math.sin((px / W) * 5 + i) * 28);
+        x.lineTo(W, y0 + 150); x.lineTo(0, y0 + 150); x.closePath(); x.fill();
+      }
+      const sh = x.createRadialGradient(W*0.5, 760, 40, W*0.5, 1100, 620);
+      sh.addColorStop(0,'rgba(255,250,242,.34)'); sh.addColorStop(1,'rgba(255,250,242,0)');
+      x.fillStyle = sh; x.fillRect(0, 400, W, H - 400);
+      const vg = x.createRadialGradient(W/2,H*0.42,H*0.2,W/2,H*0.5,H*0.8);
+      vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(20,26,38,.34)');
+      x.fillStyle = vg; x.fillRect(0,0,W,H);
+    } else if (name === 'obsidian') {
+      sky([[0,'#171b24'],[0.5,'#0a0c11'],[1,'#000']]);
+      blob(W*0.5, H*0.34, W*0.9, 'rgba(90,110,150,.20)');
+    } else if (name === 'dusk') {
+      sky([[0,'#2a1c46'],[0.3,'#7c3f6b'],[0.58,'#d9705c'],[0.78,'#f2b07a'],[1,'#2b2039']]);
+      blob(W*0.7, H*0.66, 300, 'rgba(255,215,160,.65)');
+      blob(W*0.2, H*0.2, 420, 'rgba(120,90,200,.35)');
+    } else if (name === 'aurora') {
+      sky([[0,'#0b1030'],[0.42,'#1c4d8c'],[0.72,'#2aa88a'],[1,'#101a34']]);
+      blob(240, 620, 420, 'rgba(90,255,190,.45)');
+      blob(700, 900, 460, 'rgba(120,90,255,.45)');
+      blob(430, 380, 360, 'rgba(70,200,255,.35)');
+    } else if (name === 'daylight') {
+      sky([[0,'#f2f6fb'],[0.46,'#e2ebf4'],[1,'#bfd0e2']]);
+      blob(W*0.7, 380, 420, 'rgba(255,255,255,.85)');
+    } else {
+      sky([[0,'#242a36'],[1,'#0c1016']]);
+      blob(W*0.5, H*0.3, W*0.8, 'rgba(120,140,180,.22)');
+    }
+    return c.toDataURL('image/jpeg', 0.86);
+  }
+
+  const cache = new Map();
+  const PRESETS = ['angel', 'obsidian', 'dusk', 'aurora', 'daylight'];
+
+  const thumbs = new Map();
+  function urlFor(name) {
+    if (state.wall === 'custom' && state.customWall) return state.customWall;
+    if (!cache.has(name)) cache.set(name, draw(name));
+    return cache.get(name);
+  }
+  /* small version for the picker: same art, a fifth of the pixels */
+  function thumb(name) {
+    if (state.wall === 'custom' && state.customWall && name === state.wall) return state.customWall;
+    if (!thumbs.has(name)) {
+      const full = urlFor(name);
+      thumbs.set(name, full);
+    }
+    return thumbs.get(name);
+  }
+
+  function apply() {
+    const el = $('wall');
+    const url = urlFor(state.wall);
+    el.src = url;
+    document.documentElement.style.setProperty('--wall-img', `url("${url}")`);
+    el.style.setProperty('--wall-zoom', state.wall === 'custom' ? 1 : 1);
+    document.body.style.setProperty('--wall-zoom', '1');
+  }
+
+  return { apply, urlFor, thumb, PRESETS };
+})();
+
+/* ============================================================================
+   4. ADAPTIVE COLOR — keeps text readable on any wallpaper
+   ========================================================================= */
+const Adaptive = (() => {
+  const cv = document.createElement('canvas');
+  cv.width = 24; cv.height = 24;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  let lastLight = null;
+
+  function sample() {
+    const img = $('wall');
+    try {
+      ctx.drawImage(img, 0, 0, 24, 24);
+      const d = ctx.getImageData(0, 0, 24, 24).data;
+      let lum = 0, r = 0, g = 0, b = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        r += d[i]; g += d[i+1]; b += d[i+2];
+        lum += (0.2126 * d[i] + 0.7152 * d[i+1] + 0.0722 * d[i+2]) / 255;
+      }
+      const n = d.length / 4;
+      lum /= n; r /= n; g /= n; b /= n;
+      // hysteresis so the UI never flickers between the two states
+      if (lastLight === null) lastLight = lum > 0.52;
+      else if (!lastLight && lum > 0.56) lastLight = true;
+      else if (lastLight && lum < 0.44) lastLight = false;
+
+      const root = document.documentElement.style;
+      const ink = lastLight ? '#12151c' : '#ffffff';
+      root.setProperty('--ui', ink);
+      root.setProperty('--ui-dim', lastLight ? 'rgba(18,21,28,.66)' : 'rgba(255,255,255,.74)');
+      root.setProperty('--glass-bg', lastLight ? 'rgba(255,255,255,.34)' : 'rgba(255,255,255,.10)');
+      root.setProperty('--clock-top', ink);
+
+      // Clock tint: smoked glass on light walls, milky on dark walls
+      let a1, a2, base;
+      if (state.color === 'auto') {
+        a1 = lastLight ? 0.70 : 0.52;
+        a2 = lastLight ? 0.42 : 0.24;
+        base = lastLight ? [14, 18, 26] : [255, 255, 255];
+      } else {
+        base = hexToRgb(state.color);
+        a1 = 0.58; a2 = 0.26;
+      }
+      root.setProperty('--clock-tint',
+        `linear-gradient(180deg, rgba(${base[0]},${base[1]},${base[2]},${a1}) 0%, rgba(${base[0]},${base[1]},${base[2]},${a2}) 100%)`);
+    } catch (e) { /* cross-origin or not ready */ }
+  }
+
+  return { sample };
+})();
+
+/* ============================================================================
+   5. MEDIA (now playing + real audio if the user picks a file)
+   ========================================================================= */
+const Media = (() => {
+  const audio = new Audio();
+  let hasFile = false;
+  let raf = 0;
+  let demoStart = 0;
+
+  function fmt(t) {
+    t = Math.max(0, Math.floor(t));
+    return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0');
+  }
+
+  function position() {
+    if (hasFile) return audio.currentTime;
+    if (!state.playing) return state.np.elapsed;
+    return state.np.elapsed + (performance.now() - demoStart) / 1000;
+  }
+
+  /* Marquee measurement forces a layout, so it runs only when the song
+     changes — never inside the 60 fps progress loop. */
+  function measureTitle() {
+    const title = $('np-title');
+    const over = title.scrollWidth > title.clientWidth + 2;
+    title.classList.toggle('scroll', over);
+    if (over) title.style.setProperty('--mq', `-${title.scrollWidth - title.clientWidth + 18}px`);
+  }
+
+  /* Progress only: touches the numbers when they actually change. */
+  let lastElapsed = '', lastRemain = '';
+  const thumbEl = $('np-thumb');
+  const trackEl = document.querySelector('#np-bar .np-track');
+
+  /* The bar's pixel width, cached — needed once, not every frame. */
+  function measureBar() {
+    const w = trackEl ? trackEl.clientWidth : 300;
+    if (w > 0) thumbEl.style.setProperty('--bar-w', w + 'px');
+  }
+  function renderProgress() {
+    const dur = state.np.duration || 1;
+    const pos = position();
+    const p = clamp01(pos / dur);
+    $('np-fill').style.transform = `scaleX(${p.toFixed(4)})`;
+    thumbEl.style.left = (p * 100).toFixed(3) + '%';
+    const e = fmt(pos), r = '-' + fmt(dur - pos);
+    if (e !== lastElapsed) { $('np-elapsed').textContent = e; lastElapsed = e; }
+    if (r !== lastRemain) { $('np-remain').textContent = r; lastRemain = r; }
+  }
+
+  function render() {
+    measureBar();
+    $('np-title').textContent = state.np.title;
+    $('np-artist').textContent = state.np.artist;
+    $('np-play').classList.toggle('playing', !!state.playing);
+    measureTitle();
+    renderProgress();
+  }
+
+  /* The bar moves roughly one pixel per second, so repainting it 60×/s is
+     pure waste inside a backdrop-filter card: 8 updates a second look
+     perfectly smooth and keep the whole screen at 60 fps. */
+  let lastPaint = 0;
+  function tick(now) {
+    if (!lastPaint || (now || performance.now()) - lastPaint >= 120) {
+      lastPaint = (now || performance.now());
+      renderProgress();
+    }
+    if (state.playing) raf = requestAnimationFrame(tick);
+    else raf = 0;
+  }
+
+  function play() {
+    state.playing = true;
+    if (hasFile) audio.play().catch(() => {});
+    else demoStart = performance.now();
+    save();
+    render();
+    if (!raf) raf = requestAnimationFrame(tick);
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({ title: state.np.title, artist: state.np.artist });
+    }
+  }
+  function pause() {
+    state.playing = false;
+    if (hasFile) { audio.pause(); state.np.elapsed = audio.currentTime; }
+    else state.np.elapsed = Math.min(state.np.duration, position());
+    save();
+    render();
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+  }
+  function toggle() { state.playing ? pause() : play(); }
+
+  /* A tiny queue so «التالي / السابق» actually change the track — with a
+     springy swap of the artwork and the title. */
+  const QUEUE = [
+    { title: 'Grown Woman', artist: 'Beyoncé', duration: 315 },
+    { title: 'Midnight City', artist: 'M83', duration: 243 },
+    { title: 'Nights', artist: 'Frank Ocean', duration: 307 },
+    { title: 'Let It Happen', artist: 'Tame Impala', duration: 467 },
+    { title: 'Telepatía', artist: 'Kali Uchis', duration: 180 }
+  ];
+  let qi = 0;
+  const idxOf = () => {
+    const j = QUEUE.findIndex(t => t.title === state.np.title);
+    return j < 0 ? 0 : j;
+  };
+
+  function swapTo(i, dir) {
+    qi = (i + QUEUE.length) % QUEUE.length;
+    const t = QUEUE[qi];
+    state.np.title = t.title;
+    state.np.artist = t.artist;
+    state.np.duration = t.duration;
+    state.np.elapsed = 0;
+    if (hasFile) { audio.pause(); audio.src = ''; hasFile = false; }
+    demoStart = performance.now();
+    const card = $('np');
+    card.classList.remove('track-swap');
+    void card.offsetWidth;
+    card.classList.add('track-swap');
+    setTimeout(() => card.classList.remove('track-swap'), 600);
+    // the artwork swatches shift per track, so the swap is visible
+    const art = $('np-art');
+    art.style.background = ART_GRADIENTS[qi % ART_GRADIENTS.length];
+    art.removeAttribute('src');
+    render();
+    save();
+    if (state.playing) play(); else render();
+    if (dir) {
+      const b = dir > 0 ? $('np-next') : $('np-prev');
+      b.classList.remove('nudge-r', 'nudge-l');
+      void b.offsetWidth;
+      b.classList.add(dir > 0 ? 'nudge-r' : 'nudge-l');
+      setTimeout(() => b.classList.remove('nudge-r', 'nudge-l'), 500);
+    }
+  }
+  const ART_GRADIENTS = [
+    'linear-gradient(135deg,#ff5f6d,#ffc371)',
+    'linear-gradient(135deg,#5f72ff,#8ef0ff)',
+    'linear-gradient(135deg,#7a5fff,#ff8ad1)',
+    'linear-gradient(135deg,#ff9a3c,#ffd93d)',
+    'linear-gradient(135deg,#22c1c3,#7bffd0)'
+  ];
+  function nextTrack() { swapTo(idxOf() + 1, 1); vib(9); }
+  function prevTrack() {
+    // iPhone rule: restart the song unless you are already at the top
+    if (position() > 3) { seek(0); }
+    else swapTo(idxOf() - 1, -1);
+    vib(9);
+  }
+  function seek(p) {
+    const t = clamp01(p) * state.np.duration;
+    if (hasFile) audio.currentTime = t;
+    state.np.elapsed = t;
+    demoStart = performance.now();
+    render();
+    save();
+  }
+
+  function loadFile(file) {
+    const url = URL.createObjectURL(file);
+    audio.src = url;
+    audio.load();
+    hasFile = true;
+    audio.addEventListener('ended', () => {
+      state.playing = false; state.np.elapsed = 0; render();
+    }, { once: true });
+    audio.addEventListener('loadedmetadata', () => {
+      if (isFinite(audio.duration) && audio.duration > 0) state.np.duration = audio.duration;
+      render();
+    }, { once: true });
+    $('np-title').textContent = file.name.replace(/\.[^.]+$/, '');
+    state.np.title = file.name.replace(/\.[^.]+$/, '');
+    play();
+  }
+  function loadArt(file) {
+    const r = new FileReader();
+    r.onload = () => { $('np-art').src = r.result; };
+    r.readAsDataURL(file);
+  }
+
+  // scrub
+  const bar = $('np-bar');
+  let scrubbing = false;
+  const at = (clientX) => {
+    const r = bar.getBoundingClientRect();
+    return (clientX - r.left) / r.width;
+  };
+  bar.addEventListener('pointerdown', (e) => {
+    scrubbing = true; bar.classList.add('scrub');
+    bar.setPointerCapture(e.pointerId); seek(at(e.clientX)); vib(5);
+  });
+  bar.addEventListener('pointermove', (e) => { if (scrubbing) seek(at(e.clientX)); });
+  const endScrub = () => { scrubbing = false; bar.classList.remove('scrub'); };
+  bar.addEventListener('pointerup', endScrub);
+  bar.addEventListener('pointercancel', endScrub);
+
+  function bump(btn) {
+    btn.classList.remove('nudge');
+    void btn.offsetWidth;
+    btn.classList.add('nudge');
+    setTimeout(() => btn.classList.remove('nudge'), 500);
+  }
+  $('np-play').addEventListener('click', () => { toggle(); bump($('np-play')); vib(7); });
+  $('np-prev').addEventListener('click', prevTrack);
+  $('np-next').addEventListener('click', nextTrack);
+  $('np-star').addEventListener('click', () => { bump($('np-star')); toast('أُضيفت إلى المفضلة'); vib(7); });
+  $('np-air').addEventListener('click', () => { bump($('np-air')); toast('AirPlay: مكبّر صوت iPhone'); vib(7); });
+
+  return { render, play, pause, tick, loadFile, loadArt, seek, nextTrack, prevTrack, measureTitle, measureBar,
+           isPlaying: () => !!state.playing };
+})();
+
+/* ============================================================================
+   6. SHORTCUTS — hold 350ms, tap = on/off, both springy
+   ========================================================================= */
+const Shortcuts = (() => {
+  const flash = $('flash');
+  let camStream = null;
+
+  /* No progress ring anymore — the button itself is the feedback: it sinks
+     as you hold and pops back with a spring when the hold fires. */
+  function pop(btn) {
+    btn.classList.remove('pop');
+    void btn.offsetWidth;
+    btn.classList.add('pop');
+    setTimeout(() => btn.classList.remove('pop'), 560);
+  }
+
+  /* iPhone lock-screen behaviour:
+     · a quick tap turns the flashlight on/off (it never "opens")
+     · holding 350ms fills the ring, fires haptics and lets go with a spring
+     · the camera button taps into the camera, and a long press snaps a photo
+       with the iOS shutter flash — exactly like holding it on a real iPhone. */
+  function bind(btn, { onTap, onHold }) {
+    let t0 = 0, raf = 0, fired = false;
+    const start = (e) => {
+      e.preventDefault();
+      fired = false;
+      btn.classList.add('charging');
+      t0 = performance.now();
+      vib(4);
+      const step = () => {
+        const p = Math.min(1, (performance.now() - t0) / 350);
+        // press-sink eases in as the hold builds
+        btn.style.transform = `scale(${(0.9 - 0.02 * p).toFixed(3)})`;
+        if (p < 1) { raf = requestAnimationFrame(step); return; }
+        // hold completed: fire exactly once, then spring back
+        raf = 0;
+        if (!fired) {
+          fired = true;
+          vib(22);
+          if (navigator.vibrate) { try { navigator.vibrate([0, 18, 40, 18]); } catch (_) {} }
+          if (onHold) onHold();
+        }
+        btn.classList.remove('charging');
+        btn.style.transform = '';
+        pop(btn);
+      };
+      raf = requestAnimationFrame(step);
+    };
+    const cancel = () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+      btn.classList.remove('charging');
+      btn.style.transform = '';
+    };
+    const end = () => {
+      const held = performance.now() - t0;
+      cancel();
+      if (!fired && held < 350) {
+        vib(9);
+        pop(btn);            // springy pop for the short tap too
+        if (onTap) onTap();
+      }
+      fired = false;
+    };
+    btn.addEventListener('pointerdown', start);
+    btn.addEventListener('pointerup', end);
+    btn.addEventListener('pointercancel', cancel);
+    btn.addEventListener('pointerleave', cancel);
+  }
+
+  function bindAll() {
+    bind($('sh-left'), {
+      onTap: () => {
+        const on = flash.classList.toggle('on');
+        $('sh-left').classList.toggle('on', on);
+        if (on) vib(14);
+      },
+      onHold: () => {
+        // hold = quick flash pulse, like the torch burst
+        flash.classList.add('on');
+        $('sh-left').classList.add('on');
+        setTimeout(() => {
+          flash.classList.remove('on');
+          $('sh-left').classList.remove('on');
+        }, 420);
+      }
+    });
+    bind($('sh-right'), {
+      onTap: () => openCamera(),
+      onHold: () => {
+        openCamera();
+        // let the sheet and iris settle first, then fire the shutter
+        setTimeout(shoot, 620);
+      }
+    });
+  }
+
+  /* iOS-style shutter: white flash + iris dip + haptic. */
+  function shoot() {
+    const sh = $('shutter');
+    const iris = $('cam-iris');
+    if (!sh) return;
+    sh.style.transition = 'none';
+    sh.style.opacity = '1';
+    if (iris) { iris.style.transition = 'none'; iris.style.opacity = '0'; }
+    vib(16);
+    // hold the white for one frame, then let it drain (two frames so the
+    // browser commits the "on" state before the fade starts)
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        sh.style.transition = 'opacity .46s cubic-bezier(.32,.72,0,1)';
+        sh.style.opacity = '0';
+        if (iris) {
+          iris.style.transition = 'opacity .45s ease';
+          iris.style.opacity = '1';
+        }
+      });
+    });
+    toast('تم التقاط الصورة');
+  }
+  $('cam-shutter').addEventListener('click', shoot);
+
+  function openCamera() {
+    $('cam').classList.add('on');
+    const v = $('cam-video');
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      $('cam-msg').style.display = 'block';
+      v.style.display = 'none';
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
+      .then((s) => { camStream = s; v.srcObject = s; v.play().catch(() => {}); })
+      .catch(() => { $('cam-msg').style.display = 'block'; v.style.display = 'none'; });
+  }
+  function closeCamera() {
+    $('cam').classList.remove('on');
+    if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+    $('cam-video').srcObject = null;
+  }
+
+  $('flash-off').addEventListener('click', () => {
+    flash.classList.remove('on');
+    $('sh-left').classList.remove('on');
+  });
+  $('cam-close').addEventListener('click', closeCamera);
+
+  return { bindAll, closeCamera };
+})();
+
+function vib(ms) {
+  if (navigator.vibrate) { try { navigator.vibrate(ms); } catch (e) {} }
+}
+
+let toastTimer = 0;
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 1900);
+}
+
+/* ============================================================================
+   7. LOCK SCREEN STAYS LOCKED — no unlock animation.
+   A very light rubber-band on a downward pull only, then a clean snap back,
+   so the surface still feels alive without ever leaving the lock screen.
+   ========================================================================= */
+const Pull = (() => {
+  const screen = $('screen');
+  const clockLayer = $('clock-layer');
+  const top = $('topline');
+  const np = $('np');
+  const bottom = $('bottom');
+  let drag = null;
+
+  screen.addEventListener('pointerdown', (e) => {
+    if (Editor.isOpen()) return;
+    if ($('cam').classList.contains('on') || $('flash').classList.contains('on')) return;
+    if (e.target.closest('#np, #bottom, #edit, #clock-wrap, #clock-frame, #cam, #flash, button')) return;
+    drag = { y: e.clientY, t: performance.now(), last: e.clientY, id: e.pointerId, armed: false };
+  });
+
+  screen.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    drag.last = e.clientY;
+    const dy = e.clientY - drag.y;
+    if (dy < 8) return;                     // only a real downward pull responds
+    if (!drag.armed) {                      // claim the pointer only once it moves
+      drag.armed = true;
+      try { screen.setPointerCapture(drag.id); } catch (_) {}
+    }
+    // rubber band: 26% of the finger, hard-capped so nothing ever leaves
+    const y = Math.min(150, dy * 0.26);
+    clockLayer.style.transform = `translate3d(0,${y}px,0)`;
+    top.style.transform = `translate3d(0,${y}px,0)`;
+    np.style.transform = `translate3d(0,${y * 0.6}px,0)`;
+    bottom.style.transform = `translate3d(0,${y * 0.4}px,0)`;
+  });
+
+  const settle = () => {
+    if (!drag) return;
+    const wasArmed = drag.armed;
+    drag = null;
+    if (!wasArmed) {                       // a tap: nothing moved, nothing to settle
+      clockLayer.style.transform = top.style.transform = '';
+      np.style.transform = bottom.style.transform = '';
+      return;
+    }
+    // one tidy spring back
+    const t0 = performance.now();
+    const from = { top: clockLayer.style.transform };
+    const step = (now) => {
+      const k = Math.min(1, (now - t0) / 320);
+      const e = 1 - Math.pow(1 - k, 3);
+      const y = parseFloat((from.top.match(/-?[\d.]+/) || [0])[0]) * (1 - e);
+      clockLayer.style.transform = `translate3d(0,${y}px,0)`;
+      top.style.transform = `translate3d(0,${y}px,0)`;
+      np.style.transform = `translate3d(0,${y * 0.6}px,0)`;
+      bottom.style.transform = `translate3d(0,${y * 0.4}px,0)`;
+      if (k < 1) requestAnimationFrame(step);
+      else {                              // wipe the inline styles so layout is pristine
+        clockLayer.style.transform = top.style.transform = '';
+        np.style.transform = bottom.style.transform = '';
+      }
+    };
+    requestAnimationFrame(step);
+  };
+  screen.addEventListener('pointerup', settle);
+  screen.addEventListener('pointercancel', settle);
+})();
+
+/* ============================================================================
+   8. CUSTOMIZE — one bar: font · color · wallpaper · toggles. No sliders.
+   ========================================================================= */
+const Editor = (() => {
+  const sheet = $('edit');
+
+  const FONTS = [
+    ['Bebas Neue', 'ببس', 'Bebas'],
+    ['Oswald', 'اوس', 'Oswald'],
+    ['Inter', 'إنتر', 'Inter'],
+    ['SF', 'آيفون', 'SF']
+  ];
+  const COLORS = ['auto', '#ffffff', '#e5e5ea', '#8e8e93', '#1c1c1e', '#ffd60a', '#7ad0ff', '#a78bfa', '#ff7eb6', '#ff9f6b'];
+
+  function fontChips() {
+    const row = $('fonts');
+    row.innerHTML = FONTS.map(([key, glyph, label]) => `
+      <button class="f-chip ${state.font === key ? 'sel' : ''}" data-font="${key}">
+        <b style="${key === 'SF' ? 'font-family:-apple-system,Inter,sans-serif;font-weight:600' : `font-family:'${key}',serif`}">${key === 'SF' ? '12' : '12'}</b>
+        <span>${label}</span>
+      </button>`).join('');
+    row.querySelectorAll('[data-font]').forEach(b => {
+      b.addEventListener('click', () => {
+        state.font = b.dataset.font;
+        save(); fontChips(); Clock.schedule(true, 90); vib(6);
+      });
+    });
+  }
+
+  function colorChips() {
+    const row = $('colors');
+    row.innerHTML = COLORS.map(c => c === 'auto'
+      ? `<button class="c-dot ${state.color === 'auto' ? 'sel' : ''}" data-color="auto" style="background:conic-gradient(#fff 0 25%,#8e8e93 0 50%,#1c1c1e 0 75%,#ffd60a 0)" title="تلقائي"></button>`
+      : `<button class="c-dot ${state.color.toLowerCase() === c ? 'sel' : ''}" data-color="${c}" style="background:${c}"></button>`).join('');
+    row.querySelectorAll('[data-color]').forEach(b => {
+      b.addEventListener('click', () => {
+        state.color = b.dataset.color;
+        save(); colorChips(); applyUiColor(); Adaptive.sample(); Clock.schedule(true, 60); vib(6);
+      });
+    });
+  }
+
+  function wallChips() {
+    const row = $('walls');
+    const chips = Wallpapers.PRESETS.map(p => `
+      <button class="w-chip ${state.wall === p ? 'sel' : ''}" data-wall="${p}" style="background-image:url('${Wallpapers.thumb(p)}')"></button>`).join('');
+    const plus = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>';
+    const person = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="7" r="3.2"/><path d="M5.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/></svg>';
+    row.innerHTML = chips + `
+      <button class="w-chip upload" data-upload="1" title="ارفع صورة">${plus}</button>
+      <button class="w-chip upload" data-subject="1" title="صورة أمام الساعة (عمق)">${person}</button>`;
+    row.querySelectorAll('[data-wall]').forEach(b => {
+      b.addEventListener('click', () => {
+        state.wall = b.dataset.wall;
+        save(); Wallpapers.apply(); wallChips();
+        // the wallpaper swap itself is heavy: let it paint, then re-bake the clock
+        setTimeout(() => Adaptive.sample(), 60);
+        setTimeout(() => Clock.schedule(true), 260);
+        vib(6);
+      });
+    });
+    row.querySelector('[data-upload]').addEventListener('click', () => $('f-wall').click());
+    row.querySelector('[data-subject]').addEventListener('click', () => $('f-subject').click());
+  }
+
+  function toggles() {
+    const row = $('toggles');
+    const items = [
+      ['hour24', '24 ساعة', state.hour24],
+      ['weatherOn', 'الطقس', state.weatherOn],
+      ['npOn', 'الموسيقى', state.npOn],
+      ['depth', 'تأثير العمق', state.depth],
+      ['dndOn', 'عدم الإزعاج', state.dndOn]
+    ];
+    row.innerHTML = items.map(([k, label, on]) => `
+      <button class="t-btn ${on ? 'on' : ''}" data-tg="${k}">${label}</button>`).join('');
+    row.querySelectorAll('[data-tg]').forEach(b => {
+      b.addEventListener('click', () => {
+        const k = b.dataset.tg;
+        state[k] = !state[k];
+        save(); toggles(); applyToggles(); vib(8);
+        if (k === 'hour24') Clock.schedule(true, 80);
+        if (k === 'depth') applyDepth();
+      });
+    });
+  }
+
+  /* Inner-shadow sliders — they write CONFIG.glass.inner only, so the music
+     card, the flashlight and the camera keep their own glass untouched. */
+  const INNER_COLORS = ['#ffffff', '#e8ecf4', '#c9d4e6', '#9fb4d4', '#7ad0ff', '#a78bfa',
+                        '#ff9ecb', '#ffd60a', '#ff9f6b', '#8ef0c4', '#b9b9bf', '#1c1c1e'];
+
+  function innerCtl() {
+    const op = $('in-op'), th = $('in-th'), ang = $('in-ang');
+    const opv = $('in-op-v'), thv = $('in-th-v'), angv = $('in-ang-v');
+    op.value = String(Math.round((state.innerIntensity ?? 0.55) * 100));
+    th.value = String(state.innerThickness ?? 2.5);
+    ang.value = String(CONFIG.glass.inner.angle);
+    opv.textContent = op.value;
+    thv.textContent = th.value;
+    angv.textContent = ang.value;
+
+    /* colour swatches for the inner shadow */
+    const row = $('in-colors');
+    row.innerHTML = INNER_COLORS.map(c =>
+      `<button class="c-dot ${(CONFIG.glass.inner.color || '#ffffff').toLowerCase() === c ? 'sel' : ''}"
+               data-ic="${c}" style="background:${c}" aria-label="${c}"></button>`).join('');
+    row.querySelectorAll('[data-ic]').forEach(b => {
+      b.addEventListener('click', () => {
+        CONFIG.glass.inner.color = b.dataset.ic;
+        state.innerColor = b.dataset.ic;
+        save(); innerCtl(); Clock.refreshInner(); vib(6);
+      });
+    });
+
+    let t1 = 0, t2 = 0, t3 = 0;
+    let opRaf = 0;
+    op.addEventListener('input', () => {
+      /* pure CSS: instant, and it never triggers a redraw. One write per
+         animation frame is all the compositor can use anyway. */
+      state.innerIntensity = Number(op.value) / 100;
+      opv.textContent = op.value;
+      CONFIG.glass.inner.intensity = state.innerIntensity;
+      if (!opRaf) opRaf = requestAnimationFrame(() => {
+        opRaf = 0;
+        const el = $('clock-inner');
+        if (el) el.style.opacity = String(state.innerIntensity);
+      });
+      clearTimeout(t1);
+      t1 = setTimeout(save, 220);
+    });
+    th.addEventListener('input', () => {
+      state.innerThickness = Number(th.value);
+      thv.textContent = th.value;
+      CONFIG.glass.inner.thickness = state.innerThickness;
+      /* cheap path: only the inner map is redrawn (no refraction, no bitmap) */
+      clearTimeout(t2);
+      t2 = setTimeout(() => { Clock.refreshInner(); save(); }, 70);
+    });
+    ang.addEventListener('input', () => {
+      CONFIG.glass.inner.angle = Number(ang.value);
+      state.innerAngle = CONFIG.glass.inner.angle;
+      angv.textContent = ang.value;
+      clearTimeout(t3);
+      t3 = setTimeout(() => { Clock.refreshInner(); save(); }, 70);
+    });
+  }
+
+  function open() {
+    sheet.classList.add('open');
+    document.body.classList.add('editing');
+    vib(8);
+  }
+  function close() {
+    sheet.classList.remove('open');
+    document.body.classList.remove('editing');
+  }
+  function toggle() { sheet.classList.contains('open') ? close() : open(); }
+
+  function build() {
+    fontChips(); colorChips(); wallChips(); innerCtl(); toggles();
+    $('edit-done').addEventListener('click', close);
+  }
+
+  return { build, open, close, toggle, isOpen: () => sheet.classList.contains('open') };
+})();
+
+/* ============================================================================
+   9. WIRING
+   ========================================================================= */
+function hexToRgb(hex) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '#ffffff');
+  return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [255, 255, 255];
+}
+/* The chosen clock colour also drives the UI ink when it is readable. */
+function applyUiColor() {
+  if (state.color === 'auto') { Adaptive.sample(); return; }
+  document.documentElement.style.setProperty('--clock-top', state.color);
+}
+
+function applyToggles() {
+  $('np').classList.toggle('gone', !state.npOn);
+  $('dnd').classList.toggle('gone', !state.dndOn);
+  $('topline').style.visibility = state.weatherOn ? '' : '';
+  renderTopline();
+  // the card may have just come back at a different width — re-measure the title
+  if (state.npOn) setTimeout(() => Media.measureTitle(), 260);
+}
+
+function applyDepth() {
+  const el = $('subject');
+  if (state.depth && state.subject) {
+    el.src = state.subject;
+    document.body.classList.add('has-subject');
+    el.style.opacity = '1';
+  } else {
+    document.body.classList.remove('has-subject');
+  }
+}
+
+function renderTopline() {
+  const d = new Date();
+  const opts = { weekday: 'short', day: 'numeric', month: 'short' };
+  $('date').textContent = d.toLocaleDateString('ar', opts);
+  const wx = $('wx');
+  if (state.weatherOn) {
+    // live weather, gracefully falling back to the configured string
+    if (!wx.dataset.live) {
+      wx.textContent = CONFIG.weather;
+      fetch('https://api.open-meteo.com/v1/forecast?latitude=33.31&longitude=44.36&current=temperature_2m,weather_code&timezone=auto')
+        .then(r => r.json())
+        .then(j => {
+          const t = Math.round(j.current.temperature_2m);
+          const c = j.current.weather_code;
+          const ic = c === 0 ? '☀️' : c < 4 ? '🌤️' : c < 50 ? '☁️' : c < 70 ? '🌧️' : '⛈️';
+          wx.textContent = `${ic} ${t}°`;
+          wx.dataset.live = '1';
+        })
+        .catch(() => {});
+    }
+    wx.style.display = '';
+  } else {
+    wx.style.display = 'none';
+    const sep = document.querySelector('#topline .sep');
+    if (sep) sep.style.display = 'none';
+  }
+}
+
+function icons() {
+  $('i-signal').innerHTML = `<svg width="18" height="12" viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5.5" width="3" height="6.5" rx="1"/><rect x="10" y="3" width="3" height="9" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1"/></svg>`;
+  $('i-wifi').innerHTML = `<svg width="16" height="12" viewBox="0 0 16 12" fill="currentColor"><path d="M8 11.4l2.1-2.6a3.4 3.4 0 00-4.2 0z"/><path d="M8 6.2c1.4 0 2.7.5 3.7 1.4l1.3-1.6A8 8 0 008 4a8 8 0 00-5 2l1.3 1.6A5.7 5.7 0 018 6.2z"/><path d="M8 1.8c2.3 0 4.5.8 6.2 2.3L15.5 2.4A11.6 11.6 0 008 0 11.6 11.6 0 00.5 2.4l1.3 1.7A9.7 9.7 0 018 1.8z"/></svg>`;
+  $('i-focus').innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M20.5 14.6A8.6 8.6 0 019.4 3.5a8.6 8.6 0 1011.1 11.1z"/></svg>`;
+}
+
+function battery() {
+  if (!('getBattery' in navigator)) return;
+  navigator.getBattery().then(b => {
+    const sync = () => {
+      const p = Math.round(b.level * 100);
+      $('bat-pct').textContent = p;
+      $('bat-fill').style.transform = `scaleX(${p / 100})`;
+      $('bat-fill').classList.toggle('low', p <= 20);
+    };
+    sync();
+    b.addEventListener('levelchange', sync);
+    b.addEventListener('chargingchange', sync);
+  }).catch(() => {});
+}
+
+/* Liquid glass on the rounded-rect surfaces (card, shortcuts, DND pill).
+   The clock keeps its own TextGlass pipeline. */
+const GlassTargets = (() => {
+  const targets = [];
+
+  function attachAll() {
+    targets.length = 0;
+    const np = $('np');
+    const pill = $('dnd');
+    const left = $('sh-left');
+    const right = $('sh-right');
+
+    const radiusOf = (el) => {
+      const cs = getComputedStyle(el);
+      return parseFloat(cs.borderTopLeftRadius) || CONFIG.radius;
+    };
+
+    for (const el of [np, pill, left, right]) {
+      if (!el) continue;
+      Glass.attach(el, radiusOf(el));
+      targets.push(el);
+    }
+  }
+
+  /* The card's height changes with the marquee + artwork; re-measure once after boot. */
+  function refresh() {
+    for (const el of targets) {
+      const h = el.querySelector('.lg-shadow-layer');
+      if (h) el.classList.remove('glass-fallback');
+    }
+    Glass.rebuildAll();
+  }
+
+  return { attachAll, refresh };
+})();
+
+function shortcutsRender() {
+  const inner = document.querySelector('#sh-left .sh-inner');
+  inner.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6c0 2-2 2-2 4v10a2 2 0 01-2 2h-4a2 2 0 01-2-2V10c0-2-2-2-2-4V2h12z"/><path d="M6 6h12"/><path d="M12 12v2"/></svg>`;
+  const right = document.querySelector('#sh-right .sh-inner');
+  right.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 3L7.2 5H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V7a2 2 0 00-2-2h-3.2L15 3H9zm3 15a5 5 0 110-10 5 5 0 010 10z"/></svg>`;
+}
+
+/* Uploads */
+$('f-wall').addEventListener('change', (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    state.wall = 'custom';
+    state.customWall = r.result;
+    save();
+    Wallpapers.apply();
+    Editor.build();
+    setTimeout(() => { Adaptive.sample(); Clock.schedule(true); }, 140);
+    toast('تم تغيير الخلفية');
+  };
+  r.readAsDataURL(f);
+  e.target.value = '';
+});
+$('f-subject').addEventListener('change', (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    state.subject = r.result;
+    state.depth = true;
+    save();
+    applyDepth();
+    Editor.build();
+    toast('تأثير العمق مفعّل');
+  };
+  r.readAsDataURL(f);
+  e.target.value = '';
+});
+
+/* double-tap the wallpaper to open the editor (iOS-style) */
+(() => {
+  let last = 0;
+  $('screen').addEventListener('pointerup', (e) => {
+    if (e.target.closest('#np, #bottom, #edit, #cam, #flash')) return;
+    const now = performance.now();
+    if (now - last < 320) { Editor.toggle(); vib(10); }
+    last = now;
+  });
+})();
+
+/* Boot */
+wall: {
+  icons();
+  shortcutsRender();
+  Shortcuts.bindAll();
+  GlassTargets.attachAll();
+  requestAnimationFrame(() => requestAnimationFrame(() => GlassTargets.refresh()));
+  Wallpapers.apply();
+  applyUiColor();
+  applyDepth();
+  Editor.build();
+  applyToggles();
+  Media.render();
+  $('np').classList.add('in');
+  $('wall').addEventListener('load', () => {
+    Adaptive.sample();
+    Clock.schedule(true);
+  });
+  Clock.schedule(true);
+  battery();
+
+  if (!canGlass) {
+    const n = $('notice');
+    n.style.display = 'block';
+    n.textContent = 'وضع خفيف لأداء أكثر سلاسة على جهازك';
+    setTimeout(() => { n.style.display = 'none'; }, 7000);
+  }
+
+  // minute tick
+  setInterval(() => { if (!document.hidden) Clock.schedule(false); }, 1000);
+
+  // keep a saved size legal on this screen, and after any rotation
+  setTimeout(() => Clock.guard(), 900);
+  window.addEventListener('resize', () => {
+    setTimeout(() => Clock.guard(), 260);
+    setTimeout(() => { Media.measureTitle(); Media.measureBar(); }, 320);
+  });
+
+  // relock when the tab comes back
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) Clock.schedule(false);
+  });
+}
+
+</script>
+<script src="mobile.js"></script>
+</body>
+</html>

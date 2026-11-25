@@ -1,0 +1,17 @@
+{
+  "name": "oclock-liquid-glass",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "python3 -m http.server 5173 --bind 0.0.0.0 --directory web",
+    "test": "node --test scripts/*.test.mjs"
+  },
+  "dependencies": {
+    "@fontsource/bebas-neue": "5.2.7",
+    "@fontsource/inter": "5.2.8",
+    "@fontsource/oswald": "5.2.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1"
+  }
+}
