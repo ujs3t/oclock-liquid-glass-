@@ -9,6 +9,16 @@ try {
     await page.addInitScript(() => {
       Object.defineProperty(navigator,'deviceMemory',{get:()=>2});
       Object.defineProperty(navigator,'hardwareConcurrency',{get:()=>2});
+      const RealDate = Date;
+      const baseFake = new RealDate(2026, 10, 25, 18, 16, 5, 0).getTime();
+      const basePerf = performance.now();
+      class FixedDate extends RealDate {
+        constructor(...a) {
+          super(...(a.length ? a : [baseFake + (performance.now() - basePerf)]));
+        }
+        static now() { return baseFake + (performance.now() - basePerf); }
+      }
+      window.Date = FixedDate;
     });
     await page.goto('http://localhost:5173');
     await page.waitForFunction(() => document.getElementById('clock-inner').style.backgroundImage.startsWith('url('), null, {timeout:20000});
@@ -32,6 +42,18 @@ try {
       return white;
     });
     assert.ok(rimPixels>20,'white inner shadow must contain visible pixels');
+    const layoutInfo = await page.evaluate(async () => {
+      const top = document.getElementById('topline').getBoundingClientRect();
+      const clk = document.getElementById('clock-glass').getBoundingClientRect();
+      const dnd = document.getElementById('dnd');
+      const dndBox = dnd.getBoundingClientRect();
+      const dndRimBg = dnd.querySelector('.lg-shadow-layer')?.style.backgroundImage || '';
+      const rimUrl = dndRimBg.slice(4, -1).replace(/^"|"$/g, '');
+      const img = new Image(); img.src = rimUrl; await img.decode();
+      return { topBottom: top.bottom, clkTop: clk.top, dndW: dndBox.width, rimW: img.width };
+    });
+    assert.ok(layoutInfo.clkTop >= layoutInfo.topBottom - 2, 'clock must sit cleanly below topline');
+    assert.ok(layoutInfo.rimW >= layoutInfo.dndW * 1.8, 'dnd rim must be supersampled (>=2x)');
     await page.evaluate(()=>Clock.schedule(true));
     await page.waitForTimeout(600);
     assert.equal(await page.locator('#clock-inner').evaluate(el=>el.style.backgroundImage),before.rim,'unchanged rim is reused');
@@ -44,6 +66,19 @@ try {
     assert.equal(await page.locator('#edit').evaluate(el=>el.classList.contains('open')),true);
     const box=await page.locator('#edit').boundingBox();
     assert.ok(box.x>=-1 && box.x+box.width<=width+1);
+    await page.locator('#clock-fmt [data-fmt="12"]').click();
+    assert.equal(await page.evaluate(()=>state.hour24),false,'12h format button sets hour24=false');
+    await page.locator('#clock-fmt [data-fmt="24"]').click();
+    assert.equal(await page.evaluate(()=>state.hour24),true,'24h format button sets hour24=true');
+    const preY = (await page.locator('#clock-glass').boundingBox()).y;
+    await page.locator('#clock-y').fill('36');
+    await page.locator('#clock-y').dispatchEvent('input');
+    await page.waitForTimeout(260);
+    const postY = (await page.locator('#clock-glass').boundingBox()).y;
+    assert.ok(postY > preY + 10, 'clock-y slider moves clock vertically');
+    await page.locator('#clock-y').fill('0');
+    await page.locator('#clock-y').dispatchEvent('input');
+    await page.waitForTimeout(220);
     await page.locator('#clock-size').fill('420');
     await page.locator('#clock-size').dispatchEvent('input');
     await page.waitForTimeout(1200);

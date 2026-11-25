@@ -57,7 +57,7 @@ test('UI bugfixes and native Android upgrades stay intact', () => {
   assert.ok(html.includes('id="clock-stretch"'));
   assert.ok(html.includes('id="clock-y"'));
   assert.ok(html.includes('id="clock-fmt"'));
-  assert.ok(html.includes('Math.min(2, Math.max(1.5, dpr))'));
+  assert.ok(html.includes('Math.min(3, Math.max(2, Math.round(dpr * 2)))'));
 
   const nativeJava = readFileSync('android/app/src/main/java/com/oclock/liquidglass/NativeGlass.java','utf8');
   assert.ok(nativeJava.includes('setLatestVersion'));

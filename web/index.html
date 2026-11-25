@@ -1292,7 +1292,7 @@ function applyLiquidGlass(el, opts){
     if (wCss < 2 || hCss < 2) return;
     const radiusCss = o.radius!=null ? o.radius : Math.min(wCss,hCss)/2;
     const dpr = window.devicePixelRatio || 1;
-    const ss = o.supersample || Math.min(2, Math.max(1.5, dpr));
+    const ss = o.supersample || Math.min(3, Math.max(2, Math.round(dpr * 2)));
 
     const key = [wCss,hCss,radiusCss,ss,o.surface,o.ior,o.thickness,o.bezel,o.shadow.thickness,o.shadow.angle,o.shadow.intensity].join('|');
     if (key === rasterKey) return;
@@ -1344,7 +1344,7 @@ function applyLiquidGlass(el, opts){
     }
 
     const chain = `url(#${uid})`;
-    glassLayer.style.backdropFilter = chain + (supportsChainedFilter ? ' saturate(1.22) contrast(1.06)' : '');
+    glassLayer.style.backdropFilter = chain + (supportsChainedFilter ? ' saturate(1.15) contrast(1.06)' : '');
     glassLayer.style.webkitBackdropFilter = glassLayer.style.backdropFilter;
 
     if (!shadowEl){
