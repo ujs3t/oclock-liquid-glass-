@@ -1,5 +1,4 @@
 (() => {
-  document.fonts.ready.then(() => Clock.schedule(true));
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const active = new Map();
   // The individual scale property does not overwrite existing drag transforms.

@@ -1099,13 +1099,19 @@ function dispAt(o){
   if(!T||T.y===0) return 0;
   return (-h/T.y)*T.x;
 }
+const profileCache = new Map();
 function buildProfile(o){
+  const key = [o.bezelWidth,o.thickness,o.ior,Object.keys(SURFACES).find(k => SURFACES[k] === o.surfaceFn)].join('|');
+  if (profileCache.has(key)) return profileCache.get(key);
   const n=127, profile=new Array(n); let maxAbs=0;
   for(let i=0;i<n;i++){
     profile[i]=dispAt({distancePx:(i/(n-1))*o.bezelWidth, bezelWidth:o.bezelWidth, thickness:o.thickness, surfaceFn:o.surfaceFn, refractiveIndex:o.ior});
     maxAbs=Math.max(maxAbs,Math.abs(profile[i]));
   }
-  return {profile, maxAbs:maxAbs||1e-6, bezelWidth:o.bezelWidth, samples:n};
+  const result = {profile, maxAbs:maxAbs||1e-6, bezelWidth:o.bezelWidth, samples:n};
+  if (profileCache.size >= 16) profileCache.delete(profileCache.keys().next().value);
+  profileCache.set(key, result);
+  return result;
 }
 function sampleProfile(r,distPx){
   const c=clamp01(distPx/r.bezelWidth)*r.bezelWidth, p=(c/r.bezelWidth)*(r.samples-1);
@@ -1191,6 +1197,7 @@ function applyLiquidGlass(el, opts){
   const uid = 'lgFilter' + (++uidCounter);
   let shadowEl = opts.shadowEl || el.querySelector('.lg-shadow-layer');
   let rafId = 0;
+  let rasterKey = '';
 
   function rebuild(){
     const wCss=Math.max(2, el.offsetWidth), hCss=Math.max(2, el.offsetHeight);
@@ -1199,6 +1206,8 @@ function applyLiquidGlass(el, opts){
     const dpr = window.devicePixelRatio || 1;
     const ss = o.supersample || Math.min(3, Math.max(2, Math.round(dpr*2)));
 
+    const key = [wCss,hCss,radiusCss,ss,o.surface,o.ior,o.thickness,o.bezel,o.shadow.thickness,o.shadow.angle,o.shadow.intensity].join('|');
+    if (key === rasterKey) return;
     const surfaceFn = SURFACES[o.surface] || SURFACES.convexSquircle;
     const bezelRaster = o.bezel*ss, thickRaster = o.thickness*ss;
     const radial = buildProfile({ bezelWidth:bezelRaster, thickness:thickRaster, ior:o.ior, surfaceFn });
@@ -1249,6 +1258,7 @@ function applyLiquidGlass(el, opts){
       paintShadow(data,w,h,shape, Object.assign({}, o.shadow, { thickness: shadowThickRaster }))
     );
     shadowEl.style.backgroundImage = `url(${shadowCv.toDataURL('image/png')})`;
+    rasterKey = key;
   }
 
   rebuild();
@@ -1267,13 +1277,13 @@ function applyLiquidGlass(el, opts){
       el.style.backdropFilter = '';
       el.style.webkitBackdropFilter = '';
     },
-    setOptions:(patch)=>{ Object.assign(o, patch); if (patch.shadow) Object.assign(o.shadow, patch.shadow); rebuild(); }
+    setOptions:(patch)=>{ const shadow = Object.assign({}, o.shadow, patch.shadow); Object.assign(o, patch); o.shadow = shadow; rebuild(); }
   };
 }
 
 /* Chromium detection: backdrop-filter:url() is Chromium-only. */
 const isChromium = /Chrome\/|Edg\//.test(navigator.userAgent);
-const canGlass = !window.mobileLite && (Boolean(window.chrome) || isChromium) &&
+const canGlass = (Boolean(window.chrome) || isChromium) &&
   (CSS.supports('backdrop-filter','url(#lgProbe)') || CSS.supports('-webkit-backdrop-filter','url(#lgProbe)'));
 
 /* Glass pool: hard cap of 8 simultaneous filter elements. */
@@ -1348,7 +1358,9 @@ function* computeGlassJob(alpha, w, h, ss, params) {
   const binary = new Uint8Array(nPx);
   for (let i = 0; i < nPx; i++) binary[i] = alpha[i] >= 128 ? 1 : 0;
   const distOut = edt2d(binary, w, h, 1);
+  yield;
   const distIn = edt2d(binary, w, h, 0);
+  yield;
   const sdf = new Float32Array(nPx);
   let maxInside = 0;
   for (let i = 0; i < nPx; i++) {
@@ -1363,6 +1375,7 @@ function* computeGlassJob(alpha, w, h, ss, params) {
       const xm = x > 0 ? x - 1 : 0, xp = x < w - 1 ? x + 1 : w - 1;
       smooth[y*w+x] = (sdf[ym*w+xm]+2*sdf[ym*w+x]+sdf[ym*w+xp]+2*sdf[y*w+xm]+4*sdf[y*w+x]+2*sdf[y*w+xp]+sdf[yp*w+xm]+2*sdf[yp*w+x]+sdf[yp*w+xp])*0.0625;
     }
+    if (y % 32 === 31) yield;
   }
   const userBezelRaster = Math.max(2, params.bezel * ss);
   const bezelRaster = Math.max(2, Math.min(userBezelRaster, Math.max(2, 0.5 * maxInside)));
@@ -1380,6 +1393,10 @@ function* computeGlassJob(alpha, w, h, ss, params) {
     for (let x = 0; x < w; x++) {
       const xm = x > 0 ? x - 1 : 0, xp = x < w - 1 ? x + 1 : w - 1;
       const idx = y*w+x, p = idx*4, dd = sdf[idx];
+      if (dd > feather) {
+        dispData[p]=dispData[p+1]=dispData[p+2]=128; dispData[p+3]=255;
+        continue;
+      }
       const gx = (smooth[y*w+xp]-smooth[y*w+xm])*0.5;
       const gy = (smooth[yp*w+x]-smooth[ym*w+x])*0.5;
       const len = Math.hypot(gx,gy)||1;
@@ -1404,6 +1421,7 @@ function* computeGlassJob(alpha, w, h, ss, params) {
         shadData[p+3]=clamp255(sharp*edgeAA*Math.pow(k,1.8)*255);
       }
     }
+    if (y % 16 === 15) yield;
   }
   return { maxAbsCss: radial.maxAbs/ss, dispBuf: dispData.buffer, shadBuf: shadData.buffer };
 }
@@ -1454,6 +1472,7 @@ function paintInnerShadow(alpha, w, h, cfg) {
       if (edge <= 2) continue;
       const gx = (a[y * iw + xp] - a[y * iw + xm]) * 0.5;
       const gy = (a[yp * iw + x] - a[ym * iw + x]) * 0.5;
+      if (gx === 0 && gy === 0) continue;
       const len = Math.hypot(gx, gy) || 1;
       const k = Math.abs((gx / len) * ax + (gy / len) * ay);
       const falloff = Math.pow(Math.min(1, edge * fall), 0.85);
@@ -1483,8 +1502,19 @@ self.onmessage = function (e) {
   let r = it.next();
   while (!r.done) r = it.next();
   const res = r.value;
-  self.postMessage({ jobId, w, h, maxAbsCss: res.maxAbsCss, dispBuf: res.dispBuf, shadBuf: res.shadBuf },
-    [res.dispBuf, res.shadBuf]);
+  // PNG compression belongs on the worker too, not on the animation thread.
+  const sendBuffers = () => self.postMessage({ jobId, w, h, maxAbsCss: res.maxAbsCss,
+    dispBuf: res.dispBuf, shadBuf: res.shadBuf }, [res.dispBuf, res.shadBuf]);
+  if (typeof OffscreenCanvas !== 'undefined' && OffscreenCanvas.prototype.convertToBlob) {
+    const encode = (buffer) => {
+      const canvas = new OffscreenCanvas(w, h);
+      canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(buffer), w, h), 0, 0);
+      return canvas.convertToBlob({ type: 'image/png' });
+    };
+    Promise.all([encode(res.dispBuf), encode(res.shadBuf)]).then(([dispBlob, shadBlob]) => {
+      self.postMessage({ jobId, w, h, maxAbsCss: res.maxAbsCss, dispBlob, shadBlob });
+    }).catch(sendBuffers);
+  } else sendBuffers();
 };
 `;
 
@@ -1612,6 +1642,7 @@ const Clock = (() => {
         if (edge <= 2) continue;
         const gx = (a[y * iw + xp] - a[y * iw + xm]) * 0.5;
         const gy = (a[yp * iw + x] - a[ym * iw + x]) * 0.5;
+        if (gx === 0 && gy === 0) continue;
         const len = Math.hypot(gx, gy) || 1;
         const k = Math.abs((gx / len) * ax + (gy / len) * ay);
         const falloff = Math.pow(Math.min(1, edge * fall), 0.85);
@@ -1635,7 +1666,6 @@ const Clock = (() => {
      image comes back. Slider drags therefore never touch the main thread. */
   let innerJob = 0;
   let swapGuard = 0;
-  let innerObj = '';
 
   function paintInnerNow(alpha, w, h, ss) {
     const cv = document.createElement('canvas');
@@ -1659,7 +1689,6 @@ const Clock = (() => {
   let innerWaiters = [];
 
   function setInnerImage(url, key) {
-    if (innerObj) { URL.revokeObjectURL(innerObj); innerObj = ''; }
     innerEl.style.backgroundImage = url ? `url("${url}")` : 'none';
     innerShownKey = key || '';
     if (!key) return;
@@ -1679,7 +1708,11 @@ const Clock = (() => {
 
   function onInnerResult(d) {
     if (d.jobId !== innerJob) return;                 // a newer slider position won
-    setInnerImage(URL.createObjectURL(d.blob), d.key);
+    const previous = innerCache.url;
+    const url = URL.createObjectURL(d.blob);
+    innerCache = { key: d.key, url };
+    setInnerImage(url, d.key);
+    if (previous && previous.startsWith('blob:') && previous !== url) URL.revokeObjectURL(previous);
   }
 
   /* Called live by the sliders: no refraction rebuild, no bitmap rebuild. */
@@ -1716,11 +1749,12 @@ const Clock = (() => {
     if (!wk) return;                                // paintInnerNow handles the fallback
     innerPosted = key;
     const cfg = CONFIG.glass.inner;
+    const alphaBuf = alpha.slice().buffer;
     wk.postMessage({
       kind: 'inner', jobId: ++innerJob, key, w, h,
-      alphaBuf: alpha.slice().buffer,
+      alphaBuf,
       cfg: { thickness: cfg.thickness, angle: cfg.angle, color: cfg.color, ss }
-    });
+    }, [alphaBuf]);
   }
 
   function postInner(key, w, h) {
@@ -1733,11 +1767,12 @@ const Clock = (() => {
     if (key === innerPosted) return;                    // already on its way
     innerPosted = key;
     const jobId = ++innerJob;
+    const alphaBuf = lastMaskAlpha.slice().buffer;
     wk.postMessage({
       kind: 'inner', jobId, key, w, h,
-      alphaBuf: lastMaskAlpha.slice().buffer,
+      alphaBuf,
       cfg: { thickness: cfg.thickness, angle: cfg.angle, color: cfg.color, ss: lastSS }
-    });
+    }, [alphaBuf]);
   }
 
   function renderBitmap(lines) {
@@ -1749,7 +1784,7 @@ const Clock = (() => {
     // fit inside the viewport with side breathing room
     const maxW = hostW * 0.88;
     const dpr = window.devicePixelRatio || 1;
-    let ss = window.mobileLite ? 1 : Math.min(3, Math.max(2, Math.round(dpr * 1.5)));
+    let ss = Math.min(3, Math.max(2, Math.round(dpr * 1.5)));
 
     const probe = document.createElement('canvas').getContext('2d');
     probe.font = `${state.font === 'SF' ? 600 : c.weight} ${size}px ${fontStack()}`;
@@ -1759,7 +1794,18 @@ const Clock = (() => {
     for (const ln of lines) maxLineW = Math.max(maxLineW, probe.measureText(ln).width);
 
     const rawW = Math.max(40, maxLineW * c.sx);
-    if (rawW > maxW) size = Math.floor(size * (maxW / rawW));
+    // One uniform fit preserves the user's glyph proportions on every screen.
+    // Reserve the music/shortcut area; never write this automatic fit to storage.
+    const layer = $('clock-layer').getBoundingClientRect();
+    const card = $('np');
+    const bottom = $('bottom');
+    const obstacle = state.npOn ? card : bottom;
+    const obstacleTop = obstacle.getBoundingClientRect().top;
+    const availableH = Math.max(72, Math.min(host.clientHeight * .43,
+      obstacleTop - layer.top - 24));
+    const rawH = Math.max(40, lines.length * size * .92 * c.sy);
+    const fit = Math.min(1, (maxW - 36) / rawW, (availableH - 36) / rawH);
+    size *= Math.max(.1, fit);
 
     probe.font = `${state.font === 'SF' ? 600 : c.weight} ${size}px ${fontStack()}`;
     if ('letterSpacing' in probe) probe.letterSpacing = `${c.tracking}px`;
@@ -1777,6 +1823,13 @@ const Clock = (() => {
     const w = Math.max(4, Math.round(wCss * ss));
     const h = Math.max(4, Math.round(hCss * ss));
 
+    const maskKey = [size.toFixed(2), w, h, state.font, c.sx, c.sy, c.tracking, lines.join('|')].join('|');
+    if (maskCache.key === maskKey) {
+      const innerKey = [w,h,ss,maskKey,CONFIG.glass.inner.thickness,CONFIG.glass.inner.angle,CONFIG.glass.inner.color].join('|');
+      return Object.assign({}, maskCache.meta, { innerKey, innerUrl: innerCache.key === innerKey ? innerCache.url : '' });
+    }
+
+
     const cv = document.createElement('canvas');
     cv.width = w; cv.height = h;
     const ctx = cv.getContext('2d');
@@ -1788,11 +1841,6 @@ const Clock = (() => {
     ctx.textBaseline = 'middle';
     const cx = (wCss / 2) / c.sx;
     lines.forEach((ln, i) => ctx.fillText(ln, cx, ((hCss / 2) / c.sy)));
-
-    const maskKey = [size.toFixed(2), w, h, state.font, c.sx, c.sy, c.tracking, lines.join('|')].join('|');
-    if (maskCache.key === maskKey) {
-      return Object.assign({}, maskCache.meta, { innerUrl: innerCache.url });
-    }
 
     const img = ctx.getImageData(0, 0, w, h);
     const alpha = new Uint8Array(w * h);
@@ -1833,14 +1881,19 @@ const Clock = (() => {
     return cv.toDataURL('image/png');
   }
 
+  let glassObjects = [];
   function onWorkerResult(e) {
     if (e.data.kind === 'inner') { onInnerResult(e.data); return; }
-    const { jobId, w, h, maxAbsCss, dispBuf, shadBuf } = e.data;
+    const { jobId, w, h, maxAbsCss, dispBuf, shadBuf, dispBlob, shadBlob } = e.data;
     const meta = pendingMeta.get(jobId);
     pendingMeta.delete(jobId);
     if (!meta || jobId !== jobSeq) return;
-    const disp = bufToUrl(dispBuf, w, h);
-    const shad = bufToUrl(shadBuf, w, h);
+    const previousObjects = glassObjects;
+    glassObjects = dispBlob ? [URL.createObjectURL(dispBlob), URL.createObjectURL(shadBlob)] : [];
+    const disp = glassObjects[0] || bufToUrl(dispBuf, w, h);
+    const shad = glassObjects[1] || bufToUrl(shadBuf, w, h);
+    // Give a pending cross-fade time to release the old filter textures.
+    setTimeout(() => previousObjects.forEach(url => URL.revokeObjectURL(url)), 2000);
     glassCache = {
       key: [meta.w, meta.h, meta.ss, meta.alphaKey,
             CONFIG.glass.surface, CONFIG.glass.ior,
@@ -1912,7 +1965,7 @@ const Clock = (() => {
       if (canGlass) {
         fbEl.style.display = 'none';
         const uid = 'clockFilter';
-        const key = [dispUrl.length, meta.wCss, meta.hCss, maxAbsCss].join('|');
+        const key = [meta.alphaKey, dispUrl, meta.wCss, meta.hCss, maxAbsCss].join('|');
         const bf = `url(#${uid}) blur(1.5px) saturate(1.2) brightness(0.96)`;
         let f = document.getElementById(uid);
         /* A new <filter> node forces the whole clock to re-rasterise. When the
@@ -2027,7 +2080,7 @@ const Clock = (() => {
 
   function build(force) {
     const t = getTime();
-    const key = [t.lines.join('|'), state.font, CONFIG.clock.size, CONFIG.clock.sx, CONFIG.clock.sy, CONFIG.clock.tracking, state.color].join('#');
+    const key = [t.lines.join('|'), state.font, CONFIG.clock.size, CONFIG.clock.sx, CONFIG.clock.sy, CONFIG.clock.tracking, state.color, $('screen').clientWidth, $('screen').clientHeight].join('#');
     if (!force && key === lastKey) return;
     /* Anything that changes the drawing cross-fades: the clock never blinks
        into a new shape. Only a live resize goes straight through, so the
@@ -2042,6 +2095,7 @@ const Clock = (() => {
     meta.isTick = isTick && !hardCut;
     meta.hardCut = hardCut;
     const jobId = ++jobSeq;
+    pendingMeta.clear(); // obsolete jobs must not retain multi-megapixel masks
     pendingMeta.set(jobId, meta);
 
     const params = {
@@ -2349,12 +2403,7 @@ const Clock = (() => {
   /* If a saved size is too big for this screen, bring it back in bounds. */
   function clampInsideScreen() {
     boxCache = null;
-    const lim = limits();
-    CONFIG.clock.sx = clamp(CONFIG.clock.sx, lim.minSx, lim.maxSx);
-    CONFIG.clock.sy = clamp(CONFIG.clock.sy, lim.minSy, lim.maxSy);
-    state.clockSx = CONFIG.clock.sx;
-    state.clockSy = CONFIG.clock.sy;
-    save();
+    // Fit at raster time with one scale; rotation must not stretch or save sx/sy.
     Clock.schedule(true);
   }
 
@@ -3381,8 +3430,9 @@ $('f-subject').addEventListener('change', (e) => {
   });
 })();
 
-/* Boot */
-wall: {
+/* Boot: do not cache a fallback-font mask before bundled fonts are ready. */
+async function boot() {
+  await document.fonts.load(`400 128px "${state.font === 'SF' ? 'Inter' : state.font}"`);
   icons();
   shortcutsRender();
   Shortcuts.bindAll();
@@ -3405,7 +3455,7 @@ wall: {
   if (!canGlass) {
     const n = $('notice');
     n.style.display = 'block';
-    n.textContent = 'وضع خفيف لأداء أكثر سلاسة على جهازك';
+    n.textContent = 'هذا الإصدار من WebView لا يدعم انكسار الزجاج؛ حدّث Android System WebView للحصول على التأثير الكامل.';
     setTimeout(() => { n.style.display = 'none'; }, 7000);
   }
 
@@ -3414,9 +3464,13 @@ wall: {
 
   // keep a saved size legal on this screen, and after any rotation
   setTimeout(() => Clock.guard(), 900);
+  let viewportTimer = 0;
   window.addEventListener('resize', () => {
-    setTimeout(() => Clock.guard(), 260);
-    setTimeout(() => { Media.measureTitle(); Media.measureBar(); }, 320);
+    clearTimeout(viewportTimer);
+    viewportTimer = setTimeout(() => {
+      Clock.guard();
+      Media.measureTitle(); Media.measureBar();
+    }, 200);
   });
 
   // relock when the tab comes back
@@ -3425,6 +3479,7 @@ wall: {
   });
 }
 
+boot();
 </script>
 <script src="mobile.js"></script>
 </body>

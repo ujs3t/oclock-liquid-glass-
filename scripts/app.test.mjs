@@ -12,11 +12,13 @@ test('local fonts and mobile assets are packaged', () => {
   for (const name of ['mobile.js','mobile-init.js','mobile.css','fonts/inter-latin-400-normal.woff2','fonts/oswald-latin-400-normal.woff2','fonts/bebas-neue-latin-400-normal.woff2']) assert.ok(existsSync('web/'+name));
   assert.match(readFileSync('android/app/build.gradle','utf8'), /assets.srcDirs = \['\.\.\/\.\.\/web'\]/);
 });
-test('performance profiles cover low-end and reduced motion devices', () => {
+test('hardware and reduced motion never downgrade glass quality', () => {
   const code=readFileSync('web/mobile-init.js','utf8');
-  for (const [memory,cores,reduced,expected] of [[2,8,false,true],[8,2,false,true],[8,8,true,true],[8,8,false,false]]) {
-    let result;
-    const context={window:{}, navigator:{deviceMemory:memory,hardwareConcurrency:cores},matchMedia:()=>({matches:reduced}),document:{documentElement:{classList:{toggle:(_,value)=>result=value}}}};
-    vm.runInNewContext(code,context); assert.equal(result,expected);
+  for (const [memory,cores,reduced] of [[2,2,false],[2,2,true],[8,8,false]]) {
+    const context={window:{}, navigator:{deviceMemory:memory,hardwareConcurrency:cores},matchMedia:()=>({matches:reduced})};
+    vm.runInNewContext(code,context); assert.equal(context.window.mobileLite,false);
   }
+  assert.ok(!html.includes('window.mobileLite ? 1'));
+  assert.ok(!html.includes('!window.mobileLite &&'));
+  assert.ok(!readFileSync('web/mobile.css','utf8').includes('.lite '));
 });
