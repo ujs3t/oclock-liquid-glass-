@@ -1840,13 +1840,14 @@ const Clock = (() => {
     const rawW = Math.max(40, maxLineW * c.sx);
     // One uniform fit preserves the user's glyph proportions on every screen.
     // Reserve the music/shortcut area; never write this automatic fit to storage.
-    const layer = $('clock-layer').getBoundingClientRect();
+    const layerEl = $('clock-layer');
     const card = $('np');
     const bottom = $('bottom');
     const obstacle = state.npOn ? card : bottom;
-    const obstacleTop = obstacle.getBoundingClientRect().top;
+    const obstacleTop = obstacle.offsetTop || obstacle.getBoundingClientRect().top;
+    const layerTop = layerEl.offsetTop || layerEl.getBoundingClientRect().top;
     const availableH = Math.max(72, Math.min(host.clientHeight * .8,
-      obstacleTop - layer.top - 24));
+      obstacleTop - layerTop - 24));
     const rawH = Math.max(40, lines.length * size * .92 * c.sy);
     const fit = Math.min(1, (maxW - 36) / rawW, (availableH - 36) / rawH);
     size *= Math.max(.1, fit);
