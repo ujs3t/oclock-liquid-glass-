@@ -22,3 +22,31 @@ test('hardware and reduced motion never downgrade glass quality', () => {
   assert.ok(!html.includes('!window.mobileLite &&'));
   assert.ok(!readFileSync('web/mobile.css','utf8').includes('.lite '));
 });
+test('UI bugfixes and native Android upgrades stay intact', () => {
+  assert.ok(!html.includes('#clock-fb{display:none !important}'));
+  assert.ok(!html.includes('#flash button{pointer-events:auto}'));
+  assert.ok(html.includes('#flash.on button{pointer-events:auto}'));
+  assert.ok(html.includes('<div class="np-controls" dir="ltr">'));
+  assert.ok(html.includes('<div id="clock-frame-actions">'));
+  assert.ok(html.includes('--native-safe-t'));
+  assert.ok(!readFileSync('web/mobile.css','utf8').includes('button{touch-action:manipulation;min-height:44px}'));
+
+  const mobileJs = readFileSync('web/mobile.js','utf8');
+  assert.ok(mobileJs.includes('clock-frame'));
+  assert.ok(mobileJs.includes('isPermissionPending'));
+
+  const manifest = readFileSync('android/app/src/main/AndroidManifest.xml','utf8');
+  assert.ok(manifest.includes('configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"'));
+  assert.ok(manifest.includes('@mipmap/ic_launcher'));
+  assert.ok(existsSync('android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml'));
+  assert.ok(readFileSync('android/app/src/main/res/values-v28/styles.xml','utf8').includes('shortEdges'));
+
+  const mainJava = readFileSync('android/app/src/main/java/com/oclock/liquidglass/MainActivity.java','utf8');
+  assert.ok(mainJava.includes('setTorchMode'));
+  assert.ok(mainJava.includes('getDeviceStatus'));
+  assert.ok(mainJava.includes('OnBackInvokedCallback'));
+
+  const nativeJava = readFileSync('android/app/src/main/java/com/oclock/liquidglass/NativeGlass.java','utf8');
+  assert.ok(nativeJava.includes('setLatestVersion'));
+  assert.ok(nativeJava.includes('copyPixelsFromBuffer'));
+});

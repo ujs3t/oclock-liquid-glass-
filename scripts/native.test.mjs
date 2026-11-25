@@ -45,7 +45,12 @@ test('Android transport sends binary alpha and native results; failure disables 
   assert.equal(new Uint8Array(packet)[80],255);
   bridge.onmessage({data:JSON.stringify({jobId:7,maxAbsCss:20,dispUrl:'https://appassets.androidplatform.net/native-glass/1/disp.png',nativeMs:12})});
   assert.equal((await job).nativeMs,12); assert.equal(engine.stats.backend,'android-cpp');
+  const transient=engine.compute(8,{w:4,h:4,ss:2,alpha:new Uint8Array(16).fill(255)},
+    {ior:1.5,thickness:40,bezel:50,shadowThickness:2.5,shadowAngle:55,surface:'convexSquircle'});
+  bridge.onmessage({data:JSON.stringify({jobId:8,error:'invalid raster size',fatal:false})});
+  await assert.rejects(transient);
+  assert.equal(engine.available,true);
   bridge.postMessage=()=>{throw new Error('unsupported');};
-  await assert.rejects(engine.compute(8,{w:4,h:4,ss:2,alpha:new Uint8Array(16)},{}));
+  await assert.rejects(engine.compute(9,{w:4,h:4,ss:2,alpha:new Uint8Array(16)},{}));
   assert.equal(engine.available,false); assert.equal(engine.stats.backend,'web-worker');
 });

@@ -10,16 +10,16 @@
 <script src="native-glass.js"></script>
 <style>
 :root{
-  --safe-t: env(safe-area-inset-top, 0px);
-  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: max(env(safe-area-inset-top, 0px), var(--native-safe-t, 0px));
+  --safe-b: max(env(safe-area-inset-bottom, 0px), var(--native-safe-b, 0px));
   --clock-top: #ffffff;
   --clock-tint: linear-gradient(180deg, rgba(255,255,255,.30), rgba(255,255,255,.10));
   --ui: #ffffff;
   --ui-dim: rgba(255,255,255,.72);
   --glass-bg: rgba(255,255,255,.10);
   --ease: cubic-bezier(.32,.72,0,1);
-  --spring: cubic-bezier(.34,1.42,.44,1);
-  --bounce: cubic-bezier(.2,1.62,.32,1);
+  --spring: cubic-bezier(.22,1.18,.36,1);
+  --bounce: cubic-bezier(.2,1.52,.32,1);
   --soft: cubic-bezier(.22,.9,.24,1);
 }
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -91,8 +91,8 @@ body.has-subject #subject{display:block}
 }
 .st-left{display:flex;align-items:center;gap:6px;font-size:14px;font-weight:600}
 .st-right{display:flex;align-items:center;gap:6px}
-#battery{gap:3px}
-.st-icon{display:flex;align-items:center;opacity:.96}
+.st-icon{display:flex;align-items:center;opacity:.96;transition:opacity .3s var(--ease)}
+.st-icon.off{opacity:.28}
 .st-icon svg{display:block}
 #battery{
   display:flex;align-items:center;gap:4px;
@@ -114,28 +114,36 @@ body.has-subject #subject{display:block}
   transition:transform .6s var(--ease), background .4s;
 }
 .bat-fill.low{background:#ff453a}
+.bat-fill.chg{background:#30d158}
 
-/* Dynamic island */
+/* Dynamic island: sleek iOS live activity pill */
 #island{
-  position:absolute;top:calc(var(--safe-t) + 11px);left:50%;
-  transform:translateX(-50%);
-  width:118px;height:34px;border-radius:20px;
+  position:absolute;top:calc(var(--safe-t) + 9px);left:50%;
+  transform:translateX(-50%) scale(.76);
+  min-width:112px;max-width:72vw;height:32px;padding:0 14px;border-radius:20px;
   background:#000;
+  box-shadow:0 4px 18px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.08);
   z-index:7;
   pointer-events:none;
-  transition:width .5s var(--spring), height .5s var(--spring), border-radius .5s var(--spring);
-  display:flex;align-items:center;justify-content:center;
+  opacity:0;
+  transition:opacity .32s var(--ease), transform .5s var(--spring), min-width .5s var(--spring), height .5s var(--spring), border-radius .5s var(--spring);
+  display:flex;align-items:center;justify-content:center;gap:7px;
   overflow:hidden;
 }
-#island.wide{width:190px;height:38px;border-radius:21px}
+#island.active{opacity:1;transform:translateX(-50%) scale(1)}
+#island.wide{min-width:176px;height:36px;border-radius:21px;opacity:1;transform:translateX(-50%) scale(1)}
+#island-dot{
+  width:7px;height:7px;border-radius:50%;background:#30d158;flex:none;
+  opacity:0;transform:scale(.4);transition:opacity .25s,transform .35s var(--spring),background .25s;
+}
+#island.wide #island-dot{opacity:1;transform:scale(1)}
 #island-label{
-  font-size:11px;font-weight:600;color:#fff;
+  font-size:11.5px;font-weight:600;color:#fff;
   opacity:0;transform:translateY(2px);
-  transition:opacity .3s .1s var(--ease), transform .3s .1s var(--ease);
-  white-space:nowrap;
+  transition:opacity .28s .08s var(--ease), transform .32s .08s var(--spring);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
 #island.wide #island-label{opacity:1;transform:none}
-@media (min-width:520px){ #island{display:none} }
 
 /* ─────────────── Date + weather ─────────────── */
 #topline{
@@ -166,8 +174,8 @@ body.has-subject #subject{display:block}
   touch-action:none;
   will-change:transform;
   /* the white halo must never be clipped by the glass mask above it */
-  padding:26px 24px;
-  margin:-26px -24px;
+  padding:18px 20px;
+  margin:-18px -20px;
 }
 body.resizing #clock-wrap{pointer-events:none}
 #clock-glass{
@@ -192,6 +200,7 @@ body.resizing #clock-wrap{pointer-events:none}
   width:100%;height:100%;
   pointer-events:none;
   background:var(--clock-top,#fff);
+  transition:background .32s var(--ease);
   -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
   -webkit-mask-size:100% 100%;mask-size:100% 100%;
 }
@@ -283,9 +292,14 @@ body.resizing #clock-wrap{pointer-events:none}
   pointer-events:none;
 }
 #clock-frame.on #clock-frame-label{opacity:1}
+#clock-frame-actions{
+  position:absolute;left:50%;top:calc(100% + 44px);
+  transform:translateX(-50%);
+  display:none;align-items:center;justify-content:center;gap:10px;
+  white-space:nowrap;
+}
+#clock-frame.on #clock-frame-actions{display:flex}
 #clock-frame-reset,#clock-frame-undo{
-  position:absolute;top:calc(100% + 44px);
-  display:none;
   padding:8px 18px;border-radius:14px;
   background:rgba(24,24,28,.72);
   backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
@@ -293,10 +307,7 @@ body.resizing #clock-wrap{pointer-events:none}
   box-shadow:0 4px 16px rgba(0,0,0,.28);
   touch-action:none;
 }
-#clock-frame-reset{left:50%;transform:translateX(-148%)}
-#clock-frame-undo{left:50%;transform:translateX(48%);font-size:15px;padding:8px 14px}
-#clock-frame.on #clock-frame-reset,
-#clock-frame.on #clock-frame-undo{display:block}
+#clock-frame-undo{font-size:15px;padding:8px 14px}
 #clock-frame-reset:active,#clock-frame-undo:active{background:rgba(60,60,68,.9)}
 
 /* ─────────────── Now playing card ─────────────── */
@@ -320,10 +331,15 @@ body.resizing #clock-wrap{pointer-events:none}
   object-fit:cover;flex:none;
   background:linear-gradient(135deg,#ff5f6d,#ffc371);
   box-shadow:0 2px 10px rgba(0,0,0,.22);
-  transition:transform .5s var(--bounce);
+  transition:transform .52s var(--spring), opacity .35s var(--ease);
   will-change:transform;
 }
-.np-meta{flex:1;min-width:0;line-height:1.25}
+body.np-paused #np-art{transform:scale(.88);opacity:.9}
+.np-meta{flex:1;min-width:0;line-height:1.25;overflow:hidden}
+.np-meta.scrolling{
+  -webkit-mask-image:linear-gradient(90deg,transparent 0%,#000 6%,#000 92%,transparent 100%);
+  mask-image:linear-gradient(90deg,transparent 0%,#000 6%,#000 92%,transparent 100%);
+}
 #np-title{
   font-size:15.5px;font-weight:700;letter-spacing:-.015em;
   white-space:nowrap;overflow:hidden;
@@ -332,6 +348,7 @@ body.resizing #clock-wrap{pointer-events:none}
   mask-image:linear-gradient(90deg,#000 88%,transparent 100%);
 }
 #np-title.scroll{
+  width:max-content;overflow:visible;
   -webkit-mask-image:none;mask-image:none;
   animation:marquee 9s linear infinite;
 }
@@ -368,15 +385,17 @@ body.resizing #clock-wrap{pointer-events:none}
   transition:transform .09s linear;
   will-change:transform;
 }
-/* The thumb is moved with a transform (compositor only) — animating `left`
-   forced a layout + backdrop re-raster every frame and halved the fps.
-   The visual dot lives in ::after so the scale can spring independently. */
 .np-thumb{
   position:absolute;top:50%;left:0;
   width:11px;height:11px;
   margin:-5.5px 0 0 -5.5px;
+  transform:translate3d(calc(var(--p, 0) * var(--bar-w, 300px)), 0, 0);
+  transition:transform .09s linear;
+  will-change:transform;
   pointer-events:none;
 }
+.np-bar.scrub .np-fill,
+.np-bar.scrub .np-thumb{transition:none}
 .np-thumb::after{
   content:'';
   display:block;width:11px;height:11px;border-radius:50%;
@@ -517,6 +536,7 @@ body.resizing #clock-wrap{pointer-events:none}
   width:100%;height:6px;border-radius:3px;
   background:rgba(255,255,255,.22);
   outline:none;
+  direction:ltr;
 }
 .s-item input[type=range]::-webkit-slider-thumb{
   -webkit-appearance:none;appearance:none;
@@ -553,8 +573,8 @@ body.resizing #clock-wrap{pointer-events:none}
 /* the light is purely visual: it must never swallow a tap meant for the
    shortcut buttons sitting underneath it */
 #flash.on{opacity:.97;pointer-events:none}
-/* …but its own dismiss button must stay tappable */
-#flash button{pointer-events:auto}
+/* …and its own dismiss button is only tappable while the light is on */
+#flash.on button{pointer-events:auto}
 #flash button{
   position:absolute;left:50%;bottom:calc(var(--safe-b) + 60px);
   transform:translateX(-50%);
@@ -583,9 +603,10 @@ body.resizing #clock-wrap{pointer-events:none}
   border:4px solid rgba(255,255,255,.92);
   background:rgba(255,255,255,.22);
   z-index:12;
-  transition:transform .22s var(--spring), background .22s;
+  transition:transform .22s var(--spring), background .22s, opacity .25s;
 }
 #cam-shutter:active{transform:translateX(-50%) scale(.88);background:#fff}
+#cam-shutter:disabled{opacity:.35;pointer-events:none}
 
 /* ─────────────── Camera sheet ─────────────── */
 #cam{
@@ -600,9 +621,10 @@ body.resizing #clock-wrap{pointer-events:none}
 #cam .cam-msg{color:rgba(255,255,255,.7);font-size:14px;text-align:center;padding:0 30px;line-height:1.6}
 #cam-close{
   position:absolute;top:calc(var(--safe-t) + 14px);right:18px;
-  width:38px;height:38px;border-radius:50%;
+  width:42px;height:42px;border-radius:50%;
   background:rgba(255,255,255,.16);
   display:grid;place-items:center;
+  z-index:15;
   backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
 }
 
@@ -614,23 +636,30 @@ body.resizing #clock-wrap{pointer-events:none}
   overflow-x:hidden;overflow-y:auto;
   overscroll-behavior:contain;
   padding:8px 14px calc(var(--safe-b) + 10px);
-  background:rgba(18,18,22,.72);
+  background:rgba(18,18,22,.76);
   backdrop-filter:blur(28px) saturate(1.5);
   -webkit-backdrop-filter:blur(28px) saturate(1.5);
   border-radius:26px 26px 0 0;
-  transform:translateY(102%);
-  transition:transform .5s var(--spring);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.14);
+  transform:translateY(104%);
+  transition:transform .48s var(--spring);
   will-change:transform;
 }
 #edit.open{transform:none}
+.edit-grabber{
+  width:36px;height:4.5px;border-radius:3px;
+  background:rgba(255,255,255,.32);
+  margin:0 auto 8px;
+  cursor:grab;touch-action:none;
+}
 .edit-head{
   display:flex;align-items:center;justify-content:space-between;
   padding:0 4px 6px;
 }
-.edit-title{font-size:14px;font-weight:600;color:rgba(255,255,255,.62)}
+.edit-title{font-size:14px;font-weight:600;color:rgba(255,255,255,.72)}
 #edit-done{
   padding:7px 16px;border-radius:15px;
-  background:rgba(255,255,255,.16);
+  background:rgba(255,255,255,.18);
   font-size:13.5px;font-weight:600;
 }
 #edit-done:active{background:rgba(255,255,255,.26)}
@@ -748,27 +777,14 @@ body.resizing #clock-glass{
 }
 /* the shadow map is a per-pixel PNG; keep it readable but cheap */
 body.resizing #clock-shadow{opacity:.62}
-body.resizing /* INNER SHADOW: white map clipped to the glyph silhouette. It only lives
-   INSIDE the digits — no outer halo, no stroke. */
-#clock-inner{
-  position:absolute;left:0;top:0;
-  pointer-events:none;
-  background-repeat:no-repeat;
-  background-size:100% 100%;
-  background-position:0 0;
-  -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
-  -webkit-mask-size:100% 100%;mask-size:100% 100%;
-  transition:opacity .26s var(--ease);
-  z-index:1;
-}
-#clock-fb{display:none !important}
+body.resizing #clock-inner{opacity:.75}
 body.resizing #clock-glass,
 body.resizing #clock-shadow{will-change:transform}
 
-/* while customising, clear the deck so nothing is hidden behind the bar */
+/* while customising, clear the deck so the clock stays clearly visible above the bar */
 body.editing #np{opacity:0;transform:translateY(16px) scale(.98);pointer-events:none;transition:opacity .3s,transform .4s var(--ease)}
 body.editing #bottom{opacity:0;pointer-events:none;transition:opacity .3s}
-body.editing #clock-layer{transform:translateY(-18px) scale(.94);transition:transform .5s var(--spring)}
+body.editing #clock-layer{transform:translateY(-20px) scale(.86);transform-origin:top center;transition:transform .5s var(--spring)}
 body.editing #bar{opacity:.35}
 
 /* reduced motion */
@@ -789,7 +805,7 @@ body.editing #bar{opacity:.35}
   .st-left,.st-right{font-size:12px}
   #topline{top:calc(var(--safe-t) + 26px);font-size:12px;opacity:.92}
   #clock-layer{top:calc(var(--safe-t) + 42px);transform:scale(.58);transform-origin:top center}
-  body.editing #clock-layer{transform:translateY(-2px) scale(.5)}
+  body.editing #clock-layer{transform:translateY(-2px) scale(.5);transform-origin:top center}
   #np{
     bottom:calc(var(--safe-b) + 10px);left:12px;right:auto;
     width:min(54vw, 340px);padding:8px 12px 6px;border-radius:20px;
@@ -810,9 +826,10 @@ body.editing #bar{opacity:.35}
   #dnd{display:none}
   #bar{display:none}
   #clock-frame-label{display:none}
+  #clock-frame-actions{top:calc(100% + 10px)}
   #toast{bottom:calc(var(--safe-b) + 90px);left:auto;right:16px;transform:translate(0,10px)}
   #toast.show{transform:translate(0,0)}
-  #edit{max-height:92vh;overflow-x:hidden;overflow-y:auto;padding-top:4px}
+  #edit{max-height:min(56dvh,270px);overflow-x:hidden;overflow-y:auto;padding-top:6px}
   .s-row{gap:6px}
   .s-item{grid-template-columns:46px 1fr 26px;font-size:11.5px}
   .s-item input[type=range]::-webkit-slider-thumb{width:17px;height:17px}
@@ -821,7 +838,7 @@ body.editing #bar{opacity:.35}
   .edit-label{font-size:11px;margin:2px 0 2px}
   .f-chip{min-width:46px;height:38px;border-radius:10px}
   .f-chip b{font-size:16px}
-  .c-dot{width:22px;height:22px}
+  .c-dot{width:24px;height:24px}
   .w-chip{width:34px;height:42px}
   .t-btn{padding:4px 9px;border-radius:11px;font-size:11.5px}
 }
@@ -856,8 +873,10 @@ body.editing #bar{opacity:.35}
     <span class="h w" data-h="w"></span>
     <span class="h e" data-h="e"></span>
     <div id="clock-frame-label">اسحب المقبض · أو اضغط تصغير</div>
-    <button type="button" id="clock-frame-reset">تصغير</button>
-    <button type="button" id="clock-frame-undo" aria-label="رجوع للحجم السابق">↺</button>
+    <div id="clock-frame-actions">
+      <button type="button" id="clock-frame-reset">تصغير</button>
+      <button type="button" id="clock-frame-undo" aria-label="رجوع للحجم السابق">↺</button>
+    </div>
   </div>
 
   <div id="np">
@@ -875,7 +894,7 @@ body.editing #bar{opacity:.35}
       <div class="np-track"><div class="np-fill" id="np-fill"></div><div class="np-thumb" id="np-thumb"></div></div>
     </div>
     <div class="np-times" dir="ltr"><span id="np-elapsed">0:00</span><span id="np-remain">-0:00</span></div>
-    <div class="np-controls">
+    <div class="np-controls" dir="ltr">
       <button class="np-btn small" id="np-star" aria-label="مفضلة">
         <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.6l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.5 6.1 20.6l1.2-6.5L2.5 9.5l6.6-.9z"/></svg>
       </button>
@@ -934,10 +953,11 @@ body.editing #bar{opacity:.35}
       <div id="battery"><span id="bat-pct">49</span><span class="bat-shell"><span class="bat-fill" id="bat-fill"></span></span></div>
     </div>
   </div>
-  <div id="island"><span id="island-label"></span></div>
+  <div id="island"><span id="island-dot" aria-hidden="true"></span><span id="island-label"></span></div>
 
-  <!-- Customize: one simple bar, no sliders -->
+  <!-- Customize sheet -->
   <div id="edit" role="dialog" aria-label="تخصيص">
+    <div class="edit-grabber" aria-hidden="true"></div>
     <div class="edit-head">
       <span class="edit-title">تخصيص شاشة القفل</span>
       <button id="edit-done">تم</button>
@@ -979,6 +999,8 @@ body.editing #bar{opacity:.35}
 
 <input type="file" id="f-wall" accept="image/*" hidden>
 <input type="file" id="f-subject" accept="image/png,image/webp" hidden>
+<input type="file" id="f-audio" accept="audio/*" hidden>
+<input type="file" id="f-art" accept="image/*" hidden>
 
 <script>
 'use strict';
@@ -1066,11 +1088,16 @@ if (typeof state.clockSx === 'number')   CONFIG.clock.sx = state.clockSx;
 if (typeof state.clockSy === 'number')   CONFIG.clock.sy = state.clockSy;
 
 let saveTimer = 0;
-function save() {
+function save(immediate) {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {}
-  }, 180);
+  const write = () => {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+    catch (e) {
+      if (state.customWall || state.subject) toast('حجم الصورة كبير للحفظ التلقائي');
+    }
+  };
+  if (immediate) { write(); return; }
+  saveTimer = setTimeout(write, 180);
 }
 
 const $ = (id) => document.getElementById(id);
@@ -1206,11 +1233,12 @@ function applyLiquidGlass(el, opts){
   let rasterKey = '';
 
   function rebuild(){
-    const wCss=Math.max(2, el.offsetWidth), hCss=Math.max(2, el.offsetHeight);
+    if (!el.isConnected || getComputedStyle(el).display === 'none') return;
+    const wCss=el.offsetWidth, hCss=el.offsetHeight;
     if (wCss < 2 || hCss < 2) return;
     const radiusCss = o.radius!=null ? o.radius : Math.min(wCss,hCss)/2;
     const dpr = window.devicePixelRatio || 1;
-    const ss = o.supersample || Math.min(3, Math.max(2, Math.round(dpr*2)));
+    const ss = o.supersample || Math.min(2, Math.max(1.5, dpr));
 
     const key = [wCss,hCss,radiusCss,ss,o.surface,o.ior,o.thickness,o.bezel,o.shadow.thickness,o.shadow.angle,o.shadow.intensity].join('|');
     if (key === rasterKey) return;
@@ -1359,7 +1387,7 @@ function sampleProfile(r,distPx){const c=clamp01(distPx/r.bezelWidth)*r.bezelWid
 function edt1d(f,d,v,z,n){let k=0;v[0]=0;z[0]=-1e20;z[1]=1e20;for(let q=1;q<n;q++){let s=((f[q]+q*q)-(f[v[k]]+v[k]*v[k]))/(2*q-2*v[k]);while(s<=z[k]){k--;s=((f[q]+q*q)-(f[v[k]]+v[k]*v[k]))/(2*q-2*v[k]);}k++;v[k]=q;z[k]=s;z[k+1]=1e20;}k=0;for(let q=0;q<n;q++){while(z[k+1]<q)k++;const dx=q-v[k];d[q]=dx*dx+f[v[k]];}}
 function edt2d(binary,w,h,targetVal){const INF=1e12;const grid=new Float32Array(w*h);for(let i=0;i<w*h;i++)grid[i]=(binary[i]===targetVal)?0:INF;const maxDim=Math.max(w,h);const f=new Float32Array(maxDim),d=new Float32Array(maxDim),v=new Int32Array(maxDim),z=new Float32Array(maxDim+1);for(let y=0;y<h;y++){const off=y*w;for(let x=0;x<w;x++)f[x]=grid[off+x];edt1d(f,d,v,z,w);for(let x=0;x<w;x++)grid[off+x]=d[x];}for(let x=0;x<w;x++){for(let y=0;y<h;y++)f[y]=grid[y*w+x];edt1d(f,d,v,z,h);for(let y=0;y<h;y++)grid[y*w+x]=Math.sqrt(d[y]);}return grid;}
 
-function* computeGlassJob(alpha, w, h, ss, params) {
+function* computeGlassJob(alpha, w, h, ss, params, includeShadow = true) {
   const nPx = w * h;
   const binary = new Uint8Array(nPx);
   for (let i = 0; i < nPx; i++) binary[i] = alpha[i] >= 128 ? 1 : 0;
@@ -1389,9 +1417,11 @@ function* computeGlassJob(alpha, w, h, ss, params) {
   const surfaceFn = SURFACES[params.surface] || SURFACES.convexSquircle;
   const radial = buildProfile({ bezelWidth: bezelRaster, thickness: thickRaster, ior: params.ior, surfaceFn });
   const dispData = new Uint8ClampedArray(nPx * 4);
-  const shadData = new Uint8ClampedArray(nPx * 4);
+  const shadData = includeShadow ? new Uint8ClampedArray(nPx * 4) : null;
   const shadThick = Math.max(1, params.shadowThickness * ss);
   const feather = Math.max(0.9, shadThick * 0.15);
+  const outsideCutoff = includeShadow ? feather : 0;
+  const flatCenter = !includeShadow && radial.profile[radial.samples - 1] === 0;
   const radAngle = params.shadowAngle * Math.PI / 180;
   const ax = Math.cos(radAngle), ay = Math.sin(radAngle);
   for (let y = 0; y < h; y++) {
@@ -1399,7 +1429,11 @@ function* computeGlassJob(alpha, w, h, ss, params) {
     for (let x = 0; x < w; x++) {
       const xm = x > 0 ? x - 1 : 0, xp = x < w - 1 ? x + 1 : w - 1;
       const idx = y*w+x, p = idx*4, dd = sdf[idx];
-      if (dd > feather) {
+      if (dd > outsideCutoff) {
+        dispData[p]=dispData[p+1]=dispData[p+2]=128; dispData[p+3]=255;
+        continue;
+      }
+      if (flatCenter && dd <= -radial.bezelWidth) {
         dispData[p]=dispData[p+1]=dispData[p+2]=128; dispData[p+3]=255;
         continue;
       }
@@ -1415,28 +1449,29 @@ function* computeGlassJob(alpha, w, h, ss, params) {
         dispData[p+1] = clamp255(128 - ny*(disp/radial.maxAbs)*127);
         dispData[p+2] = 128; dispData[p+3] = 255;
       }
-      if (dd > feather || -dd > shadThick + feather) {
-        shadData[p+3] = 0;
-      } else {
-        const edge = -dd;
-        const band = clamp01((shadThick - edge) / shadThick);
-        const sharp = Math.pow(band, 0.6);
-        const edgeAA = clamp01((feather - dd) / (2 * feather));
-        const k = Math.abs(nx*ax + ny*ay);
-        shadData[p]=shadData[p+1]=shadData[p+2]=255;
-        shadData[p+3]=clamp255(sharp*edgeAA*Math.pow(k,1.8)*255);
+      if (shadData) {
+        if (dd > feather || -dd > shadThick + feather) {
+          shadData[p+3] = 0;
+        } else {
+          const edge = -dd;
+          const band = clamp01((shadThick - edge) / shadThick);
+          const sharp = Math.pow(band, 0.6);
+          const edgeAA = clamp01((feather - dd) / (2 * feather));
+          const k = Math.abs(nx*ax + ny*ay);
+          shadData[p]=shadData[p+1]=shadData[p+2]=255;
+          shadData[p+3]=clamp255(sharp*edgeAA*Math.pow(k,1.8)*255);
+        }
       }
     }
     if (y % 16 === 15) yield;
   }
-  return { maxAbsCss: radial.maxAbs/ss, dispBuf: dispData.buffer, shadBuf: shadData.buffer };
+  return { maxAbsCss: radial.maxAbs/ss, dispBuf: dispData.buffer, shadBuf: shadData ? shadData.buffer : null };
 }
 
-/* inner-shadow map for the clock digits. Byte-for-byte the same painter the
-   main thread uses; it just runs off-thread and encodes to a PNG blob there,
-   so dragging the sliders never blocks a frame. */
+/* inner-shadow map for the clock digits. Runs off-thread and encodes to a PNG
+   blob there, so dragging the sliders never blocks a frame. */
 function paintInnerShadow(alpha, w, h, cfg) {
-  const cover = 2;
+  const cover = Math.max(1, Math.min(2, 1600 / Math.max(w, h)));
   const iw = Math.max(4, Math.round(w * cover));
   const ih = Math.max(4, Math.round(h * cover));
   const thickDev = Math.max(0.75, cfg.thickness * cfg.ss * cover * 0.5);
@@ -1504,21 +1539,17 @@ self.onmessage = function (e) {
   }
   const { jobId, alphaBuf, w, h, ss, params } = e.data;
   const alpha = new Uint8Array(alphaBuf);
-  const it = computeGlassJob(alpha, w, h, ss, params);
+  const it = computeGlassJob(alpha, w, h, ss, params, false);
   let r = it.next();
   while (!r.done) r = it.next();
   const res = r.value;
-  // PNG compression belongs on the worker too, not on the animation thread.
   const sendBuffers = () => self.postMessage({ jobId, w, h, maxAbsCss: res.maxAbsCss,
-    dispBuf: res.dispBuf, shadBuf: res.shadBuf }, [res.dispBuf, res.shadBuf]);
+    dispBuf: res.dispBuf }, [res.dispBuf]);
   if (typeof OffscreenCanvas !== 'undefined' && OffscreenCanvas.prototype.convertToBlob) {
-    const encode = (buffer) => {
-      const canvas = new OffscreenCanvas(w, h);
-      canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(buffer), w, h), 0, 0);
-      return canvas.convertToBlob({ type: 'image/png' });
-    };
-    Promise.all([encode(res.dispBuf), encode(res.shadBuf)]).then(([dispBlob, shadBlob]) => {
-      self.postMessage({ jobId, w, h, maxAbsCss: res.maxAbsCss, dispBlob, shadBlob });
+    const canvas = new OffscreenCanvas(w, h);
+    canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(res.dispBuf), w, h), 0, 0);
+    canvas.convertToBlob({ type: 'image/png' }).then((dispBlob) => {
+      self.postMessage({ jobId, w, h, maxAbsCss: res.maxAbsCss, dispBlob });
     }).catch(sendBuffers);
   } else sendBuffers();
 };
@@ -1539,9 +1570,39 @@ const Clock = (() => {
   let jobSeq = 0;
   let pendingMeta = new Map();
   let lastKey = '';
+  let lastShapeKey = '';
   let lastMinute = '';
   let rafPending = 0;
   let pos = { x: 0, y: 0 };
+  let activeDispUrl = '';
+  let activeInnerUrl = '';
+
+  const MAX_CACHE = 6;
+  const innerCache = new Map();
+  const maskCache = new Map();
+  const glassCache = new Map();
+
+  function lruGet(map, key) {
+    if (!map.has(key)) return null;
+    const val = map.get(key);
+    map.delete(key);
+    map.set(key, val);
+    return val;
+  }
+  function lruSet(map, key, val, onEvict) {
+    if (map.has(key)) map.delete(key);
+    map.set(key, val);
+    while (map.size > MAX_CACHE) {
+      const oldestKey = map.keys().next().value;
+      const oldestVal = map.get(oldestKey);
+      map.delete(oldestKey);
+      if (onEvict) onEvict(oldestVal);
+    }
+  }
+  function scheduleRevoke(url, isActiveFn) {
+    if (!url || !url.startsWith('blob:')) return;
+    setTimeout(() => { if (!isActiveFn(url)) URL.revokeObjectURL(url); }, 2500);
+  }
 
   function ensureWorker() {
     if (worker || typeof Worker === 'undefined') return worker;
@@ -1586,33 +1647,8 @@ const Clock = (() => {
     return { lines: [`${hh}:${mm}`], minuteKey: `${hh}:${mm}` };
   }
 
-  /* ── INNER SHADOW, fast path ──────────────────────────────────────────────
-     The old version ran a per-pixel loop over ~2M pixels on every rebuild,
-     which is what made the sliders stutter. This one is pure canvas work
-     (a few blur passes), and the finished map is cached by its parameters —
-     moving the opacity slider now costs nothing at all. */
-  let innerCache = { key: '', url: '' };
-  let maskCache = { key: '', meta: null };
-  /* Raster cache for the refraction/displacement image. Its inputs are the
-     glyph alpha buffer + glass params only — so a re-tint or a re-layout can
-     reuse the identical texture instead of running the whole SDF pass again. */
-  let glassCache = { key: '', disp: '', shad: '', maxAbs: 0 };
-
-  /* Inner-shadow map — the exact painter that was already approved:
-     distance field → per-pixel edge normal → directional weight by the chosen
-     angle → tint. Only the caching is new, so a repeat never re-runs the loop. */
-  function innerShadowUrl(maskCanvas, w, h, ss, maskKey) {
-    const cfg = CONFIG.glass.inner;
-    if (!(cfg.thickness > 0)) return '';
-    const key = [w, h, ss, maskKey || '', cfg.thickness, cfg.angle, cfg.color].join('|');
-    if (innerCache.key === key) return innerCache.url;
-    const url = paintInnerCpu(maskCanvas, w, h, ss, cfg);
-    innerCache = { key, url };
-    return url;
-  }
-
   function paintInnerCpu(maskCanvas, w, h, ss, cfg) {
-    const cover = 2;
+    const cover = Math.max(1, Math.min(2, 1600 / Math.max(w, h)));
     const iw = Math.max(4, Math.round(w * cover));
     const ih = Math.max(4, Math.round(h * cover));
     const thickDev = Math.max(0.75, cfg.thickness * ss * cover * 0.5);
@@ -1673,7 +1709,7 @@ const Clock = (() => {
   let innerJob = 0;
   let swapGuard = 0;
 
-  function paintInnerNow(alpha, w, h, ss) {
+  function paintInnerNow(alpha, w, h, ss, maskKeyOverride) {
     const cv = document.createElement('canvas');
     cv.width = w; cv.height = h;
     const ctx = cv.getContext('2d');
@@ -1684,10 +1720,10 @@ const Clock = (() => {
     }
     ctx.putImageData(img, 0, 0);
     const cfg = CONFIG.glass.inner;
-    const mk = maskCache.key;
+    const mk = maskKeyOverride || lastMaskKey;
     const url = paintInnerCpu(cv, w, h, ss, cfg);
     const key = [w, h, ss, mk, cfg.thickness, cfg.angle, cfg.color].join('|');
-    innerCache = { key, url };
+    lruSet(innerCache, key, url, (old) => scheduleRevoke(old, (u) => u === activeInnerUrl));
     setInnerImage(url, key);
   }
 
@@ -1695,6 +1731,7 @@ const Clock = (() => {
   let innerWaiters = [];
 
   function setInnerImage(url, key) {
+    activeInnerUrl = url || '';
     innerEl.style.backgroundImage = url ? `url("${url}")` : 'none';
     innerShownKey = key || '';
     if (!key) return;
@@ -1714,11 +1751,9 @@ const Clock = (() => {
 
   function onInnerResult(d) {
     if (d.jobId !== innerJob) return;                 // a newer slider position won
-    const previous = innerCache.url;
     const url = URL.createObjectURL(d.blob);
-    innerCache = { key: d.key, url };
+    lruSet(innerCache, d.key, url, (old) => scheduleRevoke(old, (u) => u === activeInnerUrl));
     setInnerImage(url, d.key);
-    if (previous && previous.startsWith('blob:') && previous !== url) URL.revokeObjectURL(previous);
   }
 
   /* Called live by the sliders: no refraction rebuild, no bitmap rebuild. */
@@ -1728,19 +1763,22 @@ const Clock = (() => {
     const w = lastMaskCanvas.width, h = lastMaskCanvas.height;
     innerEl.style.opacity = String(Math.max(0, Math.min(1, cfg.intensity)));
     if (!(cfg.thickness > 0) || !(cfg.intensity > 0)) { setInnerImage(''); return; }
-    const key = [w, h, lastSS, maskCache.key, cfg.thickness, cfg.angle, cfg.color].join('|');
+    const key = [w, h, lastSS, lastMaskKey, cfg.thickness, cfg.angle, cfg.color].join('|');
     if (key === innerShownKey) return;                     // already on screen
+    const cached = lruGet(innerCache, key);
+    if (cached) { setInnerImage(cached, key); return; }
     postInner(key, w, h);
   }
 
   /* Paint (or repaint) the map for a specific key — used by the fade path so a
      new font can never fade in wearing the previous glyphs' rim. */
-  function refreshInnerFor(key, alpha, w, h, ss) {
+  function refreshInnerFor(key, alpha, w, h, ss, maskKey) {
     if (!alpha || !key) return;
     if (key === innerShownKey) return;
-    if (innerCache.key === key && innerCache.url) { setInnerImage(innerCache.url, key); return; }
+    const cached = lruGet(innerCache, key);
+    if (cached) { setInnerImage(cached, key); return; }
     if (ensureInnerWorker()) postInnerFor(key, alpha, w, h, ss);
-    else paintInnerNow(alpha, w, h, ss);          // no Worker at all: do it now
+    else paintInnerNow(alpha, w, h, ss, maskKey);          // no Worker at all: do it now
   }
 
   let innerPosted = '';
@@ -1830,9 +1868,10 @@ const Clock = (() => {
     const h = Math.max(4, Math.round(hCss * ss));
 
     const maskKey = [size.toFixed(2), w, h, state.font, c.sx, c.sy, c.tracking, lines.join('|')].join('|');
-    if (maskCache.key === maskKey) {
+    const cachedMask = lruGet(maskCache, maskKey);
+    if (cachedMask) {
       const innerKey = [w,h,ss,maskKey,CONFIG.glass.inner.thickness,CONFIG.glass.inner.angle,CONFIG.glass.inner.color].join('|');
-      return Object.assign({}, maskCache.meta, { innerKey, innerUrl: innerCache.key === innerKey ? innerCache.url : '' });
+      return Object.assign({}, cachedMask, { innerKey, innerUrl: lruGet(innerCache, innerKey) || '' });
     }
 
 
@@ -1846,22 +1885,18 @@ const Clock = (() => {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const cx = (wCss / 2) / c.sx;
-    lines.forEach((ln, i) => ctx.fillText(ln, cx, ((hCss / 2) / c.sy)));
+    lines.forEach((ln) => ctx.fillText(ln, cx, ((hCss / 2) / c.sy)));
 
     const img = ctx.getImageData(0, 0, w, h);
     const alpha = new Uint8Array(w * h);
-    for (let i = 0; i < w * h; i++) {
-      alpha[i] = img.data[i * 4 + 3];
-      img.data[i * 4] = 255; img.data[i * 4 + 1] = 255; img.data[i * 4 + 2] = 255;
-    }
-    ctx.putImageData(img, 0, 0);
+    for (let i = 0; i < w * h; i++) alpha[i] = img.data[i * 4 + 3];
 
     /* The inner map is a per-pixel pass + a PNG encode. It must never run
        inside a click handler, so it is produced asynchronously (worker) and
        the clock only fades back in once it is ready. */
     const innerKey = [w, h, ss, maskKey, CONFIG.glass.inner.thickness,
                       CONFIG.glass.inner.angle, CONFIG.glass.inner.color].join('|');
-    const innerUrl = innerCache.key === innerKey ? innerCache.url : '';
+    const innerUrl = lruGet(innerCache, innerKey) || '';
 
     const built = {
       alpha, w, h, ss, wCss, hCss,
@@ -1875,7 +1910,7 @@ const Clock = (() => {
       lineH,
       pad: pad * 2
     };
-    maskCache = { key: maskKey, meta: built };
+    lruSet(maskCache, maskKey, built);
     return built;
   }
 
@@ -1887,34 +1922,30 @@ const Clock = (() => {
     return cv.toDataURL('image/png');
   }
 
-  let glassObjects = [];
   function onWorkerResult(e) {
     if (e.data.kind === 'inner') { onInnerResult(e.data); return; }
-    const { jobId, w, h, maxAbsCss, dispBuf, shadBuf, dispBlob, shadBlob, dispUrl, shadUrl } = e.data;
+    const { jobId, w, h, maxAbsCss, dispBuf, dispBlob, dispUrl } = e.data;
     const meta = pendingMeta.get(jobId);
     pendingMeta.delete(jobId);
     if (!meta || jobId !== jobSeq) return;
-    const previousObjects = glassObjects;
-    glassObjects = dispBlob ? [URL.createObjectURL(dispBlob), URL.createObjectURL(shadBlob)] : [];
-    const disp = dispUrl || glassObjects[0] || bufToUrl(dispBuf, w, h);
-    const shad = shadUrl || glassObjects[1] || (shadBuf ? bufToUrl(shadBuf, w, h) : '');
-    // Give a pending cross-fade time to release the old filter textures.
-    setTimeout(() => previousObjects.forEach(url => URL.revokeObjectURL(url)), 2000);
-    glassCache = {
-      key: [meta.w, meta.h, meta.ss, meta.alphaKey,
-            CONFIG.glass.surface, CONFIG.glass.ior,
-            CONFIG.glass.thickness, CONFIG.glass.bezel].join('|'),
-      disp, shad, maxAbs: maxAbsCss
-    };
-    apply(meta, disp, shad, maxAbsCss);
+    const disp = dispUrl || (dispBlob ? URL.createObjectURL(dispBlob) : bufToUrl(dispBuf, w, h));
+    const cacheKey = [meta.w, meta.h, meta.ss, meta.alphaKey,
+      CONFIG.glass.surface, CONFIG.glass.ior,
+      CONFIG.glass.thickness, CONFIG.glass.bezel].join('|');
+    lruSet(glassCache, cacheKey, { disp, maxAbs: maxAbsCss }, (old) => {
+      if (old) scheduleRevoke(old.disp, (u) => u === activeDispUrl);
+    });
+    apply(meta, disp, '', maxAbsCss);
   }
 
   let lastMetrics = null;
   let lastMaskCanvas = null;
   let lastMaskAlpha = null;
+  let lastMaskKey = '';
   let lastSS = 2;
 
-  function apply(meta, dispUrl, shadUrl, maxAbsCss) {
+  function apply(meta, dispUrl, _shadUrl, maxAbsCss) {
+    activeDispUrl = dispUrl || '';
     lastMetrics = {
       textW: meta.textW, textH: meta.textH, pad: meta.pad,
       baseW: meta.textW / Math.max(0.05, CONFIG.clock.sx),
@@ -1926,40 +1957,46 @@ const Clock = (() => {
       if (el.style.width !== w + 'px') el.style.width = w + 'px';
       if (el.style.height !== h + 'px') el.style.height = h + 'px';
     };
-    /* mask strings are long data URLs — only write them when they differ */
-    const setMask = (el, url) => {
-      if (el.style.maskImage === url) return;
+    /* mask strings are long data URLs — compare short alphaKey instead of string equality */
+    const setMask = (el, url, key) => {
+      if (el.dataset.maskKey === key) return;
+      el.dataset.maskKey = key;
       el.style.maskImage = url;
       el.style.webkitMaskImage = url;
     };
+    const finishResizeCommit = () => {
+      if (document.body.classList.contains('resizing') && !rs && !sizeControl.dataset.dragging) {
+        preview = { x: 1, y: 1 };
+        applyPosition();
+        document.body.classList.remove('resizing');
+        clearTimeout(resizeCommitGuard);
+        if (frame.classList.contains('on')) layoutFrame();
+      }
+    };
     const paint = () => {
       const mask = `url(${meta.maskUrl})`;
-      const sameMask = glassEl.style.maskImage === mask;
       setBox(glassEl, meta.wCss, meta.hCss);
-      setMask(glassEl, mask);
+      setMask(glassEl, mask, meta.alphaKey);
       setBox(shadowEl, meta.wCss, meta.hCss);
       /* ink follows the adaptive colour (dark on light walls, white on dark),
          so the white halo always reads as a shadow behind the digits */
       shadowEl.style.background = state.color === 'auto' ? '' : state.color;
-      setMask(shadowEl, mask);
-      /* INNER shadow — same paintShadow maths as the cards, but rendered on a
-         2× canvas so the edge stays crisp (no banding/pixelation), tinted with
-         the colour the user picked and rotated by the chosen angle. */
+      setMask(shadowEl, mask, meta.alphaKey);
+      /* INNER shadow — tinted with the colour the user picked and rotated by the chosen angle. */
       const si = Math.max(0, Math.min(1, CONFIG.glass.inner.intensity));
       setBox(innerEl, meta.wCss, meta.hCss);
-      innerEl.style.left = '0px';   /* #clock-glow is already aligned with the glass */
+      innerEl.style.left = '0px';
       innerEl.style.top = '0px';
-      /* The inner rim belongs to a specific glyph raster: only swap it when the
-         key changes, and never leave the previous glyphs' rim on screen. */
       if (innerShownKey !== meta.innerKey) {
-        if (innerCache.key === meta.innerKey && innerCache.url) {
-          setInnerImage(innerCache.url, meta.innerKey);
+        const cachedInner = lruGet(innerCache, meta.innerKey);
+        if (cachedInner) {
+          setInnerImage(cachedInner, meta.innerKey);
         } else {
           setInnerImage('');
-          refreshInnerFor(meta.innerKey, meta.alpha, meta.w, meta.h, meta.ss);
+          refreshInnerFor(meta.innerKey, meta.alpha, meta.w, meta.h, meta.ss, meta.alphaKey);
         }
       }
-      setMask(innerEl, mask);
+      setMask(innerEl, mask, meta.alphaKey);
       innerEl.style.opacity = String(si);
       setBox(glowEl, meta.wCss, meta.hCss);
       glowEl.style.left = glassEl.offsetLeft + 'px';
@@ -1972,7 +2009,7 @@ const Clock = (() => {
         fbEl.style.display = 'none';
         const uid = 'clockFilter';
         const key = [meta.alphaKey, dispUrl, meta.wCss, meta.hCss, maxAbsCss].join('|');
-        const bf = `url(#${uid}) blur(1.5px) saturate(1.2) brightness(0.96)`;
+        const bf = `url(#${uid})` + (supportsChainedFilter ? ' blur(1.5px) saturate(1.2) brightness(0.96)' : '');
         let f = document.getElementById(uid);
         /* A new <filter> node forces the whole clock to re-rasterise. When the
            displacement map has not changed we keep the node and touch nothing —
@@ -2004,10 +2041,10 @@ const Clock = (() => {
           dm.setAttribute('yChannelSelector', 'G');
           f.appendChild(dm);
           defsRoot().appendChild(f);
-          if (glassEl.style.backdropFilter !== bf) {
-            glassEl.style.backdropFilter = bf;
-            glassEl.style.webkitBackdropFilter = bf;
-          }
+        }
+        if (glassEl.style.backdropFilter !== bf) {
+          glassEl.style.backdropFilter = bf;
+          glassEl.style.webkitBackdropFilter = bf;
         }
       } else {
         glassEl.style.backdropFilter = 'blur(16px) saturate(1.4) brightness(1.06)';
@@ -2020,7 +2057,9 @@ const Clock = (() => {
         fbEl.style.transform = `scale(${CONFIG.clock.sx}, ${CONFIG.clock.sy})`;
         fbEl.style.letterSpacing = CONFIG.clock.tracking + 'px';
       }
+      finishResizeCommit();
       applyPosition();
+      lastCommittedSize = CONFIG.clock.size;
       glowEl.dataset.painted = String(meta.minuteKey || '');
     };
 
@@ -2088,16 +2127,15 @@ const Clock = (() => {
     const t = getTime();
     const key = [t.lines.join('|'), state.font, CONFIG.clock.size, CONFIG.clock.sx, CONFIG.clock.sy, CONFIG.clock.tracking, state.color, $('screen').clientWidth, $('screen').clientHeight].join('#');
     if (!force && key === lastKey) return;
-    /* Anything that changes the drawing cross-fades: the clock never blinks
-       into a new shape. Only a live resize goes straight through, so the
-       handles can stay glued to the digits while dragging. */
-    const isTick = lastMinute !== '' && (lastMinute !== t.minuteKey || lastKey !== key);
+    const meta = renderBitmap(t.lines);
+    const shapeChanged = lastShapeKey !== '' && lastShapeKey !== meta.alphaKey;
+    const isTick = lastMinute !== '' && (lastMinute !== t.minuteKey || shapeChanged);
     const hardCut = document.body.classList.contains('resizing');
     lastKey = key;
+    lastShapeKey = meta.alphaKey;
     lastMinute = t.minuteKey;
 
-    const meta = renderBitmap(t.lines);
-    lastMaskCanvas = meta.maskCanvas; lastMaskAlpha = meta.alpha; lastSS = meta.ss;
+    lastMaskCanvas = meta.maskCanvas; lastMaskAlpha = meta.alpha; lastMaskKey = meta.alphaKey; lastSS = meta.ss;
     meta.isTick = isTick && !hardCut;
     meta.hardCut = hardCut;
     const jobId = ++jobSeq;
@@ -2116,16 +2154,17 @@ const Clock = (() => {
     /* ── glass raster cache ─────────────────────────────────────────── */
     const gk = [meta.w, meta.h, meta.ss, meta.alphaKey,
                 params.surface, params.ior, params.thickness, params.bezel].join('|');
-    if (glassCache.key === gk && glassCache.disp) {
+    const cachedGlass = lruGet(glassCache, gk);
+    if (cachedGlass && cachedGlass.disp) {
       // reuse: no worker round-trip, no SDF, no EDT, no PNG encode
       pendingMeta.delete(jobId);
-      apply(meta, glassCache.disp, glassCache.shad, glassCache.maxAbs);
+      apply(meta, cachedGlass.disp, '', cachedGlass.maxAbs);
       return;
     }
 
     /* start the rim for these new glyphs immediately: it is what the
        cross-fade waits for, and the worker needs a head start */
-    if (CONFIG.glass.inner.thickness > 0 && innerCache.key !== meta.innerKey) {
+    if (CONFIG.glass.inner.thickness > 0 && !lruGet(innerCache, meta.innerKey)) {
       postInnerFor(meta.innerKey, meta.alpha, meta.w, meta.h, meta.ss);
     }
 
@@ -2158,7 +2197,7 @@ const Clock = (() => {
     return mainCore;
   }
   function runOnMain(jobId, meta, params) {
-    const it = getMainCore()(meta.alpha, meta.w, meta.h, meta.ss, params);
+    const it = getMainCore()(meta.alpha, meta.w, meta.h, meta.ss, params, false);
     const pump = (dl) => {
       if (jobId !== jobSeq) return;
       let r;
@@ -2166,7 +2205,7 @@ const Clock = (() => {
         r = it.next();
         if (r.done) {
           const res = r.value;
-          apply(meta, bufToUrl(res.dispBuf, meta.w, meta.h), bufToUrl(res.shadBuf, meta.w, meta.h), res.maxAbsCss);
+          apply(meta, bufToUrl(res.dispBuf, meta.w, meta.h), '', res.maxAbsCss);
           return;
         }
       } while (dl && dl.timeRemaining() > 4);
@@ -2191,6 +2230,8 @@ const Clock = (() => {
   }
 
   let preview = { x: 1, y: 1 };
+  let lastCommittedSize = CONFIG.clock.size;
+  let resizeCommitGuard = 0;
 
   function applyPosition() {
     const sc = preview.x === 1 && preview.y === 1 ? '' : ` scale(${preview.x}, ${preview.y})`;
@@ -2199,9 +2240,6 @@ const Clock = (() => {
       frameDirty = true;
       requestAnimationFrame(syncFrameBox);
     }
-    // keep the Now Playing card clear of a dragged clock
-    const r = wrap.getBoundingClientRect();
-    document.documentElement.style.setProperty('--clock-h', Math.round(r.height) + 'px');
   }
 
   /* The clock is PINNED: dragging never moves it. A long press is the only
@@ -2242,12 +2280,16 @@ const Clock = (() => {
   /* ── Long-press resize: drag any handle to stretch/shrink the digits.
      Only the pixel size changes — the chosen font, weight and stretch stay. ── */
   const frame = $('clock-frame');
-  const sizeKey = 'clockSize';
   let rs = null;
 
+  function layerScale() {
+    const layer = $('clock-layer');
+    const w = layer.offsetWidth;
+    const bw = layer.getBoundingClientRect().width;
+    return w > 0 && bw > 0 ? bw / w : 1;
+  }
+
   function layoutFrame() {
-    // use the element's own box so a CSS preview scale doesn't inflate the frame,
-    // and measure the GLASS (not the padded wrapper) so the handles sit on the digits
     const host = $('screen').getBoundingClientRect();
     const g = glassEl.getBoundingClientRect();
     const r = g.width > 8 ? g : wrap.getBoundingClientRect();
@@ -2257,18 +2299,20 @@ const Clock = (() => {
     frame.style.height = r.height + 'px';
   }
 
+  function scheduleResizeAutoClose() {
+    clearTimeout(openResize._t);
+    openResize._t = setTimeout(closeResize, 9000);
+  }
+
   function openResize() {
-    boxCache = null;            // re-measure the safe area once
+    boxCache = null;
     clampInsideScreen();
     layoutFrame();
     frame.classList.add('on');
     frame.setAttribute('aria-hidden', 'false');
     document.body.classList.add('resizing');
-    vib(18);
-    if (navigator.vibrate) { try { navigator.vibrate([0, 14, 40, 14]); } catch (_) {} }
-    clearTimeout(openResize._t);
-    // auto-dismiss after a while so it never lingers
-    openResize._t = setTimeout(closeResize, 9000);
+    vib(18, 'heavy');
+    scheduleResizeAutoClose();
   }
   function closeResize() {
     frame.classList.remove('on');
@@ -2288,9 +2332,12 @@ const Clock = (() => {
       e.stopPropagation();
       e.preventDefault();
       clearTimeout(openResize._t);
+      clearTimeout(resizeCommitGuard);
+      boxCache = null;
       const dir = h.dataset.h;
       rs = {
         dir,
+        scale: layerScale(),
         x0: e.clientX, y0: e.clientY,
         size: CONFIG.clock.size,
         sx: CONFIG.clock.sx,
@@ -2300,12 +2347,11 @@ const Clock = (() => {
         pendX: 0, pendY: 0,
         raf: 0
       };
-      h.setPointerCapture(e.pointerId);
+      try { h.setPointerCapture(e.pointerId); } catch (_) {}
     });
 
     h.addEventListener('pointermove', (e) => {
       if (!rs) return;
-      // accumulate deltas from the start point so the result is stable, not drifting
       rs.pendX = e.clientX - rs.x0;
       rs.pendY = e.clientY - rs.y0;
       if (!rs.raf) rs.raf = requestAnimationFrame(applyHandleDelta);
@@ -2315,14 +2361,18 @@ const Clock = (() => {
       if (!rs) return;
       cancelAnimationFrame(rs.raf);
       rs = null;
-      preview = { x: 1, y: 1 };
-      applyPosition();
       persistGeometry();
-      // hand the expensive filter back only after the new raster is ready,
-      // so the release never flashes a flat tint
+      // Keep preview transform + body.resizing until apply() commits the crisp bitmap
+      clearTimeout(resizeCommitGuard);
+      resizeCommitGuard = setTimeout(() => {
+        preview = { x: 1, y: 1 };
+        applyPosition();
+        document.body.classList.remove('resizing');
+        if (frame.classList.contains('on')) layoutFrame();
+      }, 1200);
       Clock.schedule(true);
-      setTimeout(() => document.body.classList.remove('resizing'), 90);
-      vib(8);
+      scheduleResizeAutoClose();
+      vib(8, 'tick');
     };
     h.addEventListener('pointerup', done);
     h.addEventListener('pointercancel', done);
@@ -2344,7 +2394,9 @@ const Clock = (() => {
   function applyHandleDelta() {
     if (!rs) return;
     rs.raf = 0;
-    const { dir, pendX: dx, pendY: dy } = rs;
+    const sc = rs.scale || 1;
+    const dx = rs.pendX / sc, dy = rs.pendY / sc;
+    const dir = rs.dir;
     const horiz = /e|w/.test(dir);
     const vert = /n|s/.test(dir);
     const lim = limits();
@@ -2388,6 +2440,7 @@ const Clock = (() => {
   function measureBox() {
     const host = $('screen').getBoundingClientRect();
     const m = clockMetrics();
+    const sc = layerScale();
     const pad = (m.pad || 32) + 8;
     const topSafe = Math.max(
       $('topline').getBoundingClientRect().bottom + 10,
@@ -2395,8 +2448,8 @@ const Clock = (() => {
     );
     const cardTop = (state.npOn ? $('np') : $('bottom')).getBoundingClientRect().top - 12;
     boxCache = {
-      vw: host.width, vh: host.height,
-      pad, topSafe, cardTop: Math.max(topSafe + 80, cardTop)
+      vw: host.width / sc, vh: host.height / sc,
+      pad, topSafe, cardTop: Math.max(topSafe + 80, cardTop), sc
     };
   }
 
@@ -2405,7 +2458,7 @@ const Clock = (() => {
     const m = clockMetrics();
     const pad = boxCache.pad;
     const maxW = Math.max(140, boxCache.vw - 16 - (m.pad || 36));
-    const maxH = Math.max(96, Math.min(boxCache.cardTop - boxCache.topSafe, boxCache.vh * 0.8) - pad);
+    const maxH = Math.max(96, Math.min((boxCache.cardTop - boxCache.topSafe) / boxCache.sc, boxCache.vh * 0.8) - pad);
     return {
       maxW, maxH,
       minW: Math.min(maxW, 110),
@@ -2439,11 +2492,27 @@ const Clock = (() => {
     sizeValue.textContent = Math.round(CONFIG.clock.size / 128 * 100) + '%';
   }
   syncSizeControl();
+  let sizeReleaseTimer = 0;
   sizeControl.addEventListener('input', () => {
     CONFIG.clock.size = clampSize(Number(sizeControl.value));
     syncSizeControl();
     persistGeometry();
-    schedule(true, 90);
+    sizeControl.dataset.dragging = '1';
+    document.body.classList.add('resizing');
+    const ratio = CONFIG.clock.size / Math.max(40, lastCommittedSize || CONFIG.clock.size);
+    preview = { x: ratio, y: ratio };
+    applyPosition();
+    clearTimeout(sizeReleaseTimer);
+    sizeReleaseTimer = setTimeout(() => {
+      delete sizeControl.dataset.dragging;
+      clearTimeout(resizeCommitGuard);
+      resizeCommitGuard = setTimeout(() => {
+        preview = { x: 1, y: 1 };
+        applyPosition();
+        document.body.classList.remove('resizing');
+      }, 1200);
+      schedule(true);
+    }, 110);
   });
 
   /* Undo: keeps the size from before the frame was opened. */
@@ -2459,8 +2528,8 @@ const Clock = (() => {
     syncSizeControl();
     persistGeometry();
     Clock.schedule(true);
-    layoutFrame();
-    vib(10);
+    scheduleResizeAutoClose();
+    vib(10, 'tick');
   }
   $('clock-frame-undo').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -2476,8 +2545,8 @@ const Clock = (() => {
     syncSizeControl();
     persistGeometry();
     Clock.schedule(true);
-    layoutFrame();
-    vib(10);
+    scheduleResizeAutoClose();
+    vib(10, 'tick');
   });
 
   /* Anywhere else closes the frame. */
@@ -2501,7 +2570,7 @@ const Clock = (() => {
     guard: clampInsideScreen,
     metrics: () => clockMetrics(),
     limits: () => limits(),
-    relayout: () => { if (frame.classList.contains('on')) layoutFrame(); }
+    relayout: () => { boxCache = null; if (frame.classList.contains('on')) layoutFrame(); }
   };
 })();
 
@@ -2529,14 +2598,15 @@ function springStep(now) {
 }
 
 /* ============================================================================
-   3. WALLPAPERS (drawn once, cached as data URL)
+   3. WALLPAPERS (drawn lazily, small thumbnails, cached as data URL)
    ========================================================================= */
 const Wallpapers = (() => {
-  function draw(name) {
+  function draw(name, W = 900, H = 1800) {
     const c = document.createElement('canvas');
-    c.width = 900; c.height = 1800;
+    c.width = W; c.height = H;
     const x = c.getContext('2d');
-    const W = c.width, H = c.height;
+    const sx = (v) => v * (W / 900);
+    const sy = (v) => v * (H / 1800);
 
     const sky = (stops) => {
       const g = x.createLinearGradient(0, 0, W * 0.35, H);
@@ -2544,80 +2614,76 @@ const Wallpapers = (() => {
       x.fillStyle = g; x.fillRect(0, 0, W, H);
     };
     const blob = (cx, cy, r, col) => {
-      const g = x.createRadialGradient(cx, cy, r * 0.05, cx, cy, r);
+      const rr = r * Math.min(W / 900, H / 1800);
+      const g = x.createRadialGradient(cx, cy, rr * 0.05, cx, cy, rr);
       g.addColorStop(0, col); g.addColorStop(1, 'rgba(0,0,0,0)');
-      x.fillStyle = g; x.beginPath(); x.arc(cx, cy, r, 0, 7); x.fill();
+      x.fillStyle = g; x.beginPath(); x.arc(cx, cy, rr, 0, 7); x.fill();
     };
 
     if (name === 'angel') {
       sky([[0,'#a9c1dd'],[0.34,'#dfcbd7'],[0.64,'#9db0c9'],[0.86,'#5a6a81'],[1,'#333e51']]);
-      blob(220, 400, 420, 'rgba(255,255,255,.55)');
-      blob(660, 300, 380, 'rgba(255,255,255,.42)');
-      blob(450, 980, 520, 'rgba(255,255,255,.22)');
+      blob(sx(220), sy(400), 420, 'rgba(255,255,255,.55)');
+      blob(sx(660), sy(300), 380, 'rgba(255,255,255,.42)');
+      blob(sx(450), sy(980), 520, 'rgba(255,255,255,.22)');
       for (let i = 0; i < 5; i++) {
-        const y0 = 760 + i * 110;
-        const g = x.createLinearGradient(0, y0 - 70, 0, y0 + 70);
+        const y0 = sy(760 + i * 110);
+        const g = x.createLinearGradient(0, y0 - sy(70), 0, y0 + sy(70));
         g.addColorStop(0, 'rgba(255,255,255,0)');
         g.addColorStop(0.5, `rgba(255,255,255,${0.26 - i * 0.04})`);
         g.addColorStop(1, 'rgba(255,255,255,0)');
         x.fillStyle = g;
         x.beginPath(); x.moveTo(0, y0);
-        for (let px = 0; px <= W; px += 40) x.lineTo(px, y0 + Math.sin((px / W) * 5 + i) * 28);
-        x.lineTo(W, y0 + 150); x.lineTo(0, y0 + 150); x.closePath(); x.fill();
+        const step = Math.max(4, Math.round(sx(40)));
+        for (let px = 0; px <= W; px += step) x.lineTo(px, y0 + Math.sin((px / W) * 5 + i) * sy(28));
+        x.lineTo(W, y0 + sy(150)); x.lineTo(0, y0 + sy(150)); x.closePath(); x.fill();
       }
-      const sh = x.createRadialGradient(W*0.5, 760, 40, W*0.5, 1100, 620);
+      const sh = x.createRadialGradient(W*0.5, sy(760), sx(40), W*0.5, sy(1100), sx(620));
       sh.addColorStop(0,'rgba(255,250,242,.34)'); sh.addColorStop(1,'rgba(255,250,242,0)');
-      x.fillStyle = sh; x.fillRect(0, 400, W, H - 400);
+      x.fillStyle = sh; x.fillRect(0, sy(400), W, H - sy(400));
       const vg = x.createRadialGradient(W/2,H*0.42,H*0.2,W/2,H*0.5,H*0.8);
       vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(20,26,38,.34)');
       x.fillStyle = vg; x.fillRect(0,0,W,H);
     } else if (name === 'obsidian') {
       sky([[0,'#171b24'],[0.5,'#0a0c11'],[1,'#000']]);
-      blob(W*0.5, H*0.34, W*0.9, 'rgba(90,110,150,.20)');
+      blob(W*0.5, H*0.34, 900*0.9, 'rgba(90,110,150,.20)');
     } else if (name === 'dusk') {
       sky([[0,'#2a1c46'],[0.3,'#7c3f6b'],[0.58,'#d9705c'],[0.78,'#f2b07a'],[1,'#2b2039']]);
       blob(W*0.7, H*0.66, 300, 'rgba(255,215,160,.65)');
       blob(W*0.2, H*0.2, 420, 'rgba(120,90,200,.35)');
     } else if (name === 'aurora') {
       sky([[0,'#0b1030'],[0.42,'#1c4d8c'],[0.72,'#2aa88a'],[1,'#101a34']]);
-      blob(240, 620, 420, 'rgba(90,255,190,.45)');
-      blob(700, 900, 460, 'rgba(120,90,255,.45)');
-      blob(430, 380, 360, 'rgba(70,200,255,.35)');
+      blob(sx(240), sy(620), 420, 'rgba(90,255,190,.45)');
+      blob(sx(700), sy(900), 460, 'rgba(120,90,255,.45)');
+      blob(sx(430), sy(380), 360, 'rgba(70,200,255,.35)');
     } else if (name === 'daylight') {
       sky([[0,'#f2f6fb'],[0.46,'#e2ebf4'],[1,'#bfd0e2']]);
-      blob(W*0.7, 380, 420, 'rgba(255,255,255,.85)');
+      blob(W*0.7, sy(380), 420, 'rgba(255,255,255,.85)');
     } else {
       sky([[0,'#242a36'],[1,'#0c1016']]);
-      blob(W*0.5, H*0.3, W*0.8, 'rgba(120,140,180,.22)');
+      blob(W*0.5, H*0.3, 900*0.8, 'rgba(120,140,180,.22)');
     }
-    return c.toDataURL('image/jpeg', 0.86);
+    return c.toDataURL('image/jpeg', W < 200 ? 0.8 : 0.86);
   }
 
   const cache = new Map();
   const PRESETS = ['angel', 'obsidian', 'dusk', 'aurora', 'daylight'];
-
   const thumbs = new Map();
+
   function urlFor(name) {
-    if (state.wall === 'custom' && state.customWall) return state.customWall;
-    if (!cache.has(name)) cache.set(name, draw(name));
-    return cache.get(name);
+    if (name === 'custom' && state.customWall) return state.customWall;
+    const key = PRESETS.includes(name) ? name : 'angel';
+    if (!cache.has(key)) cache.set(key, draw(key, 900, 1800));
+    return cache.get(key);
   }
-  /* small version for the picker: same art, a fifth of the pixels */
   function thumb(name) {
-    if (state.wall === 'custom' && state.customWall && name === state.wall) return state.customWall;
-    if (!thumbs.has(name)) {
-      const full = urlFor(name);
-      thumbs.set(name, full);
-    }
+    if (name === 'custom' && state.customWall) return state.customWall;
+    if (!thumbs.has(name)) thumbs.set(name, draw(name, 84, 108));
     return thumbs.get(name);
   }
 
   function apply() {
     const el = $('wall');
-    const url = urlFor(state.wall);
-    el.src = url;
-    document.documentElement.style.setProperty('--wall-img', `url("${url}")`);
-    el.style.setProperty('--wall-zoom', state.wall === 'custom' ? 1 : 1);
+    el.src = urlFor(state.wall);
     document.body.style.setProperty('--wall-zoom', '1');
   }
 
@@ -2632,32 +2698,34 @@ const Adaptive = (() => {
   cv.width = 24; cv.height = 24;
   const ctx = cv.getContext('2d', { willReadFrequently: true });
   let lastLight = null;
+  let sampledKey = '';
 
   function sample() {
     const img = $('wall');
     try {
-      ctx.drawImage(img, 0, 0, 24, 24);
-      const d = ctx.getImageData(0, 0, 24, 24).data;
-      let lum = 0, r = 0, g = 0, b = 0;
-      for (let i = 0; i < d.length; i += 4) {
-        r += d[i]; g += d[i+1]; b += d[i+2];
-        lum += (0.2126 * d[i] + 0.7152 * d[i+1] + 0.0722 * d[i+2]) / 255;
+      const srcKey = state.wall === 'custom' ? (img.src || '').slice(0, 64) + (img.src || '').length : state.wall;
+      if (sampledKey !== srcKey || lastLight === null) {
+        if (!img.complete || !img.naturalWidth) return;
+        ctx.drawImage(img, 0, 0, 24, 24);
+        const d = ctx.getImageData(0, 0, 24, 24).data;
+        let lum = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          lum += (0.2126 * d[i] + 0.7152 * d[i+1] + 0.0722 * d[i+2]) / 255;
+        }
+        lum /= (d.length / 4);
+        if (lastLight === null) lastLight = lum > 0.52;
+        else if (!lastLight && lum > 0.56) lastLight = true;
+        else if (lastLight && lum < 0.44) lastLight = false;
+        sampledKey = srcKey;
       }
-      const n = d.length / 4;
-      lum /= n; r /= n; g /= n; b /= n;
-      // hysteresis so the UI never flickers between the two states
-      if (lastLight === null) lastLight = lum > 0.52;
-      else if (!lastLight && lum > 0.56) lastLight = true;
-      else if (lastLight && lum < 0.44) lastLight = false;
 
       const root = document.documentElement.style;
       const ink = lastLight ? '#12151c' : '#ffffff';
       root.setProperty('--ui', ink);
       root.setProperty('--ui-dim', lastLight ? 'rgba(18,21,28,.66)' : 'rgba(255,255,255,.74)');
       root.setProperty('--glass-bg', lastLight ? 'rgba(255,255,255,.34)' : 'rgba(255,255,255,.10)');
-      root.setProperty('--clock-top', ink);
+      root.setProperty('--clock-top', state.color === 'auto' ? ink : state.color);
 
-      // Clock tint: smoked glass on light walls, milky on dark walls
       let a1, a2, base;
       if (state.color === 'auto') {
         a1 = lastLight ? 0.70 : 0.52;
@@ -2669,10 +2737,32 @@ const Adaptive = (() => {
       }
       root.setProperty('--clock-tint',
         `linear-gradient(180deg, rgba(${base[0]},${base[1]},${base[2]},${a1}) 0%, rgba(${base[0]},${base[1]},${base[2]},${a2}) 100%)`);
-    } catch (e) { /* cross-origin or not ready */ }
+    } catch (e) { /* not ready */ }
   }
 
   return { sample };
+})();
+
+/* Dynamic Island live activity pill */
+const Island = (() => {
+  const el = $('island');
+  const dot = $('island-dot');
+  const label = $('island-label');
+  let timer = 0;
+
+  function pulse(text, color = '#30d158', duration = 2200) {
+    if (!el || !label) return;
+    label.textContent = text;
+    if (dot) dot.style.background = color;
+    el.classList.add('active', 'wide');
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      el.classList.remove('wide');
+      timer = setTimeout(() => el.classList.remove('active'), 320);
+    }, duration);
+  }
+
+  return { pulse };
 })();
 
 /* ============================================================================
@@ -2681,6 +2771,7 @@ const Adaptive = (() => {
 const Media = (() => {
   const audio = new Audio();
   let hasFile = false;
+  let audioBlobUrl = '';
   let raf = 0;
   let demoStart = 0;
 
@@ -2695,31 +2786,30 @@ const Media = (() => {
     return state.np.elapsed + (performance.now() - demoStart) / 1000;
   }
 
-  /* Marquee measurement forces a layout, so it runs only when the song
-     changes — never inside the 60 fps progress loop. */
   function measureTitle() {
     const title = $('np-title');
-    const over = title.scrollWidth > title.clientWidth + 2;
+    const meta = title.parentElement;
+    title.classList.remove('scroll');
+    const over = title.scrollWidth > meta.clientWidth + 2;
+    if (meta) meta.classList.toggle('scrolling', over);
     title.classList.toggle('scroll', over);
-    if (over) title.style.setProperty('--mq', `-${title.scrollWidth - title.clientWidth + 18}px`);
+    if (over) title.style.setProperty('--mq', `-${title.scrollWidth - meta.clientWidth + 18}px`);
   }
 
-  /* Progress only: touches the numbers when they actually change. */
   let lastElapsed = '', lastRemain = '';
   const thumbEl = $('np-thumb');
   const trackEl = document.querySelector('#np-bar .np-track');
 
-  /* The bar's pixel width, cached — needed once, not every frame. */
   function measureBar() {
     const w = trackEl ? trackEl.clientWidth : 300;
     if (w > 0) thumbEl.style.setProperty('--bar-w', w + 'px');
   }
   function renderProgress() {
     const dur = state.np.duration || 1;
-    const pos = position();
+    const pos = Math.min(dur, position());
     const p = clamp01(pos / dur);
     $('np-fill').style.transform = `scaleX(${p.toFixed(4)})`;
-    thumbEl.style.left = (p * 100).toFixed(3) + '%';
+    thumbEl.style.setProperty('--p', p.toFixed(4));
     const e = fmt(pos), r = '-' + fmt(dur - pos);
     if (e !== lastElapsed) { $('np-elapsed').textContent = e; lastElapsed = e; }
     if (r !== lastRemain) { $('np-remain').textContent = r; lastRemain = r; }
@@ -2730,17 +2820,20 @@ const Media = (() => {
     $('np-title').textContent = state.np.title;
     $('np-artist').textContent = state.np.artist;
     $('np-play').classList.toggle('playing', !!state.playing);
+    document.body.classList.toggle('np-paused', !state.playing);
     measureTitle();
     renderProgress();
   }
 
-  /* The bar moves roughly one pixel per second, so repainting it 60×/s is
-     pure waste inside a backdrop-filter card: 8 updates a second look
-     perfectly smooth and keep the whole screen at 60 fps. */
   let lastPaint = 0;
   function tick(now) {
-    if (!lastPaint || (now || performance.now()) - lastPaint >= 120) {
-      lastPaint = (now || performance.now());
+    const ts = now || performance.now();
+    if (!lastPaint || ts - lastPaint >= 120) {
+      lastPaint = ts;
+      if (!hasFile && state.playing && position() >= (state.np.duration || 1)) {
+        nextTrack();
+        return;
+      }
       renderProgress();
     }
     if (state.playing) raf = requestAnimationFrame(tick);
@@ -2754,6 +2847,7 @@ const Media = (() => {
     save();
     render();
     if (!raf) raf = requestAnimationFrame(tick);
+    Island.pulse(state.np.title, '#30d158', 2000);
     if ('mediaSession' in navigator) {
       navigator.mediaSession.metadata = new MediaMetadata({ title: state.np.title, artist: state.np.artist });
     }
@@ -2768,8 +2862,6 @@ const Media = (() => {
   }
   function toggle() { state.playing ? pause() : play(); }
 
-  /* A tiny queue so «التالي / السابق» actually change the track — with a
-     springy swap of the artwork and the title. */
   const QUEUE = [
     { title: 'Grown Woman', artist: 'Beyoncé', duration: 315 },
     { title: 'Midnight City', artist: 'M83', duration: 243 },
@@ -2790,20 +2882,23 @@ const Media = (() => {
     state.np.artist = t.artist;
     state.np.duration = t.duration;
     state.np.elapsed = 0;
-    if (hasFile) { audio.pause(); audio.src = ''; hasFile = false; }
+    if (hasFile) {
+      audio.pause(); audio.src = ''; hasFile = false;
+      if (audioBlobUrl) { URL.revokeObjectURL(audioBlobUrl); audioBlobUrl = ''; }
+    }
     demoStart = performance.now();
     const card = $('np');
     card.classList.remove('track-swap');
     void card.offsetWidth;
     card.classList.add('track-swap');
     setTimeout(() => card.classList.remove('track-swap'), 600);
-    // the artwork swatches shift per track, so the swap is visible
     const art = $('np-art');
     art.style.background = ART_GRADIENTS[qi % ART_GRADIENTS.length];
     art.removeAttribute('src');
     render();
     save();
-    if (state.playing) play(); else render();
+    if (state.playing) play();
+    else Island.pulse(t.title, '#7ad0ff', 1900);
     if (dir) {
       const b = dir > 0 ? $('np-next') : $('np-prev');
       b.classList.remove('nudge-r', 'nudge-l');
@@ -2819,42 +2914,42 @@ const Media = (() => {
     'linear-gradient(135deg,#ff9a3c,#ffd93d)',
     'linear-gradient(135deg,#22c1c3,#7bffd0)'
   ];
-  function nextTrack() { swapTo(idxOf() + 1, 1); vib(9); }
+  function nextTrack() { swapTo(idxOf() + 1, 1); vib(9, 'tick'); }
   function prevTrack() {
-    // iPhone rule: restart the song unless you are already at the top
     if (position() > 3) { seek(0); }
     else swapTo(idxOf() - 1, -1);
-    vib(9);
+    vib(9, 'tick');
   }
   function seek(p) {
     const t = clamp01(p) * state.np.duration;
     if (hasFile) audio.currentTime = t;
     state.np.elapsed = t;
     demoStart = performance.now();
-    render();
+    renderProgress();
     save();
   }
 
   function loadFile(file) {
-    const url = URL.createObjectURL(file);
-    audio.src = url;
+    if (audioBlobUrl) URL.revokeObjectURL(audioBlobUrl);
+    audioBlobUrl = URL.createObjectURL(file);
+    audio.src = audioBlobUrl;
     audio.load();
     hasFile = true;
-    audio.addEventListener('ended', () => {
+    audio.onended = () => {
       state.playing = false; state.np.elapsed = 0; render();
-    }, { once: true });
+    };
     audio.addEventListener('loadedmetadata', () => {
       if (isFinite(audio.duration) && audio.duration > 0) state.np.duration = audio.duration;
       render();
     }, { once: true });
-    $('np-title').textContent = file.name.replace(/\.[^.]+$/, '');
-    state.np.title = file.name.replace(/\.[^.]+$/, '');
+    const name = file.name.replace(/\.[^.]+$/, '');
+    state.np.title = name;
+    state.np.artist = 'ملف محلي';
+    state.np.elapsed = 0;
     play();
   }
   function loadArt(file) {
-    const r = new FileReader();
-    r.onload = () => { $('np-art').src = r.result; };
-    r.readAsDataURL(file);
+    compressImageFile(file, 400, true).then(url => { $('np-art').src = url; }).catch(() => {});
   }
 
   // scrub
@@ -2866,7 +2961,8 @@ const Media = (() => {
   };
   bar.addEventListener('pointerdown', (e) => {
     scrubbing = true; bar.classList.add('scrub');
-    bar.setPointerCapture(e.pointerId); seek(at(e.clientX)); vib(5);
+    try { bar.setPointerCapture(e.pointerId); } catch (_) {}
+    seek(at(e.clientX)); vib(5, 'tick');
   });
   bar.addEventListener('pointermove', (e) => { if (scrubbing) seek(at(e.clientX)); });
   const endScrub = () => { scrubbing = false; bar.classList.remove('scrub'); };
@@ -2879,25 +2975,25 @@ const Media = (() => {
     btn.classList.add('nudge');
     setTimeout(() => btn.classList.remove('nudge'), 500);
   }
-  $('np-play').addEventListener('click', () => { toggle(); bump($('np-play')); vib(7); });
+  $('np-play').addEventListener('click', () => { toggle(); bump($('np-play')); vib(7, 'pop'); });
   $('np-prev').addEventListener('click', prevTrack);
   $('np-next').addEventListener('click', nextTrack);
-  $('np-star').addEventListener('click', () => { bump($('np-star')); toast('أُضيفت إلى المفضلة'); vib(7); });
-  $('np-air').addEventListener('click', () => { bump($('np-air')); toast('AirPlay: مكبّر صوت iPhone'); vib(7); });
+  $('np-star').addEventListener('click', () => { bump($('np-star')); Island.pulse('تمت الإضافة للمفضلة', '#ffd60a', 1800); toast('أُضيفت إلى المفضلة'); vib(7, 'tick'); });
+  $('np-air').addEventListener('click', () => { bump($('np-air')); Island.pulse('AirPlay نشط', '#7ad0ff', 1800); toast('AirPlay: مكبّر صوت الهاتف'); vib(7, 'tick'); });
 
   return { render, play, pause, tick, loadFile, loadArt, seek, nextTrack, prevTrack, measureTitle, measureBar,
            isPlaying: () => !!state.playing };
 })();
 
 /* ============================================================================
-   6. SHORTCUTS — hold 350ms, tap = on/off, both springy
+   6. SHORTCUTS — hold 350ms, tap = on/off, real Android torch + haptics
    ========================================================================= */
 const Shortcuts = (() => {
   const flash = $('flash');
   let camStream = null;
+  let flashBurstTimer = 0;
+  let camHoldTimer = 0;
 
-  /* No progress ring anymore — the button itself is the feedback: it sinks
-     as you hold and pops back with a spring when the hold fires. */
   function pop(btn) {
     btn.classList.remove('pop');
     void btn.offsetWidth;
@@ -2905,11 +3001,14 @@ const Shortcuts = (() => {
     setTimeout(() => btn.classList.remove('pop'), 560);
   }
 
-  /* iPhone lock-screen behaviour:
-     · a quick tap turns the flashlight on/off (it never "opens")
-     · holding 350ms fills the ring, fires haptics and lets go with a spring
-     · the camera button taps into the camera, and a long press snaps a photo
-       with the iOS shutter flash — exactly like holding it on a real iPhone. */
+  function setFlash(on) {
+    clearTimeout(flashBurstTimer);
+    flash.classList.toggle('on', on);
+    $('sh-left').classList.toggle('on', on);
+    try { window.AndroidHost?.setTorch?.(on); } catch (_) {}
+    if (on) Island.pulse('المصباح قيد التشغيل', '#ffd60a', 1600);
+  }
+
   function bind(btn, { onTap, onHold }) {
     let t0 = 0, raf = 0, fired = false;
     const start = (e) => {
@@ -2917,18 +3016,15 @@ const Shortcuts = (() => {
       fired = false;
       btn.classList.add('charging');
       t0 = performance.now();
-      vib(4);
+      vib(4, 'tick');
       const step = () => {
         const p = Math.min(1, (performance.now() - t0) / 350);
-        // press-sink eases in as the hold builds
         btn.style.transform = `scale(${(0.9 - 0.02 * p).toFixed(3)})`;
         if (p < 1) { raf = requestAnimationFrame(step); return; }
-        // hold completed: fire exactly once, then spring back
         raf = 0;
         if (!fired) {
           fired = true;
-          vib(22);
-          if (navigator.vibrate) { try { navigator.vibrate([0, 18, 40, 18]); } catch (_) {} }
+          vib(22, 'heavy');
           if (onHold) onHold();
         }
         btn.classList.remove('charging');
@@ -2947,8 +3043,8 @@ const Shortcuts = (() => {
       const held = performance.now() - t0;
       cancel();
       if (!fired && held < 350) {
-        vib(9);
-        pop(btn);            // springy pop for the short tap too
+        vib(9, 'pop');
+        pop(btn);
         if (onTap) onTap();
       }
       fired = false;
@@ -2962,41 +3058,32 @@ const Shortcuts = (() => {
   function bindAll() {
     bind($('sh-left'), {
       onTap: () => {
-        const on = flash.classList.toggle('on');
-        $('sh-left').classList.toggle('on', on);
-        if (on) vib(14);
+        const on = !flash.classList.contains('on');
+        setFlash(on);
+        if (on) vib(14, 'pop');
       },
       onHold: () => {
-        // hold = quick flash pulse, like the torch burst
-        flash.classList.add('on');
-        $('sh-left').classList.add('on');
-        setTimeout(() => {
-          flash.classList.remove('on');
-          $('sh-left').classList.remove('on');
-        }, 420);
+        setFlash(true);
+        flashBurstTimer = setTimeout(() => setFlash(false), 420);
       }
     });
     bind($('sh-right'), {
       onTap: () => openCamera(),
       onHold: () => {
-        openCamera();
-        // let the sheet and iris settle first, then fire the shutter
-        setTimeout(shoot, 620);
+        openCamera(true);
       }
     });
   }
 
-  /* iOS-style shutter: white flash + iris dip + haptic. */
   function shoot() {
+    if ($('cam-shutter').disabled || !camStream) return;
     const sh = $('shutter');
     const iris = $('cam-iris');
     if (!sh) return;
     sh.style.transition = 'none';
     sh.style.opacity = '1';
     if (iris) { iris.style.transition = 'none'; iris.style.opacity = '0'; }
-    vib(16);
-    // hold the white for one frame, then let it drain (two frames so the
-    // browser commits the "on" state before the fade starts)
+    vib(16, 'shutter');
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         sh.style.transition = 'opacity .46s cubic-bezier(.32,.72,0,1)';
@@ -3007,41 +3094,64 @@ const Shortcuts = (() => {
         }
       });
     });
+    Island.pulse('تم التقاط الصورة', '#ffffff', 1600);
     toast('تم التقاط الصورة');
   }
   $('cam-shutter').addEventListener('click', shoot);
 
-  function openCamera() {
-    $('cam').classList.add('on');
+  function openCamera(autoShoot = false) {
+    clearTimeout(camHoldTimer);
+    if (flash.classList.contains('on')) setFlash(false);
     const v = $('cam-video');
+    const msg = $('cam-msg');
+    const shutter = $('cam-shutter');
+    msg.style.display = 'none';
+    v.style.display = '';
+    shutter.disabled = true;
+    $('cam').classList.add('on');
+
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      $('cam-msg').style.display = 'block';
+      msg.style.display = 'block';
       v.style.display = 'none';
       return;
     }
     navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
       .then((s) => {
-        if (document.hidden || !$('cam').classList.contains('on')) { s.getTracks().forEach(t => t.stop()); return; }
-        camStream = s; v.srcObject = s; v.play().catch(() => {});
+        const pendingPerm = !!window.AndroidHost?.isPermissionPending?.();
+        if ((document.hidden && !pendingPerm) || !$('cam').classList.contains('on')) {
+          s.getTracks().forEach(t => t.stop());
+          return;
+        }
+        camStream = s;
+        v.srcObject = s;
+        shutter.disabled = false;
+        v.play().catch(() => {});
+        if (autoShoot) camHoldTimer = setTimeout(shoot, 520);
       })
-      .catch(() => { $('cam-msg').style.display = 'block'; v.style.display = 'none'; });
+      .catch(() => {
+        msg.style.display = 'block';
+        v.style.display = 'none';
+        shutter.disabled = true;
+      });
   }
   function closeCamera() {
+    clearTimeout(camHoldTimer);
     $('cam').classList.remove('on');
     if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
     $('cam-video').srcObject = null;
+    $('cam-shutter').disabled = false;
   }
 
-  $('flash-off').addEventListener('click', () => {
-    flash.classList.remove('on');
-    $('sh-left').classList.remove('on');
-  });
+  $('flash-off').addEventListener('click', () => setFlash(false));
   $('cam-close').addEventListener('click', closeCamera);
 
-  return { bindAll, closeCamera };
+  return { bindAll, closeCamera, setFlash };
 })();
 
-function vib(ms) {
+function vib(ms, kind = 'tick') {
+  try {
+    if (window.AndroidHost?.haptic) { window.AndroidHost.haptic(kind); return; }
+  } catch (_) {}
   if (navigator.vibrate) { try { navigator.vibrate(ms); } catch (e) {} }
 }
 
@@ -3055,9 +3165,7 @@ function toast(msg) {
 }
 
 /* ============================================================================
-   7. LOCK SCREEN STAYS LOCKED — no unlock animation.
-   A very light rubber-band on a downward pull only, then a clean snap back,
-   so the surface still feels alive without ever leaving the lock screen.
+   7. LOCK SCREEN STAYS LOCKED — rubber-band pull + wallpaper depth zoom
    ========================================================================= */
 const Pull = (() => {
   const screen = $('screen');
@@ -3082,29 +3190,30 @@ const Pull = (() => {
     if (!drag) return;
     drag.last = e.clientY;
     const dy = e.clientY - drag.y;
-    if (dy < 8) return;                     // only a real downward pull responds
-    if (!drag.armed) {                      // claim the pointer only once it moves
+    if (dy < 8) return;
+    if (!drag.armed) {
       drag.armed = true;
+      np.style.transition = 'none';
       try { screen.setPointerCapture(drag.id); } catch (_) {}
     }
-    // rubber band: 26% of the finger, hard-capped so nothing ever leaves
     const y = pullY = 150 * (1 - Math.exp(-Math.max(0, dy - 8) / 500));
     clockLayer.style.transform = `translate3d(0,${y}px,0)`;
     top.style.transform = `translate3d(0,${y}px,0)`;
     np.style.transform = `translate3d(0,${y * 0.6}px,0)`;
     bottom.style.transform = `translate3d(0,${y * 0.4}px,0)`;
+    document.body.style.setProperty('--wall-zoom', (1 + y * 0.00028).toFixed(4));
   });
 
   const settle = () => {
     if (!drag) return;
     const wasArmed = drag.armed;
     drag = null;
-    if (!wasArmed) {                       // a tap: nothing moved, nothing to settle
+    if (!wasArmed) {
       clockLayer.style.transform = top.style.transform = '';
-      np.style.transform = bottom.style.transform = '';
+      np.style.transform = bottom.style.transform = np.style.transition = '';
+      document.body.style.setProperty('--wall-zoom', '1');
       return;
     }
-    // one tidy spring back
     const t0 = performance.now();
     const fromY = pullY;
     const step = (now) => {
@@ -3114,10 +3223,12 @@ const Pull = (() => {
       top.style.transform = `translate3d(0,${y}px,0)`;
       np.style.transform = `translate3d(0,${y * 0.6}px,0)`;
       bottom.style.transform = `translate3d(0,${y * 0.4}px,0)`;
+      document.body.style.setProperty('--wall-zoom', (1 + Math.max(0, y) * 0.00028).toFixed(4));
       if (k < 1) springRaf = requestAnimationFrame(step);
-      else {                              // wipe the inline styles so layout is pristine
+      else {
         clockLayer.style.transform = top.style.transform = '';
-        np.style.transform = bottom.style.transform = '';
+        np.style.transform = bottom.style.transform = np.style.transition = '';
+        document.body.style.setProperty('--wall-zoom', '1');
       }
     };
     springRaf = requestAnimationFrame(step);
@@ -3127,10 +3238,11 @@ const Pull = (() => {
 })();
 
 /* ============================================================================
-   8. CUSTOMIZE — one bar: font · color · wallpaper · toggles. No sliders.
+   8. CUSTOMIZE — bottom bar + interactive swipe-down dismissal
    ========================================================================= */
 const Editor = (() => {
   const sheet = $('edit');
+  let bound = false;
 
   const FONTS = [
     ['Bebas Neue', 'ببس', 'Bebas'],
@@ -3142,15 +3254,15 @@ const Editor = (() => {
 
   function fontChips() {
     const row = $('fonts');
-    row.innerHTML = FONTS.map(([key, glyph, label]) => `
-      <button class="f-chip ${state.font === key ? 'sel' : ''}" data-font="${key}">
-        <b style="${key === 'SF' ? 'font-family:-apple-system,Inter,sans-serif;font-weight:600' : `font-family:'${key}',serif`}">${key === 'SF' ? '12' : '12'}</b>
+    row.innerHTML = FONTS.map(([key, _glyph, label]) => `
+      <button class="f-chip ${state.font === key ? 'sel' : ''}" data-font="${key}" aria-label="خط ${label}">
+        <b style="${key === 'SF' ? 'font-family:-apple-system,Inter,sans-serif;font-weight:600' : `font-family:'${key}',serif`}">12</b>
         <span>${label}</span>
       </button>`).join('');
     row.querySelectorAll('[data-font]').forEach(b => {
       b.addEventListener('click', () => {
         state.font = b.dataset.font;
-        save(); fontChips(); Clock.schedule(true, 90); vib(6);
+        save(); fontChips(); Clock.schedule(true, 90); vib(6, 'tick');
       });
     });
   }
@@ -3158,12 +3270,12 @@ const Editor = (() => {
   function colorChips() {
     const row = $('colors');
     row.innerHTML = COLORS.map(c => c === 'auto'
-      ? `<button class="c-dot ${state.color === 'auto' ? 'sel' : ''}" data-color="auto" style="background:conic-gradient(#fff 0 25%,#8e8e93 0 50%,#1c1c1e 0 75%,#ffd60a 0)" title="تلقائي"></button>`
-      : `<button class="c-dot ${state.color.toLowerCase() === c ? 'sel' : ''}" data-color="${c}" style="background:${c}"></button>`).join('');
+      ? `<button class="c-dot ${state.color === 'auto' ? 'sel' : ''}" data-color="auto" style="background:conic-gradient(#fff 0 25%,#8e8e93 0 50%,#1c1c1e 0 75%,#ffd60a 0)" title="تلقائي" aria-label="لون تلقائي"></button>`
+      : `<button class="c-dot ${state.color.toLowerCase() === c ? 'sel' : ''}" data-color="${c}" style="background:${c}" aria-label="لون ${c}"></button>`).join('');
     row.querySelectorAll('[data-color]').forEach(b => {
       b.addEventListener('click', () => {
         state.color = b.dataset.color;
-        save(); colorChips(); applyUiColor(); Adaptive.sample(); Clock.schedule(true, 60); vib(6);
+        save(); colorChips(); applyUiColor(); Adaptive.sample(); Clock.schedule(true, 40); vib(6, 'tick');
       });
     });
   }
@@ -3171,20 +3283,19 @@ const Editor = (() => {
   function wallChips() {
     const row = $('walls');
     const chips = Wallpapers.PRESETS.map(p => `
-      <button class="w-chip ${state.wall === p ? 'sel' : ''}" data-wall="${p}" style="background-image:url('${Wallpapers.thumb(p)}')"></button>`).join('');
+      <button class="w-chip ${state.wall === p ? 'sel' : ''}" data-wall="${p}" aria-label="خلفية ${p}" style="background-image:url('${Wallpapers.thumb(p)}')"></button>`).join('');
     const plus = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>';
     const person = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="7" r="3.2"/><path d="M5.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/></svg>';
     row.innerHTML = chips + `
-      <button class="w-chip upload" data-upload="1" title="ارفع صورة">${plus}</button>
-      <button class="w-chip upload" data-subject="1" title="صورة أمام الساعة (عمق)">${person}</button>`;
+      <button class="w-chip upload" data-upload="1" title="ارفع صورة" aria-label="رفع صورة خلفية">${plus}</button>
+      <button class="w-chip upload" data-subject="1" title="صورة أمام الساعة (عمق)" aria-label="صورة أمام الساعة">${person}</button>`;
     row.querySelectorAll('[data-wall]').forEach(b => {
       b.addEventListener('click', () => {
         state.wall = b.dataset.wall;
         save(); Wallpapers.apply(); wallChips();
-        // the wallpaper swap itself is heavy: let it paint, then re-bake the clock
         setTimeout(() => Adaptive.sample(), 60);
-        setTimeout(() => Clock.schedule(true), 260);
-        vib(6);
+        setTimeout(() => Clock.schedule(true), 240);
+        vib(6, 'tick');
       });
     });
     row.querySelector('[data-upload]').addEventListener('click', () => $('f-wall').click());
@@ -3201,34 +3312,28 @@ const Editor = (() => {
       ['dndOn', 'عدم الإزعاج', state.dndOn]
     ];
     row.innerHTML = items.map(([k, label, on]) => `
-      <button class="t-btn ${on ? 'on' : ''}" data-tg="${k}">${label}</button>`).join('');
+      <button class="t-btn ${on ? 'on' : ''}" data-tg="${k}" aria-pressed="${on ? 'true' : 'false'}">${label}</button>`).join('') +
+      `<button class="t-btn" id="pick-audio" type="button">ملف صوتي…</button>
+       <button class="t-btn" id="pick-art" type="button">غلاف…</button>`;
     row.querySelectorAll('[data-tg]').forEach(b => {
       b.addEventListener('click', () => {
         const k = b.dataset.tg;
         state[k] = !state[k];
-        save(); toggles(); applyToggles(); vib(8);
+        save(); toggles(); applyToggles(); vib(8, 'pop');
         if (k === 'hour24') Clock.schedule(true, 80);
+        if (k === 'npOn') setTimeout(() => Clock.guard(), 40);
+        if (k === 'dndOn') Island.pulse(state.dndOn ? 'عدم الإزعاج مفعّل' : 'إيقاف عدم الإزعاج', state.dndOn ? '#a78bfa' : '#8e8e93', 1800);
         if (k === 'depth') applyDepth();
       });
     });
+    $('pick-audio').addEventListener('click', () => $('f-audio').click());
+    $('pick-art').addEventListener('click', () => $('f-art').click());
   }
 
-  /* Inner-shadow sliders — they write CONFIG.glass.inner only, so the music
-     card, the flashlight and the camera keep their own glass untouched. */
   const INNER_COLORS = ['#ffffff', '#e8ecf4', '#c9d4e6', '#9fb4d4', '#7ad0ff', '#a78bfa',
                         '#ff9ecb', '#ffd60a', '#ff9f6b', '#8ef0c4', '#b9b9bf', '#1c1c1e'];
 
-  function innerCtl() {
-    const op = $('in-op'), th = $('in-th'), ang = $('in-ang');
-    const opv = $('in-op-v'), thv = $('in-th-v'), angv = $('in-ang-v');
-    op.value = String(Math.round((state.innerIntensity ?? 0.55) * 100));
-    th.value = String(state.innerThickness ?? 2.5);
-    ang.value = String(CONFIG.glass.inner.angle);
-    opv.textContent = op.value;
-    thv.textContent = th.value;
-    angv.textContent = ang.value;
-
-    /* colour swatches for the inner shadow */
+  function renderInnerColors() {
     const row = $('in-colors');
     row.innerHTML = INNER_COLORS.map(c =>
       `<button class="c-dot ${(CONFIG.glass.inner.color || '#ffffff').toLowerCase() === c ? 'sel' : ''}"
@@ -3237,17 +3342,57 @@ const Editor = (() => {
       b.addEventListener('click', () => {
         CONFIG.glass.inner.color = b.dataset.ic;
         state.innerColor = b.dataset.ic;
-        save(); innerCtl(); Clock.refreshInner(); vib(6);
+        save(); renderInnerColors(); Clock.refreshInner(); vib(6, 'tick');
       });
     });
+  }
 
-    let t1 = 0, t2 = 0, t3 = 0;
-    let opRaf = 0;
+  function syncInnerInputs() {
+    const op = $('in-op'), th = $('in-th'), ang = $('in-ang');
+    op.value = String(Math.round((state.innerIntensity ?? 0.55) * 100));
+    th.value = String(state.innerThickness ?? 2.5);
+    ang.value = String(CONFIG.glass.inner.angle);
+    $('in-op-v').textContent = op.value;
+    $('in-th-v').textContent = th.value;
+    $('in-ang-v').textContent = ang.value;
+  }
+
+  function bindOnce() {
+    if (bound) return;
+    bound = true;
+    $('edit-done').addEventListener('click', close);
+
+    // Interactive iOS swipe-down-to-close on grabber/header
+    let dragY0 = 0, dragDY = 0, draggingSheet = false;
+    const handle = sheet.querySelector('.edit-head');
+    const grab = sheet.querySelector('.edit-grabber');
+    const onStart = (e) => {
+      if (e.target.closest('button')) return;
+      draggingSheet = true; dragY0 = e.clientY; dragDY = 0;
+      sheet.style.transition = 'none';
+      try { sheet.setPointerCapture(e.pointerId); } catch (_) {}
+    };
+    [grab, handle].forEach(h => h && h.addEventListener('pointerdown', onStart));
+    sheet.addEventListener('pointermove', (e) => {
+      if (!draggingSheet) return;
+      dragDY = Math.max(0, e.clientY - dragY0);
+      sheet.style.transform = `translateY(${dragDY}px)`;
+    });
+    const onEnd = () => {
+      if (!draggingSheet) return;
+      draggingSheet = false;
+      sheet.style.transition = '';
+      sheet.style.transform = '';
+      if (dragDY > 68) close();
+    };
+    sheet.addEventListener('pointerup', onEnd);
+    sheet.addEventListener('pointercancel', onEnd);
+
+    const op = $('in-op'), th = $('in-th'), ang = $('in-ang');
+    let t1 = 0, t2 = 0, t3 = 0, opRaf = 0;
     op.addEventListener('input', () => {
-      /* pure CSS: instant, and it never triggers a redraw. One write per
-         animation frame is all the compositor can use anyway. */
       state.innerIntensity = Number(op.value) / 100;
-      opv.textContent = op.value;
+      $('in-op-v').textContent = op.value;
       CONFIG.glass.inner.intensity = state.innerIntensity;
       if (!opRaf) opRaf = requestAnimationFrame(() => {
         opRaf = 0;
@@ -3259,16 +3404,15 @@ const Editor = (() => {
     });
     th.addEventListener('input', () => {
       state.innerThickness = Number(th.value);
-      thv.textContent = th.value;
+      $('in-th-v').textContent = th.value;
       CONFIG.glass.inner.thickness = state.innerThickness;
-      /* cheap path: only the inner map is redrawn (no refraction, no bitmap) */
       clearTimeout(t2);
       t2 = setTimeout(() => { Clock.refreshInner(); save(); }, 70);
     });
     ang.addEventListener('input', () => {
       CONFIG.glass.inner.angle = Number(ang.value);
       state.innerAngle = CONFIG.glass.inner.angle;
-      angv.textContent = ang.value;
+      $('in-ang-v').textContent = ang.value;
       clearTimeout(t3);
       t3 = setTimeout(() => { Clock.refreshInner(); save(); }, 70);
     });
@@ -3277,7 +3421,7 @@ const Editor = (() => {
   function open() {
     sheet.classList.add('open');
     document.body.classList.add('editing');
-    vib(8);
+    vib(8, 'pop');
   }
   function close() {
     sheet.classList.remove('open');
@@ -3286,8 +3430,8 @@ const Editor = (() => {
   function toggle() { sheet.classList.contains('open') ? close() : open(); }
 
   function build() {
-    fontChips(); colorChips(); wallChips(); innerCtl(); toggles();
-    $('edit-done').addEventListener('click', close);
+    bindOnce();
+    fontChips(); colorChips(); wallChips(); syncInnerInputs(); renderInnerColors(); toggles();
   }
 
   return { build, open, close, toggle, isOpen: () => sheet.classList.contains('open') };
@@ -3300,7 +3444,6 @@ function hexToRgb(hex) {
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '#ffffff');
   return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [255, 255, 255];
 }
-/* The chosen clock colour also drives the UI ink when it is readable. */
 function applyUiColor() {
   if (state.color === 'auto') { Adaptive.sample(); return; }
   document.documentElement.style.setProperty('--clock-top', state.color);
@@ -3309,10 +3452,10 @@ function applyUiColor() {
 function applyToggles() {
   $('np').classList.toggle('gone', !state.npOn);
   $('dnd').classList.toggle('gone', !state.dndOn);
-  $('topline').style.visibility = state.weatherOn ? '' : '';
+  const focusIcon = $('i-focus');
+  if (focusIcon) focusIcon.style.display = state.dndOn ? '' : 'none';
   renderTopline();
-  // the card may have just come back at a different width — re-measure the title
-  if (state.npOn) setTimeout(() => Media.measureTitle(), 260);
+  if (state.npOn) setTimeout(() => { Media.measureBar(); Media.measureTitle(); }, 260);
 }
 
 function applyDepth() {
@@ -3326,13 +3469,18 @@ function applyDepth() {
   }
 }
 
+let lastDateStr = '';
 function renderTopline() {
   const d = new Date();
-  const opts = { weekday: 'short', day: 'numeric', month: 'short' };
-  $('date').textContent = d.toLocaleDateString('ar', opts);
+  const ds = d.toDateString();
+  if (ds !== lastDateStr) {
+    lastDateStr = ds;
+    const opts = { weekday: 'short', day: 'numeric', month: 'short' };
+    $('date').textContent = d.toLocaleDateString('ar', opts);
+  }
   const wx = $('wx');
+  const sep = document.querySelector('#topline .sep');
   if (state.weatherOn) {
-    // live weather, gracefully falling back to the configured string
     if (!wx.dataset.live) {
       wx.textContent = CONFIG.weather;
       fetch('https://api.open-meteo.com/v1/forecast?latitude=33.31&longitude=44.36&current=temperature_2m,weather_code&timezone=auto')
@@ -3347,9 +3495,9 @@ function renderTopline() {
         .catch(() => {});
     }
     wx.style.display = '';
+    if (sep) sep.style.display = '';
   } else {
     wx.style.display = 'none';
-    const sep = document.querySelector('#topline .sep');
     if (sep) sep.style.display = 'none';
   }
 }
@@ -3360,23 +3508,46 @@ function icons() {
   $('i-focus').innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M20.5 14.6A8.6 8.6 0 019.4 3.5a8.6 8.6 0 1011.1 11.1z"/></svg>`;
 }
 
+function updateDeviceStatusUI(st) {
+  if (!st) return;
+  if (typeof st.batteryPct === 'number' && st.batteryPct >= 0) {
+    const p = Math.max(0, Math.min(100, Math.round(st.batteryPct)));
+    $('bat-pct').textContent = p;
+    const fill = $('bat-fill');
+    fill.style.transform = `scaleX(${p / 100})`;
+    fill.classList.toggle('low', p <= 20 && !st.charging);
+    fill.classList.toggle('chg', !!st.charging);
+  }
+  if (st.network) {
+    const wifi = $('i-wifi'), sig = $('i-signal'), car = $('carrier');
+    if (st.network === 'offline') {
+      wifi.classList.add('off'); sig.classList.add('off');
+      if (car) car.textContent = 'غير متصل';
+    } else if (st.network === 'wifi') {
+      wifi.classList.remove('off'); sig.classList.remove('off');
+      if (car) car.textContent = 'Wi-Fi';
+    } else {
+      wifi.classList.add('off'); sig.classList.remove('off');
+      if (car) car.textContent = '5G';
+    }
+  }
+}
+window.onNativeDeviceStatus = updateDeviceStatusUI;
+
 function battery() {
+  try {
+    const raw = window.AndroidHost?.getDeviceStatus?.();
+    if (raw) { updateDeviceStatusUI(JSON.parse(raw)); return; }
+  } catch (_) {}
   if (!('getBattery' in navigator)) return;
   navigator.getBattery().then(b => {
-    const sync = () => {
-      const p = Math.round(b.level * 100);
-      $('bat-pct').textContent = p;
-      $('bat-fill').style.transform = `scaleX(${p / 100})`;
-      $('bat-fill').classList.toggle('low', p <= 20);
-    };
+    const sync = () => updateDeviceStatusUI({ batteryPct: Math.round(b.level * 100), charging: !!b.charging });
     sync();
     b.addEventListener('levelchange', sync);
     b.addEventListener('chargingchange', sync);
   }).catch(() => {});
 }
 
-/* Liquid glass on the rounded-rect surfaces (card, shortcuts, DND pill).
-   The clock keeps its own TextGlass pipeline. */
 const GlassTargets = (() => {
   const targets = [];
 
@@ -3399,7 +3570,6 @@ const GlassTargets = (() => {
     }
   }
 
-  /* The card's height changes with the marquee + artwork; re-measure once after boot. */
   function refresh() {
     for (const el of targets) {
       const h = el.querySelector('.lg-shadow-layer');
@@ -3418,36 +3588,61 @@ function shortcutsRender() {
   right.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 3L7.2 5H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V7a2 2 0 00-2-2h-3.2L15 3H9zm3 15a5 5 0 110-10 5 5 0 010 10z"/></svg>`;
 }
 
+function compressImageFile(file, maxDim = 1440, opaque = true) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxDim / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+      const w = Math.max(2, Math.round((img.naturalWidth || 1) * scale));
+      const h = Math.max(2, Math.round((img.naturalHeight || 1) * scale));
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      cv.getContext('2d').drawImage(img, 0, 0, w, h);
+      resolve(cv.toDataURL(opaque ? 'image/jpeg' : 'image/png', 0.86));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('image load failed')); };
+    img.src = url;
+  });
+}
+
 /* Uploads */
 $('f-wall').addEventListener('change', (e) => {
   const f = e.target.files[0];
   if (!f) return;
-  const r = new FileReader();
-  r.onload = () => {
+  compressImageFile(f, 1440, true).then((dataUrl) => {
     state.wall = 'custom';
-    state.customWall = r.result;
-    save();
+    state.customWall = dataUrl;
+    save(true);
     Wallpapers.apply();
     Editor.build();
     setTimeout(() => { Adaptive.sample(); Clock.schedule(true); }, 140);
     toast('تم تغيير الخلفية');
-  };
-  r.readAsDataURL(f);
+  }).catch(() => toast('تعذّر قراءة الصورة'));
   e.target.value = '';
 });
 $('f-subject').addEventListener('change', (e) => {
   const f = e.target.files[0];
   if (!f) return;
-  const r = new FileReader();
-  r.onload = () => {
-    state.subject = r.result;
+  compressImageFile(f, 1440, false).then((dataUrl) => {
+    state.subject = dataUrl;
     state.depth = true;
-    save();
+    save(true);
     applyDepth();
     Editor.build();
     toast('تأثير العمق مفعّل');
-  };
-  r.readAsDataURL(f);
+  }).catch(() => toast('تعذّر قراءة الصورة'));
+  e.target.value = '';
+});
+$('f-audio').addEventListener('change', (e) => {
+  const f = e.target.files[0];
+  if (f) { Media.loadFile(f); toast('تم تحميل المقطع الصوتي'); }
+  e.target.value = '';
+});
+$('f-art').addEventListener('change', (e) => {
+  const f = e.target.files[0];
+  if (f) { Media.loadArt(f); toast('تم تحديث غلاف الألبوم'); }
   e.target.value = '';
 });
 
@@ -3455,21 +3650,41 @@ $('f-subject').addEventListener('change', (e) => {
 (() => {
   let last = 0;
   $('screen').addEventListener('pointerup', (e) => {
-    if (e.target.closest('#np, #bottom, #edit, #cam, #flash')) return;
+    if (e.target.closest('#np, #bottom, #edit, #cam, #flash, #clock-frame')) return;
     const now = performance.now();
-    if (now - last < 320) { Editor.toggle(); vib(10); }
+    if (now - last < 320) { Editor.toggle(); vib(10, 'pop'); }
     last = now;
   });
 })();
 
-/* Boot: do not cache a fallback-font mask before bundled fonts are ready. */
+window.Clock = Clock;
+window.Shortcuts = Shortcuts;
+window.Editor = Editor;
+window.Media = Media;
+window.appPause = () => save(true);
+
+/* Boot: load bundled fonts before caching initial glyph masks. */
 async function boot() {
-  await document.fonts.load(`400 128px "${state.font === 'SF' ? 'Inter' : state.font}"`);
+  await Promise.all([
+    document.fonts.load('400 128px "Bebas Neue"'),
+    document.fonts.load('400 128px "Oswald"'),
+    document.fonts.load('400 16px "Inter"')
+  ]).catch(() => {});
+
   icons();
   shortcutsRender();
   Shortcuts.bindAll();
   GlassTargets.attachAll();
   requestAnimationFrame(() => requestAnimationFrame(() => GlassTargets.refresh()));
+
+  let initialClockScheduled = false;
+  $('wall').addEventListener('load', () => {
+    Adaptive.sample();
+    if (!initialClockScheduled) {
+      initialClockScheduled = true;
+      Clock.schedule(true);
+    }
+  });
   Wallpapers.apply();
   applyUiColor();
   applyDepth();
@@ -3477,12 +3692,15 @@ async function boot() {
   applyToggles();
   Media.render();
   $('np').classList.add('in');
-  $('wall').addEventListener('load', () => {
-    Adaptive.sample();
-    Clock.schedule(true);
-  });
-  Clock.schedule(true);
   battery();
+  // Fallback if wall load already resolved synchronously before listener or failed
+  requestAnimationFrame(() => {
+    if (!initialClockScheduled) {
+      initialClockScheduled = true;
+      Adaptive.sample();
+      Clock.schedule(true);
+    }
+  });
 
   if (!canGlass) {
     const n = $('notice');
@@ -3491,24 +3709,41 @@ async function boot() {
     setTimeout(() => { n.style.display = 'none'; }, 7000);
   }
 
-  // minute tick
-  setInterval(() => { if (!document.hidden) Clock.schedule(false); }, 1000);
+  let minuteTimer = 0;
+  function scheduleMinuteTick() {
+    clearTimeout(minuteTimer);
+    const now = new Date();
+    const msToNextMin = (60 - now.getSeconds()) * 1000 - now.getMilliseconds() + 40;
+    minuteTimer = setTimeout(() => {
+      if (!document.hidden) {
+        Clock.schedule(false);
+        renderTopline();
+      }
+      scheduleMinuteTick();
+    }, Math.max(500, msToNextMin));
+  }
+  scheduleMinuteTick();
 
-  // keep a saved size legal on this screen, and after any rotation
-  setTimeout(() => Clock.guard(), 900);
   let viewportTimer = 0;
   window.addEventListener('resize', () => {
     clearTimeout(viewportTimer);
     viewportTimer = setTimeout(() => {
       Clock.guard();
       Media.measureTitle(); Media.measureBar();
+      GlassTargets.refresh();
     }, 200);
   });
 
-  // relock when the tab comes back
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) Clock.schedule(false);
+    if (!document.hidden) {
+      Clock.schedule(false);
+      renderTopline();
+      scheduleMinuteTick();
+    } else {
+      save(true);
+    }
   });
+  window.addEventListener('pagehide', () => save(true));
 }
 
 boot();

@@ -23,13 +23,14 @@
           params.shadowThickness,params.shadowAngle,Math.max(0,surface)]
           .forEach((value, i) => header.setFloat64(i*8,value,true));
         new Uint8Array(packet,80).set(meta.alpha);
-        const fail = (error) => {
+        const fail = (error, permanent = true) => {
           if (!pending || pending.jobId !== jobId) return;
-          clearTimeout(pending.timer); pending = null; enabled = false;
+          clearTimeout(pending.timer); pending = null;
+          if (permanent) enabled = false;
           stats.fallbacks++; stats.backend = 'web-worker'; showBackend(); reject(error);
         };
-        pending = {jobId,resolve,reject,fail,timer:setTimeout(()=>fail(new Error('native timeout')),8000)};
-        try { window.AndroidGlass.postMessage(packet); } catch(error) { fail(error); }
+        pending = {jobId,resolve,reject,fail,timer:setTimeout(()=>fail(new Error('native timeout'), true),3000)};
+        try { window.AndroidGlass.postMessage(packet); } catch(error) { fail(error, true); }
       });
     }
   };
@@ -40,7 +41,8 @@
     if (data.error || !Number.isFinite(data.maxAbsCss) ||
         !data.dispUrl?.startsWith('https://appassets.androidplatform.net/native-glass/') ||
         (data.shadUrl && !data.shadUrl.startsWith('https://appassets.androidplatform.net/native-glass/'))) {
-      pending.fail(new Error('invalid native result')); return;
+      pending.fail(new Error(data.error || 'invalid native result'), data.fatal !== false);
+      return;
     }
     const job = pending; pending = null; clearTimeout(job.timer);
     stats.backend = 'android-cpp'; stats.nativeMs = data.nativeMs; showBackend();

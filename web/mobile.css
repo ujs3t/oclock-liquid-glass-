@@ -1,12 +1,12 @@
 @font-face{font-family:'Bebas Neue';src:url('fonts/bebas-neue-latin-400-normal.woff2') format('woff2');font-display:swap}
 @font-face{font-family:Inter;src:url('fonts/inter-latin-400-normal.woff2') format('woff2');font-display:swap}
 @font-face{font-family:Oswald;src:url('fonts/oswald-latin-400-normal.woff2') format('woff2');font-display:swap}
-/* Loaded before the original stylesheet; !important only for runtime overrides. */
-button{touch-action:manipulation;min-height:44px}
-#edit{max-height:80dvh;scrollbar-width:thin}
+/* Loaded before the original stylesheet; keep touch targets natural without distorting circular dots. */
+button{touch-action:manipulation}
+#edit{max-height:min(49dvh,390px);scrollbar-width:thin}
 @media(prefers-reduced-motion:reduce){
  *,*::before,*::after{animation:none !important;transition-duration:.01ms !important;scroll-behavior:auto !important}
 }
-.clock-size-control{display:grid;grid-template-columns:1fr auto;gap:8px;margin:12px 4px;color:#fff;font-size:14px}
-.clock-size-control input{grid-column:1/-1;width:100%;accent-color:#cfeaff;min-height:44px;direction:ltr}
-.clock-size-control small{grid-column:1/-1;color:rgba(255,255,255,.65);font-size:11px;line-height:1.6}
+.clock-size-control{display:grid;grid-template-columns:1fr auto;gap:6px;margin:8px 4px;color:#fff;font-size:13px}
+.clock-size-control input{grid-column:1/-1;width:100%;accent-color:#cfeaff;min-height:34px;direction:ltr}
+.clock-size-control small{grid-column:1/-1;color:rgba(255,255,255,.65);font-size:11px;line-height:1.45}
