@@ -16,7 +16,7 @@
   --clock-tint: linear-gradient(180deg, rgba(255,255,255,.30), rgba(255,255,255,.10));
   --ui: #ffffff;
   --ui-dim: rgba(255,255,255,.72);
-  --glass-bg: rgba(255,255,255,.10);
+  --glass-bg: rgba(255,255,255,.05);
   --ease: cubic-bezier(.32,.72,0,1);
   --spring: cubic-bezier(.22,1.18,.36,1);
   --bounce: cubic-bezier(.2,1.52,.32,1);
@@ -156,7 +156,7 @@ body.has-subject #subject{display:block}
 
 /* ─────────────── Date + weather ─────────────── */
 #topline{
-  position:absolute;top:calc(var(--safe-t) + 62px);left:0;right:0;
+  position:absolute;top:calc(var(--safe-t) + 56px);left:0;right:0;
   display:flex;align-items:center;justify-content:center;gap:9px;
   font-size:17px;font-weight:600;letter-spacing:-.01em;
   color:var(--ui);
@@ -171,7 +171,7 @@ body.has-subject #subject{display:block}
 /* ─────────────── Clock (TextGlass) ─────────────── */
 #clock-layer{
   position:absolute;left:0;right:0;
-  top:calc(var(--safe-t) + 86px);
+  top:calc(var(--safe-t) + 76px);
   display:flex;justify-content:center;
   z-index:3;
   pointer-events:none;
@@ -994,7 +994,10 @@ body.editing #bar{opacity:.35}
     <div class="f-row" id="fonts"></div>
     <label class="clock-size-control" for="clock-size">حجم الساعة <output id="clock-size-value"></output>
       <input id="clock-size" type="range" min="56" max="420" step="2" aria-label="حجم الساعة">
-      <small>اضغط مطولًا على الساعة لزيادة الارتفاع والعرض بالمقابض. الحد الأقصى حسب مساحة الشاشة.</small>
+    </label>
+    <label class="clock-size-control" for="clock-stretch">طول الساعة (بدون تشويه الوزن) <output id="clock-stretch-value"></output>
+      <input id="clock-stretch" type="range" min="100" max="245" step="5" aria-label="طول الساعة">
+      <small>يمكنك السحب بالمنزلقين أو الضغط مطولًا على الساعة لتطويلها وتكبيرها بحرية مثل آيفون.</small>
       <small id="glass-engine-status" aria-live="polite">محرك حساب الزجاج: Web Worker</small>
     </label>
     <div class="edit-label">اللون</div>
@@ -1040,9 +1043,9 @@ const CONFIG = {
   clock: {
     font: 'Bebas Neue',   // 'Bebas Neue' | 'Oswald' | 'Inter' | 'SF'
     weight: 400,
-    size: 160,            // px — balanced iOS lock-screen scale
+    size: 172,            // px — balanced iOS lock-screen scale
     sx: 1.0,              // natural horizontal proportion
-    sy: 1.12,             // subtle tall stance without distorting strokes/colon
+    sy: 1.22,             // clean optical stance (scales up to 2.45x without thickening bars)
     tracking: -2,
     hour24: true,
     leadingZero: true
@@ -1052,7 +1055,7 @@ const CONFIG = {
     ior: 1.5,
     thickness: 40,
     bezel: 50,
-    shadow: { thickness: 1, angle: 55, intensity: 0.36 },        // glass rim shadow (cards only)
+    shadow: { thickness: 1, angle: 55, intensity: 0.30 },        // glass rim shadow (cards only)
     inner:  { thickness: 2.2, intensity: 0.42, angle: 55, color: '#ffffff' }  // INNER shadow (clock only)
   },
   depth: { enabled: false, parallax: 0 },
@@ -1073,9 +1076,9 @@ const DEFAULTS = {
   npOn: true,
   depth: false,
   dndOn: true,
-  clockSize: 160,
+  clockSize: 172,
   clockSx: 1.0,
-  clockSy: 1.12,
+  clockSy: 1.22,
   innerThickness: 2.2,
   innerIntensity: 0.42,
   innerColor: '#ffffff',
@@ -1329,7 +1332,7 @@ function applyLiquidGlass(el, opts){
     }
 
     const chain = `url(#${uid})`;
-    glassLayer.style.backdropFilter = chain + (supportsChainedFilter ? ' saturate(1.15) contrast(1.06)' : '');
+    glassLayer.style.backdropFilter = chain + (supportsChainedFilter ? ' saturate(1.22) contrast(1.06)' : '');
     glassLayer.style.webkitBackdropFilter = glassLayer.style.backdropFilter;
 
     if (!shadowEl){
@@ -1386,9 +1389,9 @@ const Glass = (() => {
     try {
       h = applyLiquidGlass(el, {
         surface: CONFIG.glass.surface,
-        ior: CONFIG.glass.ior,
-        thickness: CONFIG.glass.thickness,
-        bezel: CONFIG.glass.bezel,
+        ior: 1.54,
+        thickness: 48,
+        bezel: 40,
         radius,
         shadow: CONFIG.glass.shadow
       });
@@ -1633,6 +1636,9 @@ const Clock = (() => {
   const innerCache = new Map();
   const maskCache = new Map();
   const glassCache = new Map();
+  const glyphCache = new Map();
+  const capRatioCache = new Map();
+  const MAX_GLYPH_CACHE = 28;
 
   function lruGet(map, key) {
     if (!map.has(key)) return null;
@@ -1915,24 +1921,308 @@ const Clock = (() => {
     });
   }
 
+  function measureCapRatio(fontStr, weight) {
+    const key = `${fontStr}|${weight}`;
+    if (capRatioCache.has(key)) return capRatioCache.get(key);
+    const cv = document.createElement('canvas');
+    cv.width = 140; cv.height = 140;
+    const gx = cv.getContext('2d', { willReadFrequently: true });
+    gx.font = `${weight} 100px ${fontStr}`;
+    gx.fillStyle = '#fff';
+    gx.textAlign = 'center';
+    gx.textBaseline = 'middle';
+    gx.fillText('8', 70, 70);
+    const d = gx.getImageData(0, 0, 140, 140).data;
+    let yMin = 140, yMax = -1;
+    for (let y = 0; y < 140; y++) {
+      for (let x = 0; x < 140; x++) {
+        if (d[(y * 140 + x) * 4 + 3] > 10) {
+          if (y < yMin) yMin = y;
+          if (y > yMax) yMax = y;
+        }
+      }
+    }
+    const ratio = yMax >= yMin ? Math.max(0.55, Math.min(0.90, (yMax - yMin + 1) / 100)) : 0.73;
+    capRatioCache.set(key, ratio);
+    return ratio;
+  }
+
+  function stretchDigitBitmap(ch, fontPx, weight, fontStr, sx, sy, ss) {
+    const key = [ch, fontPx.toFixed(1), sx.toFixed(3), sy.toFixed(3), ss.toFixed(2), weight, fontStr].join('|');
+    if (glyphCache.has(key)) {
+      const hit = glyphCache.get(key);
+      glyphCache.delete(key);
+      glyphCache.set(key, hit);
+      return hit;
+    }
+
+    const vSub = sy > 1.25 ? 2 : 1;
+    const srcPx = fontPx * ss;
+    const sw = Math.ceil(srcPx * sx * 1.25) + 16;
+    const sh = Math.ceil(srcPx * vSub * 1.45) + 16;
+    const src = document.createElement('canvas');
+    src.width = sw; src.height = sh;
+    const sctx = src.getContext('2d', { willReadFrequently: true });
+    sctx.scale(sx, vSub);
+    sctx.font = `${weight} ${srcPx}px ${fontStr}`;
+    sctx.fillStyle = '#fff';
+    sctx.textAlign = 'center';
+    sctx.textBaseline = 'middle';
+    sctx.fillText(ch, sw / (2 * sx), sh / (2 * vSub));
+
+    const sData = sctx.getImageData(0, 0, sw, sh).data;
+    let xMin = sw, xMax = -1, yMin = sh, yMax = -1;
+    for (let y = 0; y < sh; y++) {
+      const row = y * sw * 4;
+      for (let x = 0; x < sw; x++) {
+        if (sData[row + x * 4 + 3] > 10) {
+          if (x < xMin) xMin = x;
+          if (x > xMax) xMax = x;
+          if (y < yMin) yMin = y;
+          if (y > yMax) yMax = y;
+        }
+      }
+    }
+    if (xMax < xMin || yMax < yMin) return null;
+
+    const W = xMax - xMin + 1;
+    const G = yMax - yMin + 1;
+    const G0 = G / vSub;
+    const targetG = Math.max(4, Math.round(G0 * sy));
+
+    // Horizontal coverage per scanline: horizontal bars/crossbars have wide ink coverage;
+    // vertical stems & open bowls have narrow ink coverage and absorb the elongation cleanly.
+    const cov = new Float32Array(G);
+    for (let r = 0; r < G; r++) {
+      const row = (yMin + r) * sw * 4;
+      let sum = 0;
+      for (let x = xMin; x <= xMax; x++) sum += sData[row + x * 4 + 3];
+      cov[r] = sum / (255 * W);
+    }
+
+    const bodyStart = Math.floor(0.16 * G);
+    const bodyEnd = Math.max(bodyStart + 1, Math.ceil(0.84 * G));
+    const bodyCov = [];
+    for (let r = bodyStart; r < bodyEnd; r++) bodyCov.push(cov[r]);
+    bodyCov.sort((a, b) => a - b);
+    const stemCov = bodyCov[Math.floor(bodyCov.length * 0.30)] || 0.35;
+    const barThresh = Math.max(0.54, Math.min(0.80, stemCov * 1.45));
+
+    let bar = new Float32Array(G);
+    for (let r = 0; r < G; r++) bar[r] = cov[r] >= barThresh ? 1 : 0;
+
+    // Protect outer rounded cap/arch tips connected to horizontal top/bottom strokes
+    const topEnd = Math.floor(0.17 * G);
+    let lastTop = -1;
+    for (let r = 0; r <= topEnd; r++) if (bar[r] > 0.5) lastTop = r;
+    if (lastTop >= 0) for (let r = 0; r <= lastTop; r++) bar[r] = 1;
+
+    const botStart = Math.floor(0.83 * G);
+    let firstBot = -1;
+    for (let r = botStart; r < G; r++) { if (bar[r] > 0.5) { firstBot = r; break; } }
+    if (firstBot >= 0) for (let r = firstBot; r < G; r++) bar[r] = 1;
+
+    // Two-pass symmetric smoothing guarantees C1 transitions with no visible creases
+    const rad = Math.max(2, Math.round(0.032 * G));
+    for (let pass = 0; pass < 2; pass++) {
+      const next = new Float32Array(G);
+      for (let r = 0; r < G; r++) {
+        let s = 0, c = 0;
+        const a = Math.max(0, r - rad), b = Math.min(G - 1, r + rad);
+        for (let k = a; k <= b; k++) { s += bar[k]; c++; }
+        next[r] = s / c;
+      }
+      bar = next;
+    }
+
+    let barMass = 0, stemMass = 0;
+    for (let r = 0; r < G; r++) {
+      barMass += bar[r] / vSub;
+      stemMass += (1 - bar[r]) / vSub;
+    }
+
+    const localScale = new Float32Array(G);
+    if (sy >= 1.0 && stemMass > 0.14 * G0) {
+      const stemStretch = Math.max(1.0, (targetG - barMass) / stemMass);
+      for (let r = 0; r < G; r++) {
+        localScale[r] = bar[r] + (1 - bar[r]) * stemStretch;
+      }
+    } else {
+      for (let r = 0; r < G; r++) localScale[r] = sy;
+    }
+
+    const cum = new Float64Array(G + 1);
+    for (let r = 0; r < G; r++) cum[r + 1] = cum[r] + localScale[r] / vSub;
+    const norm = targetG / Math.max(1e-6, cum[G]);
+    for (let r = 1; r <= G; r++) cum[r] *= norm;
+
+    const outCv = document.createElement('canvas');
+    outCv.width = W; outCv.height = targetG;
+    const octx = outCv.getContext('2d');
+    const oImg = octx.createImageData(W, targetG);
+    const oData = oImg.data;
+
+    let rCur = 0;
+    for (let dy = 0; dy < targetG; dy++) {
+      const target = dy + 0.5;
+      while (rCur < G - 1 && cum[rCur + 1] < target) rCur++;
+      const span = Math.max(1e-6, cum[rCur + 1] - cum[rCur]);
+      const frac = rCur + (target - cum[rCur]) / span - 0.5;
+      const syClamped = Math.max(0, Math.min(G - 1, frac));
+      const f0 = Math.floor(syClamped);
+      const fy = syClamped - f0;
+      const w0 = 1 - fy;
+      const y0 = yMin + f0;
+      const y1 = Math.min(yMax, y0 + 1);
+      const rowOut = dy * W * 4;
+      const row0 = y0 * sw * 4;
+      const row1 = y1 * sw * 4;
+      for (let x = 0; x < W; x++) {
+        const p = rowOut + x * 4;
+        const sxOff = (xMin + x) * 4 + 3;
+        oData[p] = 255; oData[p + 1] = 255; oData[p + 2] = 255;
+        oData[p + 3] = Math.round(sData[row0 + sxOff] * w0 + sData[row1 + sxOff] * fy);
+      }
+    }
+    octx.putImageData(oImg, 0, 0);
+
+    const res = {
+      canvas: outCv,
+      W, H: targetG,
+      xCenterOffset: ((xMin + xMax + 1) * 0.5) - sw * 0.5,
+      yCenterRel: ((((yMin + yMax + 1) * 0.5) / vSub) - (sh * 0.5 / vSub)) * sy
+    };
+    if (glyphCache.size >= MAX_GLYPH_CACHE) {
+      glyphCache.delete(glyphCache.keys().next().value);
+    }
+    glyphCache.set(key, res);
+    return res;
+  }
+
+  function getColonDots(fontPx, weight, fontStr, ss) {
+    const key = `colon|${fontPx.toFixed(1)}|${ss.toFixed(2)}|${weight}|${fontStr}`;
+    if (glyphCache.has(key)) return glyphCache.get(key);
+
+    const srcPx = fontPx * ss;
+    const sw = Math.ceil(srcPx * 0.8) + 16;
+    const sh = Math.ceil(srcPx * 1.35) + 16;
+    const src = document.createElement('canvas');
+    src.width = sw; src.height = sh;
+    const sctx = src.getContext('2d', { willReadFrequently: true });
+    sctx.font = `${weight} ${srcPx}px ${fontStr}`;
+    sctx.fillStyle = '#fff';
+    sctx.textAlign = 'center';
+    sctx.textBaseline = 'middle';
+    sctx.fillText(':', sw * 0.5, sh * 0.5);
+
+    const sData = sctx.getImageData(0, 0, sw, sh).data;
+    const mid = Math.floor(sh * 0.5);
+    const crop = (yA, yB) => {
+      let x0 = sw, x1 = -1, y0 = sh, y1 = -1;
+      for (let y = yA; y < yB; y++) {
+        const row = y * sw * 4;
+        for (let x = 0; x < sw; x++) {
+          if (sData[row + x * 4 + 3] > 10) {
+            if (x < x0) x0 = x; if (x > x1) x1 = x;
+            if (y < y0) y0 = y; if (y > y1) y1 = y;
+          }
+        }
+      }
+      if (x1 < x0 || y1 < y0) return null;
+      const cw = x1 - x0 + 1, ch = y1 - y0 + 1;
+      const cv = document.createElement('canvas');
+      cv.width = cw; cv.height = ch;
+      cv.getContext('2d').drawImage(src, x0, y0, cw, ch, 0, 0, cw, ch);
+      return { cv, w: cw, h: ch, cy: (y0 + y1 + 1) * 0.5 };
+    };
+    const top = crop(0, mid);
+    const bot = crop(mid, sh);
+    const natSep = top && bot ? (bot.cy - top.cy) * 0.5 : srcPx * 0.14;
+    const res = { top, bot, natSep };
+    if (glyphCache.size >= MAX_GLYPH_CACHE) {
+      glyphCache.delete(glyphCache.keys().next().value);
+    }
+    glyphCache.set(key, res);
+    return res;
+  }
+
+  function drawOpticalClock(ctx, lines, wCss, hCss, size, ss, c, capH) {
+    const fontStr = fontStack();
+    const weight = state.font === 'SF' ? 600 : c.weight;
+    const probe = document.createElement('canvas').getContext('2d');
+    probe.font = `${weight} ${size}px ${fontStr}`;
+    if ('letterSpacing' in probe) probe.letterSpacing = `${c.tracking}px`;
+
+    const digitTargetH = capH * c.sy * ss;
+    const lineStep = digitTargetH * 1.06;
+    const startY = ((hCss * ss) - (lines.length - 1) * lineStep) * 0.5;
+
+    lines.forEach((ln, li) => {
+      const totalW = probe.measureText(ln).width;
+      const lineCenterPx = startY + li * lineStep;
+      for (let i = 0; i < ln.length; i++) {
+        const ch = ln[i];
+        const xLeft = probe.measureText(ln.slice(0, i)).width;
+        const xRight = probe.measureText(ln.slice(0, i + 1)).width;
+        const charCenterPx = (wCss * 0.5 + ((xLeft + xRight) * 0.5 - totalW * 0.5) * c.sx) * ss;
+
+        if (ch === ':') {
+          const dots = getColonDots(size, weight, fontStr, ss);
+          if (dots.top && dots.bot) {
+            const dotScale = Math.min(1.28, 1 + Math.max(0, c.sy - 1) * 0.16) * (0.5 + 0.5 * c.sx);
+            const sep = Math.max(dots.natSep, digitTargetH * 0.158);
+            const tw = dots.top.w * dotScale, th = dots.top.h * dotScale;
+            const bw = dots.bot.w * dotScale, bh = dots.bot.h * dotScale;
+            ctx.drawImage(dots.top.cv, charCenterPx - tw * 0.5, lineCenterPx - sep - th * 0.5, tw, th);
+            ctx.drawImage(dots.bot.cv, charCenterPx - bw * 0.5, lineCenterPx + sep - bh * 0.5, bw, bh);
+          }
+          continue;
+        }
+
+        if (ch >= '0' && ch <= '9' && c.sy >= 1.03) {
+          const g = stretchDigitBitmap(ch, size, weight, fontStr, c.sx, c.sy, ss);
+          if (g) {
+            ctx.drawImage(g.canvas, charCenterPx - g.W * 0.5 + g.xCenterOffset, lineCenterPx - g.H * 0.5 + g.yCenterRel);
+            continue;
+          }
+        }
+
+        ctx.save();
+        ctx.translate(charCenterPx, lineCenterPx);
+        ctx.scale(ss * c.sx, ss * c.sy);
+        ctx.font = `${weight} ${size}px ${fontStr}`;
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(ch, 0, 0);
+        ctx.restore();
+      }
+    });
+  }
+
   function renderBitmap(lines) {
     const c = CONFIG.clock;
     const host = $('screen');
     const hostW = host.clientWidth || 390;
 
     let size = c.size;
-    // fit inside the viewport with side breathing room
-    const maxW = hostW - 16;
+    // Tight side padding so wide/tall iOS clock fills near edge-to-edge cleanly
+    const maxW = hostW - 12;
     const dpr = window.devicePixelRatio || 1;
     let ss = Math.min(3, Math.max(2, Math.round(dpr * 1.5)));
 
+    const fontStr = fontStack();
+    const weight = state.font === 'SF' ? 600 : c.weight;
+    const capRatio = measureCapRatio(fontStr, weight);
+
     const probe = document.createElement('canvas').getContext('2d');
-    probe.font = `${state.font === 'SF' ? 600 : c.weight} ${size}px ${fontStack()}`;
+    probe.font = `${weight} ${size}px ${fontStr}`;
     if ('letterSpacing' in probe) probe.letterSpacing = `${c.tracking}px`;
 
     let maxLineW = 0;
     for (const ln of lines) maxLineW = Math.max(maxLineW, probe.measureText(ln).width);
 
+    const pad = 14;
     const rawW = Math.max(40, maxLineW * c.sx);
     // One uniform fit preserves the user's glyph proportions on every screen.
     // Reserve the music/shortcut area; never write this automatic fit to storage.
@@ -1942,21 +2232,20 @@ const Clock = (() => {
     const obstacle = state.npOn ? card : bottom;
     const obstacleTop = obstacle.offsetTop || obstacle.getBoundingClientRect().top;
     const layerTop = layerEl.offsetTop || layerEl.getBoundingClientRect().top;
-    const availableH = Math.max(72, Math.min(host.clientHeight * .8,
-      obstacleTop - layerTop - 24));
-    const rawH = Math.max(40, lines.length * size * .92 * c.sy);
-    const fit = Math.min(1, (maxW - 36) / rawW, (availableH - 36) / rawH);
+    const availableH = Math.max(72, Math.min(host.clientHeight * .85,
+      obstacleTop - layerTop - 10));
+    const rawH = Math.max(40, lines.length * size * capRatio * c.sy);
+    const fit = Math.min(1, (maxW - pad * 2) / rawW, (availableH - pad * 2) / rawH);
     size *= Math.max(.1, fit);
 
-    probe.font = `${state.font === 'SF' ? 600 : c.weight} ${size}px ${fontStack()}`;
+    probe.font = `${weight} ${size}px ${fontStr}`;
     if ('letterSpacing' in probe) probe.letterSpacing = `${c.tracking}px`;
     maxLineW = 0;
     for (const ln of lines) maxLineW = Math.max(maxLineW, probe.measureText(ln).width);
 
-    const lineH = size * 0.92;
-    const pad = 18;
+    const capH = size * capRatio;
     const wCss = Math.ceil(Math.max(40, maxLineW * c.sx) + pad * 2);
-    const hCss = Math.ceil(Math.max(40, lines.length * lineH * c.sy) + pad * 2);
+    const hCss = Math.ceil(Math.max(40, lines.length * capH * c.sy) + pad * 2);
 
     const longSide = Math.max(wCss, hCss);
     if (longSide * ss > 1600) ss = Math.max(1, Math.floor((1600 / longSide) * 10) / 10);
@@ -1975,14 +2264,7 @@ const Clock = (() => {
     const cv = document.createElement('canvas');
     cv.width = w; cv.height = h;
     const ctx = cv.getContext('2d');
-    ctx.scale(ss * c.sx, ss * c.sy);
-    ctx.font = `${state.font === 'SF' ? 600 : c.weight} ${size}px ${fontStack()}`;
-    if ('letterSpacing' in ctx) ctx.letterSpacing = `${c.tracking}px`;
-    ctx.fillStyle = '#fff';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const cx = (wCss / 2) / c.sx;
-    lines.forEach((ln) => ctx.fillText(ln, cx, ((hCss / 2) / c.sy)));
+    drawOpticalClock(ctx, lines, wCss, hCss, size, ss, c, capH);
 
     const img = ctx.getImageData(0, 0, w, h);
     const alpha = new Uint8Array(w * h);
@@ -2003,8 +2285,8 @@ const Clock = (() => {
       maskUrl: cv.toDataURL('image/png'),
       size, lines,
       textW: Math.max(40, maxLineW * c.sx),
-      textH: Math.max(40, lines.length * lineH * c.sy),
-      lineH,
+      textH: Math.max(40, lines.length * capH * c.sy),
+      lineH: capH,
       pad: pad * 2
     };
     lruSet(maskCache, maskKey, built);
@@ -2062,7 +2344,7 @@ const Clock = (() => {
       el.style.webkitMaskImage = url;
     };
     const finishResizeCommit = () => {
-      if (document.body.classList.contains('resizing') && !rs && !sizeControl.dataset.dragging) {
+      if (document.body.classList.contains('resizing') && !rs && !sizeControl.dataset.dragging && !stretchControl.dataset.dragging) {
         preview = { x: 1, y: 1 };
         applyPosition();
         document.body.classList.remove('resizing');
@@ -2157,6 +2439,7 @@ const Clock = (() => {
       finishResizeCommit();
       applyPosition();
       lastCommittedSize = CONFIG.clock.size;
+      lastCommittedSy = CONFIG.clock.sy;
       glowEl.dataset.painted = String(meta.minuteKey || '');
     };
 
@@ -2328,6 +2611,7 @@ const Clock = (() => {
 
   let preview = { x: 1, y: 1 };
   let lastCommittedSize = CONFIG.clock.size;
+  let lastCommittedSy = CONFIG.clock.sy;
   let resizeCommitGuard = 0;
 
   function applyPosition() {
@@ -2508,17 +2792,16 @@ const Clock = (() => {
       CONFIG.clock.sy = rs.sy;
       syncSizeControl();
     } else {
-      // Edge handles allow subtle proportion tuning clamped to natural iOS ratios
+      // Edge handles allow width tuning (e/w) and full iPhone-style vertical stretch (n/s)
       const lim = limits();
       if (horiz) {
         const nextW = clamp(rs.w + dx * (dir.includes('w') ? -1 : 1), lim.minW, lim.maxW);
-        CONFIG.clock.sx = clamp(rs.sx * (nextW / rs.w), 0.90, 1.15);
+        CONFIG.clock.sx = clamp(rs.sx * (nextW / rs.w), 0.80, 1.20);
       }
       if (vert) {
         const nextH = clamp(rs.h + dy * (dir.includes('n') ? -1 : 1), lim.minH, lim.maxH);
-        const minRatioSy = CONFIG.clock.sx * 0.88;
-        const maxRatioSy = CONFIG.clock.sx * 1.28;
-        CONFIG.clock.sy = clamp(rs.sy * (nextH / rs.h), Math.max(0.95, minRatioSy), Math.min(1.30, maxRatioSy));
+        CONFIG.clock.sy = clamp(rs.sy * (nextH / rs.h), 0.95, Math.min(2.50, lim.maxSy));
+        syncStretchControl();
       }
     }
     renderPreview();
@@ -2602,13 +2885,23 @@ const Clock = (() => {
   }
 
   function clampSize(v) { return Math.max(56, Math.min(420, v)); }
+  function clampSy(v) { return Math.max(1.0, Math.min(2.45, v)); }
   const sizeControl = $('clock-size');
   const sizeValue = $('clock-size-value');
+  const stretchControl = $('clock-stretch');
+  const stretchValue = $('clock-stretch-value');
   function syncSizeControl() {
     sizeControl.value = String(CONFIG.clock.size);
-    sizeValue.textContent = Math.round(CONFIG.clock.size / 160 * 100) + '%';
+    sizeValue.textContent = Math.round(CONFIG.clock.size / 172 * 100) + '%';
+  }
+  function syncStretchControl() {
+    if (!stretchControl || !stretchValue) return;
+    const pct = Math.round(clamp(CONFIG.clock.sy, 1.0, 2.45) * 100);
+    stretchControl.value = String(pct);
+    stretchValue.textContent = pct + '%';
   }
   syncSizeControl();
+  syncStretchControl();
   let sizeReleaseTimer = 0;
   sizeControl.addEventListener('input', () => {
     CONFIG.clock.size = clampSize(Number(sizeControl.value));
@@ -2632,6 +2925,31 @@ const Clock = (() => {
     }, 110);
   });
 
+  let stretchReleaseTimer = 0;
+  if (stretchControl) {
+    stretchControl.addEventListener('input', () => {
+      CONFIG.clock.sy = clampSy(Number(stretchControl.value) / 100);
+      syncStretchControl();
+      persistGeometry();
+      stretchControl.dataset.dragging = '1';
+      document.body.classList.add('resizing');
+      const ratioY = CONFIG.clock.sy / Math.max(0.5, lastCommittedSy || CONFIG.clock.sy);
+      preview = { x: 1, y: ratioY };
+      applyPosition();
+      clearTimeout(stretchReleaseTimer);
+      stretchReleaseTimer = setTimeout(() => {
+        delete stretchControl.dataset.dragging;
+        clearTimeout(resizeCommitGuard);
+        resizeCommitGuard = setTimeout(() => {
+          preview = { x: 1, y: 1 };
+          applyPosition();
+          document.body.classList.remove('resizing');
+        }, 1200);
+        schedule(true);
+      }, 110);
+    });
+  }
+
   /* Undo: keeps the size from before the frame was opened. */
   let lastSize = null;
   function rememberLastSize() {
@@ -2643,6 +2961,7 @@ const Clock = (() => {
     CONFIG.clock.sx = lastSize.sx;
     CONFIG.clock.sy = lastSize.sy;
     syncSizeControl();
+    syncStretchControl();
     persistGeometry();
     Clock.schedule(true);
     scheduleResizeAutoClose();
@@ -2656,10 +2975,11 @@ const Clock = (() => {
 
   $('clock-frame-reset').addEventListener('click', (e) => {
     e.stopPropagation();
-    CONFIG.clock.size = 160;
+    CONFIG.clock.size = 172;
     CONFIG.clock.sx = 1.0;
-    CONFIG.clock.sy = 1.12;
+    CONFIG.clock.sy = 1.22;
     syncSizeControl();
+    syncStretchControl();
     persistGeometry();
     Clock.schedule(true);
     scheduleResizeAutoClose();
@@ -2839,8 +3159,8 @@ const Adaptive = (() => {
       const root = document.documentElement.style;
       const ink = lastLight ? '#12151c' : '#ffffff';
       root.setProperty('--ui', ink);
-      root.setProperty('--ui-dim', lastLight ? 'rgba(18,21,28,.66)' : 'rgba(255,255,255,.74)');
-      root.setProperty('--glass-bg', lastLight ? 'rgba(255,255,255,.34)' : 'rgba(255,255,255,.10)');
+      root.setProperty('--ui-dim', lastLight ? 'rgba(18,21,28,.68)' : 'rgba(255,255,255,.74)');
+      root.setProperty('--glass-bg', lastLight ? 'rgba(255,255,255,.06)' : 'rgba(255,255,255,.035)');
       root.setProperty('--clock-top', state.color === 'auto' ? ink : state.color);
 
       let a1, a2, base;

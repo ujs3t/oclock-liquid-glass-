@@ -51,6 +51,9 @@ test('UI bugfixes and native Android upgrades stay intact', () => {
   assert.ok(html.includes('lg-glass-layer'));
   assert.ok(html.includes('w-chip gallery'));
   assert.ok(html.includes('rs.corner'));
+  assert.ok(html.includes('stretchDigitBitmap'));
+  assert.ok(html.includes('getColonDots'));
+  assert.ok(html.includes('id="clock-stretch"'));
 
   const nativeJava = readFileSync('android/app/src/main/java/com/oclock/liquidglass/NativeGlass.java','utf8');
   assert.ok(nativeJava.includes('setLatestVersion'));
