@@ -74,12 +74,13 @@ input{font:inherit}
 #wall-dim{position:absolute;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity .5s var(--ease)}
 #wall-tint{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .6s var(--ease)}
 
-/* Depth effect: cut-out sits ABOVE the clock */
+/* Depth effect: cut-out sits ABOVE the clock (clock z-index:2 < subject z-index:3 < frame/np/topline z-index:4+) */
 #subject{
   position:absolute;inset:0;
   width:100%;height:100%;
   object-fit:cover;object-position:center;
   pointer-events:none;
+  z-index:3;
   transform:scale(var(--wall-zoom,1)) translate3d(0,0,0);
   transition:transform .7s var(--ease), opacity .5s var(--ease);
   will-change:transform;
@@ -173,7 +174,7 @@ body.has-subject #subject{display:block}
   position:absolute;left:0;right:0;
   top:calc(var(--safe-t) + 82px);
   display:flex;justify-content:center;
-  z-index:3;
+  z-index:2;
   pointer-events:none;
 }
 #clock-wrap{
@@ -209,8 +210,8 @@ body.resizing #clock-wrap{pointer-events:none}
   width:100%;height:100%;
   pointer-events:none;
   background:var(--clock-top,#fff);
-  opacity:.24;
-  transition:background .32s var(--ease), opacity .26s var(--ease);
+  opacity:var(--clock-shadow-op, .24);
+  transition:background .22s var(--ease), opacity .2s var(--ease);
   -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
   -webkit-mask-size:100% 100%;mask-size:100% 100%;
 }
@@ -728,6 +729,57 @@ body:not(.np-paused) .np-wave rect:nth-child(4){animation:eqBar .70s .24s ease-i
   box-shadow:inset 0 0 0 2px #fff, 0 0 0 2px rgba(255,255,255,.25);
 }
 .c-dot:active{transform:scale(.9)}
+.c-pro{
+  margin:4px 2px 8px;padding:10px 11px;border-radius:14px;
+  background:rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.1);
+  display:flex;flex-direction:column;gap:8px;
+}
+.c-pro-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}
+.c-pro-preview{display:flex;align-items:center;gap:8px}
+.c-pro-swatch{
+  width:22px;height:22px;border-radius:50%;
+  border:1.5px solid rgba(255,255,255,.65);
+  background:var(--clock-top,#fff);
+  position:relative;overflow:hidden;flex:none;
+}
+.c-pro-swatch input[type=color]{
+  position:absolute;inset:-6px;width:36px;height:36px;opacity:0;cursor:pointer;
+}
+#clock-hex{font-variant-numeric:tabular-nums;font-size:11.5px;color:rgba(255,255,255,.82);font-weight:600;direction:ltr}
+.c-pro-bar{
+  display:grid;grid-template-columns:48px 1fr 34px;align-items:center;gap:8px;
+  font-size:11.5px;color:rgba(255,255,255,.82);font-weight:600;
+}
+.c-pro-bar input[type=range]{
+  -webkit-appearance:none;appearance:none;width:100%;height:22px;background:transparent;outline:none;direction:ltr;touch-action:none;
+}
+.c-pro-bar input[type=range]::-webkit-slider-runnable-track{
+  height:10px;border-radius:999px;border:1px solid rgba(255,255,255,.2);
+}
+#clock-hue::-webkit-slider-runnable-track{
+  background:linear-gradient(90deg,#ff3b30 0%,#ffcc00 17%,#34c759 33%,#00c7be 50%,#007aff 67%,#af52de 83%,#ff2d55 100%);
+}
+#clock-tone::-webkit-slider-runnable-track{
+  background:linear-gradient(90deg,#000000 0%,var(--pro-hue,#7ad0ff) 50%,#ffffff 100%);
+}
+#clock-opacity::-webkit-slider-runnable-track{
+  background:linear-gradient(90deg,rgba(255,255,255,.08) 0%,var(--clock-top,#ffffff) 100%);
+}
+.c-pro-bar input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;
+  width:18px;height:18px;border-radius:50%;margin-top:-5px;
+  background:#fff;border:2px solid rgba(0,0,0,.35);
+  box-shadow:0 1px 5px rgba(0,0,0,.45);
+}
+.w-chip.ai{
+  width:auto;padding:0 12px;display:flex;align-items:center;gap:6px;
+  background:linear-gradient(135deg,rgba(90,190,255,.28),rgba(167,139,250,.28));
+  border:1px solid rgba(255,255,255,.24);
+  color:#fff;font-size:11.5px;font-weight:700;white-space:nowrap;
+}
+.w-chip.ai.busy{opacity:.72;pointer-events:none}
+#ai-depth-status{display:block;font-size:11px;color:rgba(255,255,255,.68);margin:2px 4px 4px}
 /* wallpapers */
 .w-row{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding:2px 2px 4px}
 .w-row::-webkit-scrollbar{display:none}
@@ -998,11 +1050,11 @@ body.editing #bar{opacity:.35}
       <input id="clock-size" type="range" min="56" max="420" step="2" aria-label="حجم الساعة">
     </label>
     <label class="clock-size-control" for="clock-stretch">طول الساعة (بدون تشويه الوزن) <output id="clock-stretch-value"></output>
-      <input id="clock-stretch" type="range" min="100" max="245" step="5" aria-label="طول الساعة">
+      <input id="clock-stretch" type="range" min="100" max="310" step="5" aria-label="طول الساعة">
     </label>
     <label class="clock-size-control" for="clock-y">موضع الساعة <output id="clock-y-value"></output>
       <input id="clock-y" type="range" min="-20" max="80" step="2" aria-label="موضع الساعة">
-      <small>يمكنك السحب بالمنزلقات أو الضغط مطولًا على الساعة لتكبيرها وتطويلها بحرية.</small>
+      <small>اسحب زاوية الساعة يميناً لزيادة الحجم حتى 100% ثم للأسفل لتطويلها حتى 100% بحرية.</small>
       <small id="glass-engine-status" aria-live="polite">محرك حساب الزجاج: Web Worker</small>
     </label>
     <div class="edit-label">نظام الساعة</div>
@@ -1010,10 +1062,25 @@ body.editing #bar{opacity:.35}
       <button type="button" class="t-btn" data-fmt="12">12 ساعة</button>
       <button type="button" class="t-btn" data-fmt="24">24 ساعة</button>
     </div>
-    <div class="edit-label">اللون</div>
+    <div class="edit-label">لون الساعة وشفافية الزجاج</div>
     <div class="c-row" id="colors"></div>
-    <div class="edit-label">الخلفية</div>
+    <div class="c-pro" id="clock-pro-palette">
+      <div class="c-pro-head">
+        <span>لوحة الألوان الاحترافية</span>
+        <div class="c-pro-preview">
+          <span id="clock-hex">تلقائي</span>
+          <label class="c-pro-swatch" id="clock-swatch" title="اختر أي لون بدقة">
+            <input id="clock-color-native" type="color" value="#ffffff" aria-label="اختيار لون مخصص للساعة">
+          </label>
+        </div>
+      </div>
+      <label class="c-pro-bar"><span>الطيف</span><input id="clock-hue" type="range" min="0" max="360" step="1" value="205" aria-label="درجة اللون"><b id="clock-hue-v">205°</b></label>
+      <label class="c-pro-bar"><span>الدرجة</span><input id="clock-tone" type="range" min="0" max="100" step="1" value="50" aria-label="سطوع اللون"><b id="clock-tone-v">50%</b></label>
+      <label class="c-pro-bar"><span>الشفافية</span><input id="clock-opacity" type="range" min="0" max="100" step="1" value="22" aria-label="شفافية لون الساعة"><b id="clock-opacity-v">22%</b></label>
+    </div>
+    <div class="edit-label">الخلفية وتأثير العمق (AI مجاني)</div>
     <div class="w-row" id="walls"></div>
+    <small id="ai-depth-status" aria-live="polite">الذكاء الاصطناعي المجاني لعزل الشخصية جاهز (Google ML Kit / RMBG-1.4)</small>
     <div class="edit-label">شادو الساعة الداخلي (الساعة فقط)</div>
     <div class="s-row">
       <label class="s-item">
@@ -1078,9 +1145,11 @@ const STORE_KEY = 'lock_glass_simple_v3';
 const DEFAULTS = {
   font: 'Bebas Neue',
   color: 'auto',
+  clockOpacity: 22,
   wall: 'angel',
   customWall: '',
   subject: '',
+  subjectWallKey: '',
   hour24: true,
   weatherOn: true,
   npOn: true,
@@ -2388,9 +2457,8 @@ const Clock = (() => {
       setBox(glassEl, meta.wCss, meta.hCss);
       setMask(glassEl, mask, meta.alphaKey);
       setBox(shadowEl, meta.wCss, meta.hCss);
-      /* ink follows the adaptive colour (dark on light walls, white on dark),
-         so the white halo always reads as a shadow behind the digits */
-      shadowEl.style.background = state.color === 'auto' ? '' : state.color;
+      /* --clock-top drives tint & shadow at 60fps via CSS without re-raster */
+      shadowEl.style.background = '';
       setMask(shadowEl, mask, meta.alphaKey);
       /* INNER shadow — tinted with the colour the user picked and rotated by the chosen angle. */
       const si = Math.max(0, Math.min(1, CONFIG.glass.inner.intensity));
@@ -2746,6 +2814,7 @@ const Clock = (() => {
       clearTimeout(openResize._t);
       clearTimeout(resizeCommitGuard);
       boxCache = null;
+      const m = clockMetrics();
       const dir = h.dataset.h;
       rs = {
         dir,
@@ -2753,10 +2822,11 @@ const Clock = (() => {
         scale: layerScale(),
         x0: e.clientX, y0: e.clientY,
         size: CONFIG.clock.size,
+        fitSize: m.size || lastCommittedSize || CONFIG.clock.size,
         sx: CONFIG.clock.sx,
         sy: CONFIG.clock.sy,
-        w: clockMetrics().textW,
-        h: clockMetrics().textH,
+        w: m.textW,
+        h: m.textH,
         pendX: 0, pendY: 0,
         raf: 0
       };
@@ -2775,6 +2845,8 @@ const Clock = (() => {
       cancelAnimationFrame(rs.raf);
       rs = null;
       persistGeometry();
+      const lbl = $('clock-frame-label');
+      if (lbl) lbl.textContent = 'اسحب المقبض · أو اضغط تصغير';
       // Keep preview transform + body.resizing until apply() commits the crisp bitmap
       clearTimeout(resizeCommitGuard);
       resizeCommitGuard = setTimeout(() => {
@@ -2801,9 +2873,9 @@ const Clock = (() => {
     return lastMetrics;
   }
 
-  /* One rAF per frame. Each axis is independent; whatever the pointer does,
-     the result is clamped so the digits can never leave the screen, reach the
-     status bar / island, or overlap the music card. */
+  /* One rAF per frame. Free 2D dragging: horizontal drag scales clock width up to
+     100% of screen width; vertical drag stretches clock height optically up to 100%
+     of available lock-screen height without thickening horizontal strokes. */
   function applyHandleDelta() {
     if (!rs) return;
     rs.raf = 0;
@@ -2812,43 +2884,54 @@ const Clock = (() => {
     const dir = rs.dir;
     const horiz = /e|w/.test(dir);
     const vert = /n|s/.test(dir);
+    const lim = limits();
+    const fitSz = Math.max(40, rs.fitSize || rs.size);
+    const fullWidthSize = clampSize(Math.round(fitSz * (lim.maxW / Math.max(40, rs.w))));
 
-    if (rs.corner) {
-      // Corners scale the clock proportionally without stretching/distorting glyphs
-      const kx = (dx * (dir.includes('w') ? -1 : 1)) / Math.max(40, rs.w);
-      const ky = (dy * (dir.includes('n') ? -1 : 1)) / Math.max(40, rs.h);
-      const factor = clamp(1 + (kx + ky) * 0.5, 56 / Math.max(40, rs.size), 420 / Math.max(40, rs.size));
-      CONFIG.clock.size = clampSize(Math.round(rs.size * factor));
-      CONFIG.clock.sx = rs.sx;
-      CONFIG.clock.sy = rs.sy;
+    if (horiz) {
+      const dxOut = dx * (dir.includes('w') ? -2 : 2);
+      const nextW = clamp(rs.w + dxOut, 80, lim.maxW);
+      CONFIG.clock.size = clamp(Math.round(fitSz * (nextW / Math.max(40, rs.w))), 56, fullWidthSize);
+      CONFIG.clock.sx = 1.0;
       syncSizeControl();
-    } else {
-      // Edge handles allow width tuning (e/w) and full iPhone-style vertical stretch (n/s)
-      const lim = limits();
-      if (horiz) {
-        const nextW = clamp(rs.w + dx * (dir.includes('w') ? -1 : 1), lim.minW, lim.maxW);
-        CONFIG.clock.sx = clamp(rs.sx * (nextW / rs.w), 0.80, 1.20);
+    }
+
+    const baseHAtSize = (rs.h / Math.max(0.5, rs.sy)) * (CONFIG.clock.size / fitSz);
+    const maxSyAtSize = clamp(lim.maxH / Math.max(40, baseHAtSize), 1.0, 3.10);
+
+    if (vert) {
+      const dyOut = dy * (dir.includes('n') ? -1 : 1);
+      if (dyOut >= 0) {
+        const roomPx = Math.max(60, lim.maxH - rs.h);
+        CONFIG.clock.sy = clamp(rs.sy + (dyOut / roomPx) * Math.max(0.35, maxSyAtSize - rs.sy), 1.0, maxSyAtSize);
+      } else {
+        const shrinkPx = Math.max(70, rs.h * 0.65);
+        CONFIG.clock.sy = clamp(rs.sy + (dyOut / shrinkPx) * Math.max(0.25, rs.sy - 1.0), 1.0, maxSyAtSize);
       }
-      if (vert) {
-        const nextH = clamp(rs.h + dy * (dir.includes('n') ? -1 : 1), lim.minH, lim.maxH);
-        CONFIG.clock.sy = clamp(rs.sy * (nextH / rs.h), 0.95, Math.min(2.50, lim.maxSy));
-        syncStretchControl();
-      }
+      syncStretchControl();
+    } else if (CONFIG.clock.sy > maxSyAtSize) {
+      CONFIG.clock.sy = maxSyAtSize;
+      syncStretchControl();
+    }
+
+    const lbl = $('clock-frame-label');
+    if (lbl) {
+      const wPct = Math.round(clamp((CONFIG.clock.size / Math.max(56, fullWidthSize)) * 100, 15, 100));
+      const hPct = Math.round(clamp(((CONFIG.clock.sy - 1.0) / Math.max(0.1, maxSyAtSize - 1.0)) * 100, 0, 100));
+      lbl.textContent = `الحجم ${wPct}% · الطول ${hPct}%`;
     }
     renderPreview();
   }
 
   function renderPreview() {
     if (!rs) return;
-    if (rs.corner) {
-      const k = CONFIG.clock.size / Math.max(40, lastCommittedSize || rs.size);
-      preview = { x: k, y: k };
-    } else {
-      preview = {
-        x: CONFIG.clock.sx / rs.sx,
-        y: CONFIG.clock.sy / rs.sy
-      };
-    }
+    const baseSize = Math.max(40, clockMetrics().size || lastCommittedSize || rs.fitSize || rs.size);
+    const baseSy = Math.max(0.5, lastCommittedSy || rs.sy);
+    const kSize = CONFIG.clock.size / baseSize;
+    preview = {
+      x: kSize * (CONFIG.clock.sx / rs.sx),
+      y: kSize * (CONFIG.clock.sy / baseSy)
+    };
     // one composited write, no layout reads in the hot path
     wrap.style.transform =
       `translate3d(${pos.x}px, ${pos.y}px, 0) scale(${preview.x}, ${preview.y})`;
@@ -2917,7 +3000,7 @@ const Clock = (() => {
   }
 
   function clampSize(v) { return Math.max(56, Math.min(420, v)); }
-  function clampSy(v) { return Math.max(1.0, Math.min(2.45, v)); }
+  function clampSy(v) { return Math.max(1.0, Math.min(3.10, v)); }
   function clampY(v) { return Math.max(-20, Math.min(80, v)); }
   const sizeControl = $('clock-size');
   const sizeValue = $('clock-size-value');
@@ -2931,7 +3014,7 @@ const Clock = (() => {
   }
   function syncStretchControl() {
     if (!stretchControl || !stretchValue) return;
-    const pct = Math.round(clamp(CONFIG.clock.sy, 1.0, 2.45) * 100);
+    const pct = Math.round(clamp(CONFIG.clock.sy, 1.0, 3.10) * 100);
     stretchControl.value = String(pct);
     stretchValue.textContent = pct + '%';
   }
@@ -3223,22 +3306,182 @@ const Adaptive = (() => {
       root.setProperty('--glass-bg', lastLight ? 'rgba(255,255,255,.08)' : 'rgba(255,255,255,.04)');
       root.setProperty('--clock-top', state.color === 'auto' ? ink : state.color);
 
-      let a1, a2, base;
-      if (state.color === 'auto') {
-        // Translucent frosted crystal tint: smoky glass on bright skies, milky luminescence on dark walls
-        a1 = lastLight ? 0.34 : 0.28;
-        a2 = lastLight ? 0.14 : 0.08;
-        base = lastLight ? [18, 24, 34] : [255, 255, 255];
+      const p = clamp01((state.clockOpacity ?? 22) / 100);
+      root.setProperty('--clock-shadow-op', p <= 0 ? '0' : (p * 0.24).toFixed(3));
+
+      const base = state.color === 'auto'
+        ? (lastLight ? [18, 24, 34] : [255, 255, 255])
+        : hexToRgb(state.color);
+
+      if (p <= 0.001) {
+        root.setProperty('--clock-tint', 'transparent');
+      } else if (p >= 0.995) {
+        root.setProperty('--clock-tint', `rgb(${base[0]},${base[1]},${base[2]})`);
       } else {
-        base = hexToRgb(state.color);
-        a1 = 0.38; a2 = 0.14;
+        const a1 = p;
+        const a2 = p < 0.72 ? p * 0.45 : p * (0.45 + 0.55 * ((p - 0.72) / 0.28));
+        root.setProperty('--clock-tint',
+          `linear-gradient(180deg, rgba(${base[0]},${base[1]},${base[2]},${a1.toFixed(3)}) 0%, rgba(${base[0]},${base[1]},${base[2]},${a2.toFixed(3)}) 100%)`);
       }
-      root.setProperty('--clock-tint',
-        `linear-gradient(180deg, rgba(${base[0]},${base[1]},${base[2]},${a1}) 0%, rgba(${base[0]},${base[1]},${base[2]},${a2}) 100%)`);
     } catch (e) { /* not ready */ }
   }
 
   return { sample };
+})();
+
+/* ============================================================================
+   4b. AI DEPTH EXTRACTION (Free & Unlimited: Google ML Kit Native + RMBG-1.4 Web)
+   ========================================================================= */
+const AIDepth = (() => {
+  let busy = false;
+  let seq = 0;
+  let webPipeline = null;
+  const pending = new Map();
+
+  function setStatus(msg) {
+    const el = $('ai-depth-status');
+    if (el && msg) el.textContent = msg;
+    const btn = document.querySelector('.w-chip.ai');
+    if (btn) btn.classList.toggle('busy', busy);
+  }
+
+  window.onSubjectDepthProgress = (reqId, pct, msg) => {
+    if (!pending.has(reqId)) return;
+    setStatus(`${msg || 'جاري العزل…'} (${pct}%)`);
+  };
+  window.onSubjectDepthReady = async (reqId, url) => {
+    const job = pending.get(reqId);
+    if (!job) return;
+    pending.delete(reqId);
+    try {
+      const resp = await fetch(url, { cache: 'no-store' });
+      const blob = await resp.blob();
+      const dataUrl = await new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(fr.result);
+        fr.onerror = () => reject(new Error('read failed'));
+        fr.readAsDataURL(blob);
+      });
+      job.resolve(dataUrl);
+    } catch (e) {
+      job.reject(e);
+    }
+  };
+  window.onSubjectDepthError = (reqId, code, msg) => {
+    const job = pending.get(reqId);
+    if (!job) return;
+    pending.delete(reqId);
+    const err = new Error(msg || code || 'AI error');
+    err.code = code;
+    job.reject(err);
+  };
+
+  function runNative(dataUrl) {
+    return new Promise((resolve, reject) => {
+      if (!window.AndroidHost?.segmentSubject) {
+        const e = new Error('NO_NATIVE_AI'); e.code = 'PLAY_SERVICES_UNAVAILABLE'; reject(e); return;
+      }
+      const reqId = 'sd_' + (++seq);
+      pending.set(reqId, { resolve, reject });
+      try {
+        window.AndroidHost.segmentSubject(reqId, dataUrl);
+      } catch (e) {
+        pending.delete(reqId);
+        reject(e);
+      }
+    });
+  }
+
+  async function runWebCloudAI(dataUrl) {
+    setStatus('جاري تحميل نموذج الذكاء الاصطناعي المجاني (RMBG-1.4)…');
+    if (!webPipeline) {
+      const transformers = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.3');
+      transformers.env.allowLocalModels = false;
+      const { AutoModel, AutoProcessor, RawImage } = transformers;
+      const model = await AutoModel.from_pretrained('briaai/RMBG-1.4', { config: { model_type: 'custom' } });
+      const processor = await AutoProcessor.from_pretrained('briaai/RMBG-1.4', {
+        config: {
+          do_normalize: true, do_pad: false, do_rescale: true, do_resize: true,
+          image_mean: [0.5, 0.5, 0.5], feature_extractor_type: 'ImageFeatureExtractor',
+          image_std: [1, 1, 1], resample: 2,
+          rescale_factor: 0.00392156862745098, size: { width: 1024, height: 1024 }
+        }
+      });
+      webPipeline = { model, processor, RawImage };
+    }
+    setStatus('جاري عزل الشخصية بالذكاء الاصطناعي…');
+    const { model, processor, RawImage } = webPipeline;
+    const image = await RawImage.fromURL(dataUrl);
+    const { pixel_values } = await processor(image);
+    const { output } = await model({ input: pixel_values });
+    const scale = Math.min(1, 960 / Math.max(image.width, image.height));
+    const ow = Math.max(2, Math.round(image.width * scale));
+    const oh = Math.max(2, Math.round(image.height * scale));
+    const mask = await RawImage.fromTensor(output[0].mul(255).to('uint8')).resize(ow, oh);
+    const cv = document.createElement('canvas');
+    cv.width = ow; cv.height = oh;
+    const ctx = cv.getContext('2d');
+    const baseImg = new Image();
+    baseImg.src = dataUrl;
+    await baseImg.decode();
+    ctx.drawImage(baseImg, 0, 0, ow, oh);
+    const px = ctx.getImageData(0, 0, cv.width, cv.height);
+    let fgCount = 0;
+    for (let i = 0; i < mask.data.length; i++) {
+      const a = mask.data[i];
+      if (a > 120) fgCount++;
+      px.data[i * 4 + 3] = a;
+    }
+    const cov = fgCount / Math.max(1, mask.data.length);
+    if (cov < 0.006 || cov > 0.96) {
+      const e = new Error('لم يتم العثور على عنصر واضح لعزله'); e.code = 'NO_SUBJECT'; throw e;
+    }
+    ctx.putImageData(px, 0, 0);
+    return cv.toDataURL('image/png');
+  }
+
+  function currentWallKey() {
+    return state.wall === 'custom'
+      ? 'custom:' + (state.customWall || '').slice(0, 48) + ':' + (state.customWall || '').length
+      : 'preset:' + state.wall;
+  }
+
+  async function extractForCurrentWall() {
+    if (busy) return;
+    const srcUrl = Wallpapers.urlFor(state.wall);
+    if (!srcUrl) return;
+    busy = true;
+    setStatus('جاري تحليل الخلفية بالذكاء الاصطناعي…');
+    try {
+      let cutoutUrl = '';
+      try {
+        cutoutUrl = await runNative(srcUrl);
+      } catch (nativeErr) {
+        if (nativeErr?.code === 'NO_SUBJECT') throw nativeErr;
+        cutoutUrl = await runWebCloudAI(srcUrl);
+      }
+      state.subject = cutoutUrl;
+      state.subjectWallKey = currentWallKey();
+      state.depth = true;
+      save(true);
+      applyDepth();
+      Editor.build();
+      setStatus('تم تفعيل تأثير العمق بالذكاء الاصطناعي بنجاح');
+      toast('الساعة الآن خلف الشخصية تلقائياً');
+      vib(12, 'pop');
+    } catch (e) {
+      const msg = e?.code === 'NO_SUBJECT'
+        ? 'لم يتم العثور على شخصية أو عنصر بارز في هذه الخلفية'
+        : 'تعذّر عزل الشخصية — تأكد من الاتصال أول مرة أو جرّب صورة أوضح';
+      setStatus(msg);
+      toast(msg);
+    } finally {
+      busy = false;
+      setStatus();
+    }
+  }
+
+  return { extractForCurrentWall, currentWallKey, isBusy: () => busy };
 })();
 
 /* Dynamic Island live activity pill */
@@ -3741,7 +3984,30 @@ const Editor = (() => {
     ['Inter', 'إنتر', 'Inter'],
     ['SF', 'آيفون', 'SF']
   ];
-  const COLORS = ['auto', '#ffffff', '#e5e5ea', '#8e8e93', '#1c1c1e', '#ffd60a', '#7ad0ff', '#a78bfa', '#ff7eb6', '#ff9f6b'];
+  const COLORS = ['auto', '#000000', '#ffffff', '#e5e5ea', '#8e8e93', '#1c1c1e', '#ffd60a', '#7ad0ff', '#a78bfa', '#ff7eb6', '#ff9f6b', '#34d399', '#ff453a'];
+
+  function hslToHex(h, s, l) {
+    s /= 100; l /= 100;
+    const k = (n) => (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const f = (n) => Math.round(255 * (l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)))));
+    return '#' + [f(0), f(8), f(4)].map((x) => x.toString(16).padStart(2, '0')).join('');
+  }
+  function hexToHsl(hex) {
+    const [r0, g0, b0] = hexToRgb(hex);
+    const r = r0 / 255, g = g0 / 255, b = b0 / 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    let h = 0, s = 0;
+    const l = (mx + mn) / 2;
+    if (mx !== mn) {
+      const d = mx - mn;
+      s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+      if (mx === r) h = ((g - b) / d + (g < b ? 6 : 0)) * 60;
+      else if (mx === g) h = ((b - r) / d + 2) * 60;
+      else h = ((r - g) / d + 4) * 60;
+    }
+    return [Math.round(h), Math.round(s * 100), Math.round(l * 100)];
+  }
 
   function fontChips() {
     const row = $('fonts');
@@ -3758,6 +4024,34 @@ const Editor = (() => {
     });
   }
 
+  function syncProPalette() {
+    const hueEl = $('clock-hue'), toneEl = $('clock-tone'), opEl = $('clock-opacity');
+    const hexEl = $('clock-hex'), natEl = $('clock-color-native'), palEl = $('clock-pro-palette');
+    const op = Math.round(clamp01((state.clockOpacity ?? 22) / 100) * 100);
+    if (opEl) opEl.value = String(op);
+    if ($('clock-opacity-v')) $('clock-opacity-v').textContent = op + '%';
+
+    if (state.color === 'auto') {
+      if (hexEl) hexEl.textContent = 'تلقائي';
+      if (natEl) natEl.value = '#ffffff';
+      if (palEl) palEl.style.setProperty('--pro-hue', '#7ad0ff');
+      return;
+    }
+    const [h, _s, l] = hexToHsl(state.color);
+    if (hueEl && $('clock-hue-v')) {
+      const hh = Number(hueEl.dataset.editing ? hueEl.value : h);
+      hueEl.value = String(hh);
+      $('clock-hue-v').textContent = hh + '°';
+      if (palEl) palEl.style.setProperty('--pro-hue', `hsl(${hh},100%,50%)`);
+    }
+    if (toneEl && $('clock-tone-v')) {
+      toneEl.value = String(l);
+      $('clock-tone-v').textContent = l + '%';
+    }
+    if (hexEl) hexEl.textContent = state.color.toUpperCase();
+    if (natEl) natEl.value = /^#[0-9a-f]{6}$/i.test(state.color) ? state.color : '#ffffff';
+  }
+
   function colorChips() {
     const row = $('colors');
     row.innerHTML = COLORS.map(c => c === 'auto'
@@ -3766,9 +4060,11 @@ const Editor = (() => {
     row.querySelectorAll('[data-color]').forEach(b => {
       b.addEventListener('click', () => {
         state.color = b.dataset.color;
-        save(); colorChips(); applyUiColor(); Adaptive.sample(); Clock.schedule(true, 40); vib(6, 'tick');
+        if ($('clock-hue')) delete $('clock-hue').dataset.editing;
+        save(); colorChips(); syncProPalette(); applyUiColor(); Adaptive.sample(); vib(6, 'tick');
       });
     });
+    syncProPalette();
   }
 
   function wallChips() {
@@ -3776,20 +4072,26 @@ const Editor = (() => {
     const chips = Wallpapers.PRESETS.map(p => `
       <button class="w-chip ${state.wall === p ? 'sel' : ''}" data-wall="${p}" aria-label="خلفية ${p}" style="background-image:url('${Wallpapers.thumb(p)}')"></button>`).join('');
     const galleryIc = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 15l-4.5-4.5L7 20"/></svg>';
+    const sparkIc = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.2L19 10l-5.1 1.8L12 17l-1.9-5.2L5 10l5.1-1.8z"/><path d="M19 3v3M20.5 4.5h-3M5 17v3M6.5 18.5h-3"/></svg>';
     const person = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="7" r="3.2"/><path d="M5.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/></svg>';
     row.innerHTML = chips + `
       <button class="w-chip gallery ${state.wall === 'custom' ? 'sel' : ''}" data-upload="1" title="اختيار صورة من المعرض" aria-label="اختيار صورة من معرض الجهاز">${galleryIc}<span>صور جهازي</span></button>
-      <button class="w-chip upload" data-subject="1" title="صورة أمام الساعة (عمق)" aria-label="صورة أمام الساعة">${person}</button>`;
+      <button class="w-chip ai ${AIDepth.isBusy() ? 'busy' : ''}" data-ai-depth="1" title="عزل الشخصية تلقائياً بالذكاء الاصطناعي المجاني" aria-label="عزل الشخصية بالذكاء الاصطناعي">${sparkIc}<span>عزل بالذكاء AI</span></button>
+      <button class="w-chip upload" data-subject="1" title="رفع صورة شفافة يدوياً (PNG)" aria-label="صورة أمام الساعة">${person}</button>`;
     row.querySelectorAll('[data-wall]').forEach(b => {
       b.addEventListener('click', () => {
         state.wall = b.dataset.wall;
         save(); Wallpapers.apply(); wallChips();
         setTimeout(() => Adaptive.sample(), 60);
         setTimeout(() => Clock.schedule(true), 240);
+        if (state.depth && state.subjectWallKey !== AIDepth.currentWallKey()) {
+          setTimeout(() => AIDepth.extractForCurrentWall(), 180);
+        }
         vib(6, 'tick');
       });
     });
     row.querySelector('[data-upload]').addEventListener('click', () => $('f-wall').click());
+    row.querySelector('[data-ai-depth]').addEventListener('click', () => AIDepth.extractForCurrentWall());
     row.querySelector('[data-subject]').addEventListener('click', () => $('f-subject').click());
   }
 
@@ -3823,7 +4125,13 @@ const Editor = (() => {
         save(); toggles(); applyToggles(); vib(8, 'pop');
         if (k === 'npOn') setTimeout(() => Clock.guard(), 40);
         if (k === 'dndOn') Island.pulse(state.dndOn ? 'عدم الإزعاج مفعّل' : 'إيقاف عدم الإزعاج', state.dndOn ? '#a78bfa' : '#8e8e93', 1800);
-        if (k === 'depth') applyDepth();
+        if (k === 'depth') {
+          if (state.depth && (!state.subject || state.subjectWallKey !== AIDepth.currentWallKey())) {
+            AIDepth.extractForCurrentWall();
+          } else {
+            applyDepth();
+          }
+        }
       });
     });
     $('pick-audio').addEventListener('click', () => $('f-audio').click());
@@ -3943,6 +4251,51 @@ const Editor = (() => {
           save(); fmtChips(); Clock.schedule(true, 40); vib(8, 'pop');
         });
       });
+    }
+
+    const hueEl = $('clock-hue'), toneEl = $('clock-tone'), opEl = $('clock-opacity'), natEl = $('clock-color-native');
+    let colTimer = 0, opTimer = 0;
+    const applyProHex = () => {
+      if (!hueEl || !toneEl) return;
+      const h = Number(hueEl.value), l = Number(toneEl.value);
+      state.color = hslToHex(h, 100, l);
+      applyUiColor();
+      Adaptive.sample();
+      syncProPalette();
+      document.querySelectorAll('#colors [data-color]').forEach((el) => {
+        el.classList.toggle('sel', el.dataset.color.toLowerCase() === state.color.toLowerCase());
+      });
+      clearTimeout(colTimer);
+      colTimer = setTimeout(() => save(), 180);
+    };
+    if (hueEl) {
+      hueEl.addEventListener('input', () => { hueEl.dataset.editing = '1'; applyProHex(); });
+      hueEl.addEventListener('change', () => { delete hueEl.dataset.editing; save(); });
+    }
+    if (toneEl) {
+      toneEl.addEventListener('input', applyProHex);
+      toneEl.addEventListener('change', () => save());
+    }
+    if (natEl) {
+      natEl.addEventListener('input', () => {
+        if (hueEl) delete hueEl.dataset.editing;
+        state.color = natEl.value;
+        applyUiColor();
+        Adaptive.sample();
+        colorChips();
+        clearTimeout(colTimer);
+        colTimer = setTimeout(() => save(), 180);
+      });
+    }
+    if (opEl) {
+      opEl.addEventListener('input', () => {
+        state.clockOpacity = Number(opEl.value);
+        if ($('clock-opacity-v')) $('clock-opacity-v').textContent = state.clockOpacity + '%';
+        Adaptive.sample();
+        clearTimeout(opTimer);
+        opTimer = setTimeout(() => save(), 180);
+      });
+      opEl.addEventListener('change', () => save());
     }
   }
 
@@ -4142,19 +4495,26 @@ $('f-wall').addEventListener('change', (e) => {
   compressImageFile(f, 1440, true).then((dataUrl) => {
     state.wall = 'custom';
     state.customWall = dataUrl;
+    state.subject = '';
+    state.subjectWallKey = '';
     save(true);
     Wallpapers.apply();
+    applyDepth();
     Editor.build();
     setTimeout(() => { Adaptive.sample(); Clock.schedule(true); }, 140);
     toast('تم تغيير الخلفية');
+    if (state.depth) {
+      setTimeout(() => AIDepth.extractForCurrentWall(), 220);
+    }
   }).catch(() => toast('تعذّر قراءة الصورة'));
   e.target.value = '';
 });
 $('f-subject').addEventListener('change', (e) => {
   const f = e.target.files[0];
   if (!f) return;
-  compressImageFile(f, 1440, false).then((dataUrl) => {
+  compressImageFile(f, 960, false).then((dataUrl) => {
     state.subject = dataUrl;
+    state.subjectWallKey = AIDepth.currentWallKey();
     state.depth = true;
     save(true);
     applyDepth();
@@ -4189,6 +4549,7 @@ window.Clock = Clock;
 window.Shortcuts = Shortcuts;
 window.Editor = Editor;
 window.Media = Media;
+window.AIDepth = AIDepth;
 window.appPause = () => save(true);
 
 /* Boot: load bundled fonts before caching initial glyph masks. */

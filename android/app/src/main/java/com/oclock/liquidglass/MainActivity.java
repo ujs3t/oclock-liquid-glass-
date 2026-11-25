@@ -7,6 +7,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
@@ -21,6 +23,7 @@ import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
 import android.provider.MediaStore;
+import android.util.Base64;
 import android.view.DisplayCutout;
 import android.view.View;
 import android.view.WindowInsets;
@@ -37,14 +40,34 @@ import android.webkit.WebViewClient;
 import androidx.webkit.WebViewAssetLoader;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
+import com.google.android.gms.common.moduleinstall.InstallStatusListener;
+import com.google.android.gms.common.moduleinstall.ModuleInstall;
+import com.google.android.gms.common.moduleinstall.ModuleInstallClient;
+import com.google.android.gms.common.moduleinstall.ModuleInstallRequest;
+import com.google.android.gms.common.moduleinstall.ModuleInstallStatusUpdate;
+import com.google.mlkit.vision.common.InputImage;
+import com.google.mlkit.vision.segmentation.subject.SubjectSegmentation;
+import com.google.mlkit.vision.segmentation.subject.SubjectSegmenter;
+import com.google.mlkit.vision.segmentation.subject.SubjectSegmenterOptions;
 import org.json.JSONException;
 import org.json.JSONObject;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.nio.FloatBuffer;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private static final String ORIGIN = "https://appassets.androidplatform.net";
     private WebView web;
     private NativeGlass nativeGlass;
+    private SubjectSegmenter subjectSegmenter;
+    private final ExecutorService segmentExecutor = Executors.newSingleThreadExecutor();
+    private final Map<String, byte[]> subjectResults = new ConcurrentHashMap<>();
     private ValueCallback<Uri[]> files;
     private PermissionRequest camera;
     private volatile boolean awaitingExternalActivity;
@@ -97,9 +120,19 @@ public class MainActivity extends Activity {
         web.setWebViewClient(new WebViewClient() {
             @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 Uri uri = request.getUrl();
-                if (nativeGlass != null && ORIGIN.equals(uri.getScheme() + "://" + uri.getHost()) &&
-                    uri.getPath() != null && uri.getPath().startsWith("/native-glass/"))
-                    return nativeGlass.intercept(uri.getPath());
+                String path = uri.getPath();
+                if (ORIGIN.equals(uri.getScheme() + "://" + uri.getHost()) && path != null) {
+                    if (nativeGlass != null && path.startsWith("/native-glass/"))
+                        return nativeGlass.intercept(path);
+                    if (path.startsWith("/native-subject/")) {
+                        String token = path.substring("/native-subject/".length());
+                        byte[] png = subjectResults.remove(token);
+                        if (png == null) return new WebResourceResponse("text/plain", "utf-8", 404, "Not Found", Collections.emptyMap(), new ByteArrayInputStream(new byte[0]));
+                        Map<String, String> headers = new HashMap<>();
+                        headers.put("Cache-Control", "no-store");
+                        return new WebResourceResponse("image/png", null, 200, "OK", headers, new ByteArrayInputStream(png));
+                    }
+                }
                 return assets.shouldInterceptRequest(uri);
             }
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -405,6 +438,181 @@ public class MainActivity extends Activity {
         } catch (RuntimeException ignored) {}
     }
 
+    private synchronized SubjectSegmenter getSubjectSegmenter() {
+        if (subjectSegmenter == null) {
+            SubjectSegmenterOptions opts = new SubjectSegmenterOptions.Builder()
+                .enableForegroundConfidenceMask()
+                .build();
+            subjectSegmenter = SubjectSegmentation.getClient(opts);
+        }
+        return subjectSegmenter;
+    }
+
+    private void pushSubjectProgress(String reqId, int pct, String msg) {
+        if (web == null) return;
+        String js = "window.onSubjectDepthProgress && window.onSubjectDepthProgress(" +
+            JSONObject.quote(reqId) + "," + pct + "," + JSONObject.quote(msg) + ")";
+        web.post(() -> { if (web != null) web.evaluateJavascript(js, null); });
+    }
+
+    private void pushSubjectError(String reqId, String code, String msg) {
+        if (web == null) return;
+        String js = "window.onSubjectDepthError && window.onSubjectDepthError(" +
+            JSONObject.quote(reqId) + "," + JSONObject.quote(code) + "," + JSONObject.quote(msg) + ")";
+        web.post(() -> { if (web != null) web.evaluateJavascript(js, null); });
+    }
+
+    private void runSegmentationOnBitmap(String reqId, Bitmap bmp, SubjectSegmenter seg) {
+        pushSubjectProgress(reqId, 72, "جاري استخراج الشخصية بالذكاء الاصطناعي…");
+        InputImage inputImage = InputImage.fromBitmap(bmp, 0);
+        seg.process(inputImage)
+            .addOnSuccessListener(result -> segmentExecutor.execute(() -> {
+                try {
+                    int w = bmp.getWidth(), h = bmp.getHeight();
+                    FloatBuffer mask = result.getForegroundConfidenceMask();
+                    if (mask == null || mask.limit() < w * h) {
+                        bmp.recycle();
+                        pushSubjectError(reqId, "NO_MASK", "No foreground mask");
+                        return;
+                    }
+                    mask.rewind();
+                    int total = w * h;
+                    int fgCount = 0;
+                    int[] src = new int[total];
+                    bmp.getPixels(src, 0, w, 0, 0, w, h);
+                    bmp.recycle();
+                    int[] out = new int[total];
+                    for (int i = 0; i < total; i++) {
+                        float c = mask.get(i);
+                        if (c > 0.48f) fgCount++;
+                        if (c <= 0.28f) {
+                            out[i] = 0;
+                        } else {
+                            float t = Math.min(1f, (c - 0.28f) / 0.44f);
+                            float smooth = t * t * (3f - 2f * t);
+                            int a = Math.min(255, Math.max(0, Math.round(smooth * 255f)));
+                            out[i] = (a << 24) | (src[i] & 0x00ffffff);
+                        }
+                    }
+                    float coverage = (float) fgCount / (float) Math.max(1, total);
+                    if (coverage < 0.006f || coverage > 0.96f) {
+                        pushSubjectError(reqId, "NO_SUBJECT", "لم يتم العثور على عنصر واضح لعزله");
+                        return;
+                    }
+                    Bitmap cutout = Bitmap.createBitmap(out, w, h, Bitmap.Config.ARGB_8888);
+                    ByteArrayOutputStream baos = new ByteArrayOutputStream(w * h / 2);
+                    cutout.compress(Bitmap.CompressFormat.PNG, 100, baos);
+                    cutout.recycle();
+                    String token = reqId.replaceAll("[^A-Za-z0-9_-]", "") + "_" + System.nanoTime() + ".png";
+                    subjectResults.put(token, baos.toByteArray());
+                    String js = "window.onSubjectDepthReady && window.onSubjectDepthReady(" +
+                        JSONObject.quote(reqId) + "," + JSONObject.quote("/native-subject/" + token) + ")";
+                    if (web != null) web.post(() -> { if (web != null) web.evaluateJavascript(js, null); });
+                } catch (Throwable err) {
+                    pushSubjectError(reqId, "ENCODE_FAILED", String.valueOf(err.getMessage()));
+                }
+            }))
+            .addOnFailureListener(e -> {
+                bmp.recycle();
+                pushSubjectError(reqId, "MLKIT_FAILED", e.getMessage() != null ? e.getMessage() : "MLKit error");
+            });
+    }
+
+    private void startSubjectSegmentation(String reqId, String dataUrl) {
+        if (dataUrl == null || dataUrl.isEmpty()) {
+            pushSubjectError(reqId, "EMPTY_IMAGE", "No image data");
+            return;
+        }
+        pushSubjectProgress(reqId, 10, "جاري تجهيز الصورة…");
+        segmentExecutor.execute(() -> {
+            try {
+                int comma = dataUrl.indexOf(',');
+                String b64 = comma >= 0 ? dataUrl.substring(comma + 1) : dataUrl;
+                byte[] raw = Base64.decode(b64, Base64.DEFAULT);
+                BitmapFactory.Options bounds = new BitmapFactory.Options();
+                bounds.inJustDecodeBounds = true;
+                BitmapFactory.decodeByteArray(raw, 0, raw.length, bounds);
+                int maxDim = Math.max(bounds.outWidth, bounds.outHeight);
+                int sample = 1;
+                while (maxDim / sample > 1440) sample *= 2;
+                BitmapFactory.Options dec = new BitmapFactory.Options();
+                dec.inSampleSize = sample;
+                dec.inPreferredConfig = Bitmap.Config.ARGB_8888;
+                Bitmap decoded = BitmapFactory.decodeByteArray(raw, 0, raw.length, dec);
+                if (decoded == null) {
+                    pushSubjectError(reqId, "DECODE_FAILED", "Cannot decode wallpaper");
+                    return;
+                }
+                Bitmap bmp = decoded.getConfig() == Bitmap.Config.ARGB_8888
+                    ? decoded : decoded.copy(Bitmap.Config.ARGB_8888, false);
+                if (bmp != decoded) decoded.recycle();
+                if (bmp == null) {
+                    pushSubjectError(reqId, "DECODE_FAILED", "Bitmap copy failed");
+                    return;
+                }
+                if (Math.max(bmp.getWidth(), bmp.getHeight()) > 960) {
+                    float s = 960f / Math.max(bmp.getWidth(), bmp.getHeight());
+                    Bitmap scaled = Bitmap.createScaledBitmap(bmp, Math.max(2, Math.round(bmp.getWidth() * s)), Math.max(2, Math.round(bmp.getHeight() * s)), true);
+                    bmp.recycle();
+                    bmp = scaled;
+                }
+                final Bitmap readyBmp = bmp;
+                runOnUiThread(() -> {
+                    SubjectSegmenter seg = getSubjectSegmenter();
+                    ModuleInstallClient mic = ModuleInstall.getClient(this);
+                    mic.areModulesAvailable(seg)
+                        .addOnSuccessListener(avail -> {
+                            if (avail.areModulesAvailable()) {
+                                runSegmentationOnBitmap(reqId, readyBmp, seg);
+                            } else {
+                                pushSubjectProgress(reqId, 18, "جاري تنزيل محرك Google AI المجاني (مرة واحدة فقط)…");
+                                final InstallStatusListener[] holder = new InstallStatusListener[1];
+                                holder[0] = update -> {
+                                    ModuleInstallStatusUpdate.ProgressInfo p = update.getProgressInfo();
+                                    if (p != null && p.getTotalBytesToDownload() > 0) {
+                                        int pct = 18 + (int) ((p.getBytesDownloaded() * 52L) / p.getTotalBytesToDownload());
+                                        pushSubjectProgress(reqId, Math.min(70, pct), "جاري تنزيل محرك الذكاء الاصطناعي…");
+                                    }
+                                    int st = update.getInstallState();
+                                    if (st == ModuleInstallStatusUpdate.InstallState.STATE_COMPLETED) {
+                                        mic.unregisterListener(holder[0]);
+                                        runSegmentationOnBitmap(reqId, readyBmp, seg);
+                                    } else if (st == ModuleInstallStatusUpdate.InstallState.STATE_FAILED ||
+                                               st == ModuleInstallStatusUpdate.InstallState.STATE_CANCELED) {
+                                        mic.unregisterListener(holder[0]);
+                                        readyBmp.recycle();
+                                        pushSubjectError(reqId, "PLAY_SERVICES_UNAVAILABLE", "Module install state " + st);
+                                    }
+                                };
+                                ModuleInstallRequest req = ModuleInstallRequest.newBuilder()
+                                    .addApi(seg)
+                                    .setListener(holder[0])
+                                    .build();
+                                mic.installModules(req)
+                                    .addOnSuccessListener(res -> {
+                                        if (res.areModulesAlreadyInstalled()) {
+                                            mic.unregisterListener(holder[0]);
+                                            runSegmentationOnBitmap(reqId, readyBmp, seg);
+                                        }
+                                    })
+                                    .addOnFailureListener(err -> {
+                                        mic.unregisterListener(holder[0]);
+                                        readyBmp.recycle();
+                                        pushSubjectError(reqId, "PLAY_SERVICES_UNAVAILABLE", String.valueOf(err.getMessage()));
+                                    });
+                            }
+                        })
+                        .addOnFailureListener(err -> {
+                            readyBmp.recycle();
+                            pushSubjectError(reqId, "PLAY_SERVICES_UNAVAILABLE", String.valueOf(err.getMessage()));
+                        });
+                });
+            } catch (Throwable t) {
+                pushSubjectError(reqId, "SEGMENT_INIT_FAILED", String.valueOf(t.getMessage()));
+            }
+        });
+    }
+
     final class AndroidHost {
         @JavascriptInterface public void haptic(String kind) {
             performHaptic(kind);
@@ -417,6 +625,9 @@ public class MainActivity extends Activity {
         }
         @JavascriptInterface public boolean isPermissionPending() {
             return awaitingExternalActivity;
+        }
+        @JavascriptInterface public void segmentSubject(String requestId, String dataUrl) {
+            startSubjectSegmentation(requestId, dataUrl);
         }
     }
 
@@ -523,6 +734,12 @@ public class MainActivity extends Activity {
         }
         if (files != null) files.onReceiveValue(null);
         if (camera != null) camera.deny();
+        if (subjectSegmenter != null) {
+            try { subjectSegmenter.close(); } catch (RuntimeException ignored) {}
+            subjectSegmenter = null;
+        }
+        segmentExecutor.shutdownNow();
+        subjectResults.clear();
         if (nativeGlass != null) nativeGlass.close();
         if (web != null) web.destroy();
         super.onDestroy();

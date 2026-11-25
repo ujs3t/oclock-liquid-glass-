@@ -89,6 +89,47 @@ try {
     await page.locator('#clock-y').fill('0');
     await page.locator('#clock-y').dispatchEvent('input');
     await page.waitForTimeout(220);
+    await page.locator('#clock-opacity').fill('0');
+    await page.locator('#clock-opacity').dispatchEvent('input');
+    const glassZero = await page.evaluate(() => ({
+      tint: document.documentElement.style.getPropertyValue('--clock-tint'),
+      shOp: document.documentElement.style.getPropertyValue('--clock-shadow-op'),
+      innerBg: document.getElementById('clock-inner').style.backgroundImage
+    }));
+    assert.equal(glassZero.tint, 'transparent', '0% opacity renders pure liquid glass');
+    assert.equal(glassZero.shOp, '0', '0% opacity disables flat shadow tint');
+    assert.ok(glassZero.innerBg.startsWith('url('), 'inner rim stays visible at 0% opacity');
+    await page.locator('#colors [data-color="#000000"]').click();
+    await page.locator('#clock-opacity').fill('100');
+    await page.locator('#clock-opacity').dispatchEvent('input');
+    const solidBlack = await page.evaluate(() => ({
+      tint: document.documentElement.style.getPropertyValue('--clock-tint'),
+      innerBg: document.getElementById('clock-inner').style.backgroundImage,
+      innerOp: parseFloat(document.getElementById('clock-inner').style.opacity || '0'),
+      subjZ: parseInt(getComputedStyle(document.getElementById('subject')).zIndex || '0', 10),
+      clkZ: parseInt(getComputedStyle(document.getElementById('clock-layer')).zIndex || '0', 10)
+    }));
+    assert.equal(solidBlack.tint.replace(/\s+/g, ''), 'rgb(0,0,0)', '100% black fills clock solid black');
+    assert.ok(solidBlack.innerBg.startsWith('url(') && solidBlack.innerOp > 0, 'white inner rim shadow remains on solid black');
+    assert.ok(solidBlack.subjZ > solidBlack.clkZ, 'subject cutout layer sits above clock layer for depth');
+    await page.locator('#colors [data-color="auto"]').click();
+    await page.locator('#clock-opacity').fill('22');
+    await page.locator('#clock-opacity').dispatchEvent('input');
+    if (width === 412) {
+      await page.evaluate(() => { Editor.close(); Clock.openResize(); });
+      await page.waitForTimeout(200);
+      const se = await page.locator('#clock-frame .h.se').boundingBox();
+      const startSy = await page.evaluate(() => CONFIG.clock.sy);
+      await page.mouse.move(se.x + se.width / 2, se.y + se.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(se.x + 65, se.y + 180, { steps: 8 });
+      await page.mouse.up();
+      await page.waitForTimeout(600);
+      const afterDrag = await page.evaluate(() => ({ size: CONFIG.clock.size, sy: CONFIG.clock.sy }));
+      assert.ok(afterDrag.size > 172 && afterDrag.sy > startSy + 0.15, 'free corner drag increases both width size and vertical stretch');
+      await page.evaluate(() => { document.getElementById('clock-frame-reset').click(); Clock.closeResize(); Editor.open(); });
+      await page.waitForTimeout(500);
+    }
     await page.locator('#clock-size').fill('420');
     await page.locator('#clock-size').dispatchEvent('input');
     await page.waitForTimeout(1200);

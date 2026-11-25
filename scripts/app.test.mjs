@@ -47,16 +47,24 @@ test('UI bugfixes and native Android upgrades stay intact', () => {
   assert.ok(mainJava.includes('OnBackInvokedCallback'));
   assert.ok(mainJava.includes('ACTION_PICK_IMAGES'));
   assert.ok(mainJava.includes('setDataAndType'));
+  assert.ok(mainJava.includes('segmentSubject'));
+  assert.ok(mainJava.includes('SubjectSegmentation'));
+  assert.ok(readFileSync('android/app/build.gradle','utf8').includes('play-services-mlkit-subject-segmentation'));
+  assert.ok(manifest.includes('subject_segment'));
 
   assert.ok(html.includes('lg-glass-layer'));
   assert.ok(html.includes('w-chip gallery'));
-  assert.ok(html.includes('rs.corner'));
+  assert.ok(html.includes('fullWidthSize'));
+  assert.ok(html.includes('maxSyAtSize'));
   assert.ok(html.includes('stretchDigitBitmap'));
   assert.ok(html.includes('getColonDots'));
   assert.ok(html.includes('measureNumeralMetrics'));
   assert.ok(html.includes('id="clock-stretch"'));
   assert.ok(html.includes('id="clock-y"'));
   assert.ok(html.includes('id="clock-fmt"'));
+  assert.ok(html.includes('id="clock-pro-palette"'));
+  assert.ok(html.includes('id="clock-opacity"'));
+  assert.ok(html.includes('AIDepth'));
   assert.ok(html.includes('Math.min(3, Math.max(2, Math.round(dpr * 2)))'));
 
   const nativeJava = readFileSync('android/app/src/main/java/com/oclock/liquidglass/NativeGlass.java','utf8');
