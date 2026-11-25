@@ -24,6 +24,15 @@
 }
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 /* class the Liquid Glass skill expects on every glass target */
+.lg-glass-layer{
+  position:absolute;inset:0;border-radius:inherit;
+  pointer-events:none;background:var(--glass-bg);
+  contain:layout style paint;
+  transform:translateZ(0);
+  z-index:-1;
+}
+#np.lg-attached,#dnd.lg-attached,.sh-btn.lg-attached{background:transparent}
+.sh-btn.lg-attached.on{background:rgba(255,255,255,.92)}
 .lg-shadow-layer{
   position:absolute;inset:0;border-radius:inherit;
   pointer-events:none;background-repeat:no-repeat;background-size:100% 100%;
@@ -200,7 +209,8 @@ body.resizing #clock-wrap{pointer-events:none}
   width:100%;height:100%;
   pointer-events:none;
   background:var(--clock-top,#fff);
-  transition:background .32s var(--ease);
+  opacity:.24;
+  transition:background .32s var(--ease), opacity .26s var(--ease);
   -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
   -webkit-mask-size:100% 100%;mask-size:100% 100%;
 }
@@ -319,12 +329,19 @@ body.resizing #clock-wrap{pointer-events:none}
   z-index:4;
   background:var(--glass-bg);
   isolation:isolate;
+  contain:layout style;
   opacity:0;transform:translateY(14px) scale(.985);
-  transition:opacity .45s var(--ease), transform .55s var(--spring);
+  transition:opacity .38s var(--ease), transform .44s var(--spring);
   touch-action:pan-y;
 }
 #np.in{opacity:1;transform:none}
 #np.gone{opacity:0;transform:translateY(10px);pointer-events:none}
+#np.track-swap .np-top{animation:trackPop .42s var(--spring) both}
+@keyframes trackPop{
+  0%{opacity:.55;transform:scale(.97)}
+  60%{opacity:1;transform:scale(1.015)}
+  100%{opacity:1;transform:none}
+}
 .np-top{display:flex;align-items:center;gap:11px}
 #np-art{
   width:44px;height:44px;border-radius:9px;
@@ -362,7 +379,13 @@ body.np-paused #np-art{transform:scale(.88);opacity:.9}
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   display:block;margin-top:1px;
 }
-.np-wave{opacity:.55;flex:none}
+.np-wave{opacity:.72;flex:none}
+.np-wave rect{transform-box:fill-box;transform-origin:center bottom;will-change:transform}
+body:not(.np-paused) .np-wave rect:nth-child(1){animation:eqBar .78s ease-in-out infinite alternate}
+body:not(.np-paused) .np-wave rect:nth-child(2){animation:eqBar .62s .15s ease-in-out infinite alternate}
+body:not(.np-paused) .np-wave rect:nth-child(3){animation:eqBar .88s .08s ease-in-out infinite alternate}
+body:not(.np-paused) .np-wave rect:nth-child(4){animation:eqBar .70s .24s ease-in-out infinite alternate}
+@keyframes eqBar{0%{transform:scaleY(.38)}100%{transform:scaleY(1.04)}}
 /* progress */
 .np-bar{
   margin:11px 0 0;
@@ -382,7 +405,6 @@ body.np-paused #np-art{transform:scale(.88);opacity:.9}
   border-radius:3px;background:var(--ui);
   transform-origin:left center;
   transform:scaleX(0);
-  transition:transform .09s linear;
   will-change:transform;
 }
 .np-thumb{
@@ -390,12 +412,9 @@ body.np-paused #np-art{transform:scale(.88);opacity:.9}
   width:11px;height:11px;
   margin:-5.5px 0 0 -5.5px;
   transform:translate3d(calc(var(--p, 0) * var(--bar-w, 300px)), 0, 0);
-  transition:transform .09s linear;
   will-change:transform;
   pointer-events:none;
 }
-.np-bar.scrub .np-fill,
-.np-bar.scrub .np-thumb{transition:none}
 .np-thumb::after{
   content:'';
   display:block;width:11px;height:11px;border-radius:50%;
@@ -533,17 +552,21 @@ body.np-paused #np-art{transform:scale(.88);opacity:.9}
 .s-item b{font-variant-numeric:tabular-nums;font-size:12px;opacity:.7;text-align:center}
 .s-item input[type=range]{
   -webkit-appearance:none;appearance:none;
-  width:100%;height:6px;border-radius:3px;
-  background:rgba(255,255,255,.22);
+  width:100%;height:26px;border-radius:13px;
+  background:transparent;
   outline:none;
   direction:ltr;
+  touch-action:none;
+}
+.s-item input[type=range]::-webkit-slider-runnable-track{
+  height:6px;border-radius:3px;background:rgba(255,255,255,.22);
 }
 .s-item input[type=range]::-webkit-slider-thumb{
   -webkit-appearance:none;appearance:none;
-  width:20px;height:20px;border-radius:50%;
+  width:20px;height:20px;border-radius:50%;margin-top:-7px;
   background:#fff;border:0;
   box-shadow:0 1px 5px rgba(0,0,0,.28);
-  transition:transform .4s var(--bounce);
+  transition:transform .28s var(--spring);
 }
 .s-item input[type=range]:active::-webkit-slider-thumb{transform:scale(1.18)}
 .s-item input[type=range]::-moz-range-thumb{
@@ -635,14 +658,15 @@ body.np-paused #np-art{transform:scale(.88);opacity:.9}
   /* an RTL sheet must never spill past the left edge — clip the horizontal rows */
   overflow-x:hidden;overflow-y:auto;
   overscroll-behavior:contain;
+  contain:layout style;
   padding:8px 14px calc(var(--safe-b) + 10px);
-  background:rgba(18,18,22,.76);
-  backdrop-filter:blur(28px) saturate(1.5);
-  -webkit-backdrop-filter:blur(28px) saturate(1.5);
+  background:rgba(16,16,20,.84);
+  backdrop-filter:blur(16px) saturate(1.35);
+  -webkit-backdrop-filter:blur(16px) saturate(1.35);
   border-radius:26px 26px 0 0;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.14);
   transform:translateY(104%);
-  transition:transform .48s var(--spring);
+  transition:transform .36s cubic-bezier(.22,1.08,.36,1);
   will-change:transform;
 }
 #edit.open{transform:none}
@@ -716,8 +740,10 @@ body.np-paused #np-art{transform:scale(.88);opacity:.9}
 }
 .w-chip.sel{box-shadow:inset 0 0 0 2px #fff, 0 4px 14px rgba(0,0,0,.4);transform:translateY(-2px)}
 .w-chip:active{transform:scale(.94)}
-.w-chip.upload{display:grid;place-items:center;background:rgba(255,255,255,.09);color:rgba(255,255,255,.66)}
+.w-chip.upload{display:grid;place-items:center;background:rgba(255,255,255,.09);color:rgba(255,255,255,.78)}
 .w-chip.upload svg{width:20px;height:20px}
+.w-chip.gallery{width:auto;padding:0 12px;display:flex;align-items:center;gap:6px;background:rgba(255,255,255,.14);color:#fff;font-size:11.5px;font-weight:600;white-space:nowrap}
+.w-chip.gallery svg{width:17px;height:17px;flex:none}
 /* toggles */
 .t-row{display:flex;gap:6px;flex-wrap:wrap;padding:1px 2px 2px}
 .t-btn{
@@ -781,10 +807,11 @@ body.resizing #clock-inner{opacity:.75}
 body.resizing #clock-glass,
 body.resizing #clock-shadow{will-change:transform}
 
-/* while customising, clear the deck so the clock stays clearly visible above the bar */
-body.editing #np{opacity:0;transform:translateY(16px) scale(.98);pointer-events:none;transition:opacity .3s,transform .4s var(--ease)}
-body.editing #bottom{opacity:0;pointer-events:none;transition:opacity .3s}
-body.editing #clock-layer{transform:translateY(-20px) scale(.86);transform-origin:top center;transition:transform .5s var(--spring)}
+/* while customising, clear the deck so the clock stays clearly visible above the bar
+   without rescaling the SVG refraction layer during the sheet animation */
+body.editing #np{opacity:0;transform:translateY(16px);pointer-events:none;transition:opacity .24s,transform .32s var(--ease)}
+body.editing #bottom{opacity:0;pointer-events:none;transition:opacity .24s}
+body.editing #clock-layer{transform:translateY(-14px);transition:transform .36s var(--spring)}
 body.editing #bar{opacity:.35}
 
 /* reduced motion */
@@ -832,7 +859,7 @@ body.editing #bar{opacity:.35}
   #edit{max-height:min(56dvh,270px);overflow-x:hidden;overflow-y:auto;padding-top:6px}
   .s-row{gap:6px}
   .s-item{grid-template-columns:46px 1fr 26px;font-size:11.5px}
-  .s-item input[type=range]::-webkit-slider-thumb{width:17px;height:17px}
+  .s-item input[type=range]::-webkit-slider-thumb{width:17px;height:17px;margin-top:-5.5px}
   .edit-head{margin-bottom:0}
   .edit-title{font-size:13px}
   .edit-label{font-size:11px;margin:2px 0 2px}
@@ -840,6 +867,7 @@ body.editing #bar{opacity:.35}
   .f-chip b{font-size:16px}
   .c-dot{width:24px;height:24px}
   .w-chip{width:34px;height:42px}
+  .w-chip.gallery{width:auto;padding:0 10px;height:42px;font-size:11px}
   .t-btn{padding:4px 9px;border-radius:11px;font-size:11.5px}
 }
 
@@ -977,13 +1005,13 @@ body.editing #bar{opacity:.35}
     <div class="s-row">
       <label class="s-item">
         <span>الشفافية</span>
-        <input type="range" id="in-op" min="0" max="100" step="1" value="55">
-        <b id="in-op-v">55</b>
+        <input type="range" id="in-op" min="0" max="100" step="1" value="42">
+        <b id="in-op-v">42</b>
       </label>
       <label class="s-item">
         <span>السماكة</span>
-        <input type="range" id="in-th" min="0" max="8" step="0.5" value="2.5">
-        <b id="in-th-v">2.5</b>
+        <input type="range" id="in-th" min="0" max="8" step="0.5" value="2.2">
+        <b id="in-th-v">2.2</b>
       </label>
       <label class="s-item">
         <span>الزاوية</span>
@@ -1012,10 +1040,10 @@ const CONFIG = {
   clock: {
     font: 'Bebas Neue',   // 'Bebas Neue' | 'Oswald' | 'Inter' | 'SF'
     weight: 400,
-    size: 128,            // px
-    sx: 0.94,             // horizontal stretch
-    sy: 1.62,             // vertical stretch (the tall look)
-    tracking: -3,
+    size: 160,            // px — balanced iOS lock-screen scale
+    sx: 1.0,              // natural horizontal proportion
+    sy: 1.12,             // subtle tall stance without distorting strokes/colon
+    tracking: -2,
     hour24: true,
     leadingZero: true
   },
@@ -1025,14 +1053,14 @@ const CONFIG = {
     thickness: 40,
     bezel: 50,
     shadow: { thickness: 1, angle: 55, intensity: 0.36 },        // glass rim shadow (cards only)
-    inner:  { thickness: 2.5, intensity: 0.55, angle: 55, color: '#ffffff' }  // INNER shadow (clock only)
+    inner:  { thickness: 2.2, intensity: 0.42, angle: 55, color: '#ffffff' }  // INNER shadow (clock only)
   },
   depth: { enabled: false, parallax: 0 },
   radius: 26,            // card corner radius
   weather: '☁ −3°'
 };
 
-const STORE_KEY = 'lock_glass_simple_v2';
+const STORE_KEY = 'lock_glass_simple_v3';
 
 const DEFAULTS = {
   font: 'Bebas Neue',
@@ -1045,11 +1073,11 @@ const DEFAULTS = {
   npOn: true,
   depth: false,
   dndOn: true,
-  clockSize: 128,
-  clockSx: 0.94,
-  clockSy: 1.62,
-  innerThickness: 2.5,
-  innerIntensity: 0.55,
+  clockSize: 160,
+  clockSx: 1.0,
+  clockSy: 1.12,
+  innerThickness: 2.2,
+  innerIntensity: 0.42,
   innerColor: '#ffffff',
   np: { title: 'Grown Woman', artist: 'Beyoncé', elapsed: 58, duration: 315 }
 };
@@ -1058,7 +1086,18 @@ const state = (() => {
   let s = JSON.parse(JSON.stringify(DEFAULTS));
   try {
     const raw = localStorage.getItem(STORE_KEY);
-    if (raw) Object.assign(s, JSON.parse(raw));
+    if (raw) {
+      Object.assign(s, JSON.parse(raw));
+    } else {
+      const legacy = localStorage.getItem('lock_glass_simple_v2');
+      if (legacy) {
+        const old = JSON.parse(legacy);
+        // Migrate user's custom media/toggles, while replacing the legacy stretched geometry
+        for (const k of ['font','color','wall','customWall','subject','hour24','weatherOn','npOn','depth','dndOn','np']) {
+          if (old[k] !== undefined) s[k] = old[k];
+        }
+      }
+    }
   } catch (e) {}
   return s;
 })();
@@ -1228,6 +1267,7 @@ function applyLiquidGlass(el, opts){
   o.shadow = Object.assign({ thickness:1, angle:55, intensity:0.36 }, opts.shadow);
 
   const uid = 'lgFilter' + (++uidCounter);
+  let glassLayer = el.querySelector('.lg-glass-layer');
   let shadowEl = opts.shadowEl || el.querySelector('.lg-shadow-layer');
   let rafId = 0;
   let rasterKey = '';
@@ -1237,8 +1277,7 @@ function applyLiquidGlass(el, opts){
     const wCss=el.offsetWidth, hCss=el.offsetHeight;
     if (wCss < 2 || hCss < 2) return;
     const radiusCss = o.radius!=null ? o.radius : Math.min(wCss,hCss)/2;
-    const dpr = window.devicePixelRatio || 1;
-    const ss = o.supersample || Math.min(2, Math.max(1.5, dpr));
+    const ss = o.supersample || 1;
 
     const key = [wCss,hCss,radiusCss,ss,o.surface,o.ior,o.thickness,o.bezel,o.shadow.thickness,o.shadow.angle,o.shadow.intensity].join('|');
     if (key === rasterKey) return;
@@ -1275,16 +1314,27 @@ function applyLiquidGlass(el, opts){
     f.appendChild(dm);
     defsRoot().appendChild(f);
 
+    const cs = getComputedStyle(el);
+    if (cs.position === 'static') el.style.position = 'relative';
+    el.style.isolation = el.style.isolation || 'isolate';
+    el.classList.add('lg-attached');
+    el.style.backdropFilter = '';
+    el.style.webkitBackdropFilter = '';
+
+    if (!glassLayer) {
+      glassLayer = document.createElement('span');
+      glassLayer.className = 'lg-glass-layer';
+      glassLayer.setAttribute('aria-hidden', 'true');
+      el.insertBefore(glassLayer, el.firstChild);
+    }
+
     const chain = `url(#${uid})`;
-    el.style.backdropFilter = chain + (supportsChainedFilter ? ' saturate(1.15) contrast(1.06)' : '');
-    el.style.webkitBackdropFilter = el.style.backdropFilter;
+    glassLayer.style.backdropFilter = chain + (supportsChainedFilter ? ' saturate(1.15) contrast(1.06)' : '');
+    glassLayer.style.webkitBackdropFilter = glassLayer.style.backdropFilter;
 
     if (!shadowEl){
       shadowEl = document.createElement('span');
       shadowEl.className='lg-shadow-layer';
-      const cs = getComputedStyle(el);
-      if (cs.position === 'static') el.style.position = 'relative';
-      el.style.isolation = el.style.isolation || 'isolate';
       el.insertBefore(shadowEl, el.firstChild);
     }
     const shadowThickRaster = o.shadow.thickness*ss;
@@ -1308,6 +1358,8 @@ function applyLiquidGlass(el, opts){
       ro.disconnect();
       const f = document.getElementById(uid);
       if (f) f.remove();
+      if (glassLayer) { glassLayer.remove(); glassLayer = null; }
+      el.classList.remove('lg-attached');
       el.style.backdropFilter = '';
       el.style.webkitBackdropFilter = '';
     },
@@ -1471,7 +1523,7 @@ function* computeGlassJob(alpha, w, h, ss, params, includeShadow = true) {
 /* inner-shadow map for the clock digits. Runs off-thread and encodes to a PNG
    blob there, so dragging the sliders never blocks a frame. */
 function paintInnerShadow(alpha, w, h, cfg) {
-  const cover = Math.max(1, Math.min(2, 1600 / Math.max(w, h)));
+  const cover = cfg.cover ? Math.min(2, cfg.cover) : Math.max(1, Math.min(1.6, 1300 / Math.max(w, h)));
   const iw = Math.max(4, Math.round(w * cover));
   const ih = Math.max(4, Math.round(h * cover));
   const thickDev = Math.max(0.75, cfg.thickness * cfg.ss * cover * 0.5);
@@ -1534,7 +1586,7 @@ self.onmessage = function (e) {
   if (e.data.kind === 'inner') {
     const jobId = e.data.jobId;
     paintInnerShadow(new Uint8Array(e.data.alphaBuf), e.data.w, e.data.h, e.data.cfg)
-      .then((blob) => self.postMessage({ kind: 'inner', jobId, key: e.data.key, blob }));
+      .then((blob) => self.postMessage({ kind: 'inner', jobId, key: e.data.key, isPreview: !!e.data.isPreview, blob }));
     return;
   }
   const { jobId, alphaBuf, w, h, ss, params } = e.data;
@@ -1730,10 +1782,19 @@ const Clock = (() => {
   let innerShownKey = '';
   let innerWaiters = [];
 
+  function isCachedInnerUrl(url) {
+    for (const v of innerCache.values()) if (v === url) return true;
+    return false;
+  }
+
   function setInnerImage(url, key) {
+    const prev = activeInnerUrl;
     activeInnerUrl = url || '';
     innerEl.style.backgroundImage = url ? `url("${url}")` : 'none';
     innerShownKey = key || '';
+    if (prev && prev !== activeInnerUrl && !isCachedInnerUrl(prev)) {
+      scheduleRevoke(prev, (u) => u === activeInnerUrl || isCachedInnerUrl(u));
+    }
     if (!key) return;
     const ready = innerWaiters.filter((w) => w.key === key);
     innerWaiters = innerWaiters.filter((w) => w.key !== key);
@@ -1750,14 +1811,25 @@ const Clock = (() => {
   }
 
   function onInnerResult(d) {
-    if (d.jobId !== innerJob) return;                 // a newer slider position won
+    innerBusy = false;
+    flushInnerQueue();
+    if (d.jobId !== innerJob && queuedInner) return; // a newer slider position won
     const url = URL.createObjectURL(d.blob);
-    lruSet(innerCache, d.key, url, (old) => scheduleRevoke(old, (u) => u === activeInnerUrl));
+    if (d.isPreview) {
+      const prev = activeInnerUrl;
+      activeInnerUrl = url;
+      innerEl.style.backgroundImage = `url("${url}")`;
+      if (prev && prev !== url && !isCachedInnerUrl(prev)) {
+        scheduleRevoke(prev, (u) => u === activeInnerUrl || isCachedInnerUrl(u));
+      }
+      return;
+    }
+    lruSet(innerCache, d.key, url, (old) => scheduleRevoke(old, (u) => u === activeInnerUrl || isCachedInnerUrl(u)));
     setInnerImage(url, d.key);
   }
 
   /* Called live by the sliders: no refraction rebuild, no bitmap rebuild. */
-  function refreshInner() {
+  function refreshInner(preview) {
     if (!lastMaskCanvas || !lastMaskAlpha) { schedule(true); return; }
     const cfg = CONFIG.glass.inner;
     const w = lastMaskCanvas.width, h = lastMaskCanvas.height;
@@ -1767,7 +1839,7 @@ const Clock = (() => {
     if (key === innerShownKey) return;                     // already on screen
     const cached = lruGet(innerCache, key);
     if (cached) { setInnerImage(cached, key); return; }
-    postInner(key, w, h);
+    postInner(key, w, h, !!preview);
   }
 
   /* Paint (or repaint) the map for a specific key — used by the fade path so a
@@ -1782,41 +1854,65 @@ const Clock = (() => {
   }
 
   let innerPosted = '';
-  function resetInnerPost() { innerPosted = ''; }
-  function postInnerFor(key, alpha, w, h, ss) {
-    if (!alpha || !key) return;
-    if (key === innerPosted) return;
-    /* during a resize the refraction job is the one that matters — the rim is
-       repainted once, when the gesture ends */
-    if (document.body.classList.contains('resizing')) return;
+  let innerBusy = false;
+  let queuedInner = null;
+
+  function resetInnerPost() { innerPosted = ''; innerBusy = false; queuedInner = null; }
+
+  function flushInnerQueue() {
+    if (innerBusy || !queuedInner) return;
+    const next = queuedInner;
+    queuedInner = null;
+    dispatchInner(next);
+  }
+
+  function dispatchInner(job) {
     const wk = ensureInnerWorker();
-    if (!wk) return;                                // paintInnerNow handles the fallback
-    innerPosted = key;
-    const cfg = CONFIG.glass.inner;
-    const alphaBuf = alpha.slice().buffer;
+    if (!wk) {
+      paintInnerNow(job.alpha, job.w, job.h, job.ss, job.maskKey);
+      return;
+    }
+    innerBusy = true;
+    const jobId = ++innerJob;
+    const alphaBuf = job.alpha.slice().buffer;
     wk.postMessage({
-      kind: 'inner', jobId: ++innerJob, key, w, h,
+      kind: 'inner', jobId, key: job.key, w: job.w, h: job.h,
+      isPreview: !!job.isPreview,
       alphaBuf,
-      cfg: { thickness: cfg.thickness, angle: cfg.angle, color: cfg.color, ss }
+      cfg: {
+        thickness: job.cfg.thickness,
+        angle: job.cfg.angle,
+        color: job.cfg.color,
+        ss: job.ss,
+        cover: job.isPreview ? 0.55 : 0
+      }
     }, [alphaBuf]);
   }
 
-  function postInner(key, w, h) {
-    /* during a resize the refraction job is the one that matters — the rim is
-       repainted once, when the gesture ends */
+  function queueInnerJob(job) {
+    if (!job.alpha || !job.key) return;
     if (document.body.classList.contains('resizing')) return;
-    const cfg = CONFIG.glass.inner;
-    const wk = ensureInnerWorker();
-    if (!wk) { paintInnerNow(lastMaskAlpha, w, h, lastSS); return; }
-    if (key === innerPosted) return;                    // already on its way
-    innerPosted = key;
-    const jobId = ++innerJob;
-    const alphaBuf = lastMaskAlpha.slice().buffer;
-    wk.postMessage({
-      kind: 'inner', jobId, key, w, h,
-      alphaBuf,
-      cfg: { thickness: cfg.thickness, angle: cfg.angle, color: cfg.color, ss: lastSS }
-    }, [alphaBuf]);
+    const postedTag = job.key + (job.isPreview ? '|p' : '');
+    if (postedTag === innerPosted) return;
+    innerPosted = postedTag;
+    if (innerBusy) { queuedInner = job; return; }
+    dispatchInner(job);
+  }
+
+  function postInnerFor(key, alpha, w, h, ss) {
+    if (!alpha || !key) return;
+    queueInnerJob({
+      key, alpha, w, h, ss, maskKey: lastMaskKey, isPreview: false,
+      cfg: Object.assign({}, CONFIG.glass.inner)
+    });
+  }
+
+  function postInner(key, w, h, isPreview) {
+    if (!lastMaskAlpha) return;
+    queueInnerJob({
+      key, alpha: lastMaskAlpha, w, h, ss: lastSS, maskKey: lastMaskKey, isPreview: !!isPreview,
+      cfg: Object.assign({}, CONFIG.glass.inner)
+    });
   }
 
   function renderBitmap(lines) {
@@ -2010,7 +2106,7 @@ const Clock = (() => {
         fbEl.style.display = 'none';
         const uid = 'clockFilter';
         const key = [meta.alphaKey, dispUrl, meta.wCss, meta.hCss, maxAbsCss].join('|');
-        const bf = `url(#${uid})` + (supportsChainedFilter ? ' blur(1.5px) saturate(1.2) brightness(0.96)' : '');
+        const bf = `url(#${uid})` + (supportsChainedFilter ? ' blur(1.2px) saturate(1.25) brightness(1.04)' : '');
         let f = document.getElementById(uid);
         /* A new <filter> node forces the whole clock to re-rasterise. When the
            displacement map has not changed we keep the node and touch nothing —
@@ -2338,6 +2434,7 @@ const Clock = (() => {
       const dir = h.dataset.h;
       rs = {
         dir,
+        corner: /e|w/.test(dir) && /n|s/.test(dir),
         scale: layerScale(),
         x0: e.clientX, y0: e.clientY,
         size: CONFIG.clock.size,
@@ -2400,25 +2497,44 @@ const Clock = (() => {
     const dir = rs.dir;
     const horiz = /e|w/.test(dir);
     const vert = /n|s/.test(dir);
-    const lim = limits();
 
-    if (horiz) {
-      const nextW = clamp(rs.w + dx * (dir.includes('w') ? -1 : 1), lim.minW, lim.maxW);
-      CONFIG.clock.sx = clamp(rs.sx * (nextW / rs.w), lim.minSx, lim.maxSx);
-    }
-    if (vert) {
-      const nextH = clamp(rs.h + dy * (dir.includes('n') ? -1 : 1), lim.minH, lim.maxH);
-      CONFIG.clock.sy = clamp(rs.sy * (nextH / rs.h), lim.minSy, lim.maxSy);
+    if (rs.corner) {
+      // Corners scale the clock proportionally without stretching/distorting glyphs
+      const kx = (dx * (dir.includes('w') ? -1 : 1)) / Math.max(40, rs.w);
+      const ky = (dy * (dir.includes('n') ? -1 : 1)) / Math.max(40, rs.h);
+      const factor = clamp(1 + (kx + ky) * 0.5, 56 / Math.max(40, rs.size), 420 / Math.max(40, rs.size));
+      CONFIG.clock.size = clampSize(Math.round(rs.size * factor));
+      CONFIG.clock.sx = rs.sx;
+      CONFIG.clock.sy = rs.sy;
+      syncSizeControl();
+    } else {
+      // Edge handles allow subtle proportion tuning clamped to natural iOS ratios
+      const lim = limits();
+      if (horiz) {
+        const nextW = clamp(rs.w + dx * (dir.includes('w') ? -1 : 1), lim.minW, lim.maxW);
+        CONFIG.clock.sx = clamp(rs.sx * (nextW / rs.w), 0.90, 1.15);
+      }
+      if (vert) {
+        const nextH = clamp(rs.h + dy * (dir.includes('n') ? -1 : 1), lim.minH, lim.maxH);
+        const minRatioSy = CONFIG.clock.sx * 0.88;
+        const maxRatioSy = CONFIG.clock.sx * 1.28;
+        CONFIG.clock.sy = clamp(rs.sy * (nextH / rs.h), Math.max(0.95, minRatioSy), Math.min(1.30, maxRatioSy));
+      }
     }
     renderPreview();
   }
 
   function renderPreview() {
     if (!rs) return;
-    preview = {
-      x: CONFIG.clock.sx / rs.sx,
-      y: CONFIG.clock.sy / rs.sy
-    };
+    if (rs.corner) {
+      const k = CONFIG.clock.size / Math.max(40, lastCommittedSize || rs.size);
+      preview = { x: k, y: k };
+    } else {
+      preview = {
+        x: CONFIG.clock.sx / rs.sx,
+        y: CONFIG.clock.sy / rs.sy
+      };
+    }
     // one composited write, no layout reads in the hot path
     wrap.style.transform =
       `translate3d(${pos.x}px, ${pos.y}px, 0) scale(${preview.x}, ${preview.y})`;
@@ -2490,7 +2606,7 @@ const Clock = (() => {
   const sizeValue = $('clock-size-value');
   function syncSizeControl() {
     sizeControl.value = String(CONFIG.clock.size);
-    sizeValue.textContent = Math.round(CONFIG.clock.size / 128 * 100) + '%';
+    sizeValue.textContent = Math.round(CONFIG.clock.size / 160 * 100) + '%';
   }
   syncSizeControl();
   let sizeReleaseTimer = 0;
@@ -2540,9 +2656,9 @@ const Clock = (() => {
 
   $('clock-frame-reset').addEventListener('click', (e) => {
     e.stopPropagation();
-    CONFIG.clock.size = 128;
-    CONFIG.clock.sx = 0.94;
-    CONFIG.clock.sy = 1.62;
+    CONFIG.clock.size = 160;
+    CONFIG.clock.sx = 1.0;
+    CONFIG.clock.sy = 1.12;
     syncSizeControl();
     persistGeometry();
     Clock.schedule(true);
@@ -2729,12 +2845,13 @@ const Adaptive = (() => {
 
       let a1, a2, base;
       if (state.color === 'auto') {
-        a1 = lastLight ? 0.70 : 0.52;
-        a2 = lastLight ? 0.42 : 0.24;
-        base = lastLight ? [14, 18, 26] : [255, 255, 255];
+        // Translucent frosted crystal tint: smoky glass on bright skies, milky luminescence on dark walls
+        a1 = lastLight ? 0.34 : 0.28;
+        a2 = lastLight ? 0.14 : 0.08;
+        base = lastLight ? [18, 24, 34] : [255, 255, 255];
       } else {
         base = hexToRgb(state.color);
-        a1 = 0.58; a2 = 0.26;
+        a1 = 0.38; a2 = 0.14;
       }
       root.setProperty('--clock-tint',
         `linear-gradient(180deg, rgba(${base[0]},${base[1]},${base[2]},${a1}) 0%, rgba(${base[0]},${base[1]},${base[2]},${a2}) 100%)`);
@@ -2826,17 +2943,12 @@ const Media = (() => {
     renderProgress();
   }
 
-  let lastPaint = 0;
-  function tick(now) {
-    const ts = now || performance.now();
-    if (!lastPaint || ts - lastPaint >= 120) {
-      lastPaint = ts;
-      if (!hasFile && state.playing && position() >= (state.np.duration || 1)) {
-        nextTrack();
-        return;
-      }
-      renderProgress();
+  function tick() {
+    if (!hasFile && state.playing && position() >= (state.np.duration || 1)) {
+      nextTrack();
+      return;
     }
+    renderProgress();
     if (state.playing) raf = requestAnimationFrame(tick);
     else raf = 0;
   }
@@ -2890,9 +3002,8 @@ const Media = (() => {
     demoStart = performance.now();
     const card = $('np');
     card.classList.remove('track-swap');
-    void card.offsetWidth;
-    card.classList.add('track-swap');
-    setTimeout(() => card.classList.remove('track-swap'), 600);
+    requestAnimationFrame(() => card.classList.add('track-swap'));
+    setTimeout(() => card.classList.remove('track-swap'), 460);
     const art = $('np-art');
     art.style.background = ART_GRADIENTS[qi % ART_GRADIENTS.length];
     art.removeAttribute('src');
@@ -2903,9 +3014,8 @@ const Media = (() => {
     if (dir) {
       const b = dir > 0 ? $('np-next') : $('np-prev');
       b.classList.remove('nudge-r', 'nudge-l');
-      void b.offsetWidth;
-      b.classList.add(dir > 0 ? 'nudge-r' : 'nudge-l');
-      setTimeout(() => b.classList.remove('nudge-r', 'nudge-l'), 500);
+      requestAnimationFrame(() => b.classList.add(dir > 0 ? 'nudge-r' : 'nudge-l'));
+      setTimeout(() => b.classList.remove('nudge-r', 'nudge-l'), 420);
     }
   }
   const ART_GRADIENTS = [
@@ -3285,10 +3395,10 @@ const Editor = (() => {
     const row = $('walls');
     const chips = Wallpapers.PRESETS.map(p => `
       <button class="w-chip ${state.wall === p ? 'sel' : ''}" data-wall="${p}" aria-label="خلفية ${p}" style="background-image:url('${Wallpapers.thumb(p)}')"></button>`).join('');
-    const plus = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>';
+    const galleryIc = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 15l-4.5-4.5L7 20"/></svg>';
     const person = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="7" r="3.2"/><path d="M5.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/></svg>';
     row.innerHTML = chips + `
-      <button class="w-chip upload" data-upload="1" title="ارفع صورة" aria-label="رفع صورة خلفية">${plus}</button>
+      <button class="w-chip gallery ${state.wall === 'custom' ? 'sel' : ''}" data-upload="1" title="اختيار صورة من المعرض" aria-label="اختيار صورة من معرض الجهاز">${galleryIc}<span>صور جهازي</span></button>
       <button class="w-chip upload" data-subject="1" title="صورة أمام الساعة (عمق)" aria-label="صورة أمام الساعة">${person}</button>`;
     row.querySelectorAll('[data-wall]').forEach(b => {
       b.addEventListener('click', () => {
@@ -3350,8 +3460,8 @@ const Editor = (() => {
 
   function syncInnerInputs() {
     const op = $('in-op'), th = $('in-th'), ang = $('in-ang');
-    op.value = String(Math.round((state.innerIntensity ?? 0.55) * 100));
-    th.value = String(state.innerThickness ?? 2.5);
+    op.value = String(Math.round((state.innerIntensity ?? 0.42) * 100));
+    th.value = String(state.innerThickness ?? 2.2);
     ang.value = String(CONFIG.glass.inner.angle);
     $('in-op-v').textContent = op.value;
     $('in-th-v').textContent = th.value;
@@ -3364,7 +3474,7 @@ const Editor = (() => {
     $('edit-done').addEventListener('click', close);
 
     // Interactive iOS swipe-down-to-close on grabber/header
-    let dragY0 = 0, dragDY = 0, draggingSheet = false;
+    let dragY0 = 0, dragDY = 0, draggingSheet = false, dragRaf = 0;
     const handle = sheet.querySelector('.edit-head');
     const grab = sheet.querySelector('.edit-grabber');
     const onStart = (e) => {
@@ -3377,11 +3487,15 @@ const Editor = (() => {
     sheet.addEventListener('pointermove', (e) => {
       if (!draggingSheet) return;
       dragDY = Math.max(0, e.clientY - dragY0);
-      sheet.style.transform = `translateY(${dragDY}px)`;
+      if (!dragRaf) dragRaf = requestAnimationFrame(() => {
+        dragRaf = 0;
+        if (draggingSheet) sheet.style.transform = `translate3d(0,${dragDY}px,0)`;
+      });
     });
     const onEnd = () => {
       if (!draggingSheet) return;
       draggingSheet = false;
+      cancelAnimationFrame(dragRaf); dragRaf = 0;
       sheet.style.transition = '';
       sheet.style.transform = '';
       if (dragDY > 68) close();
@@ -3407,15 +3521,27 @@ const Editor = (() => {
       state.innerThickness = Number(th.value);
       $('in-th-v').textContent = th.value;
       CONFIG.glass.inner.thickness = state.innerThickness;
+      Clock.refreshInner(true);
       clearTimeout(t2);
-      t2 = setTimeout(() => { Clock.refreshInner(); save(); }, 70);
+      t2 = setTimeout(() => { Clock.refreshInner(false); save(); }, 180);
+    });
+    th.addEventListener('change', () => {
+      clearTimeout(t2);
+      Clock.refreshInner(false);
+      save();
     });
     ang.addEventListener('input', () => {
       CONFIG.glass.inner.angle = Number(ang.value);
       state.innerAngle = CONFIG.glass.inner.angle;
       $('in-ang-v').textContent = ang.value;
+      Clock.refreshInner(true);
       clearTimeout(t3);
-      t3 = setTimeout(() => { Clock.refreshInner(); save(); }, 70);
+      t3 = setTimeout(() => { Clock.refreshInner(false); save(); }, 180);
+    });
+    ang.addEventListener('change', () => {
+      clearTimeout(t3);
+      Clock.refreshInner(false);
+      save();
     });
   }
 

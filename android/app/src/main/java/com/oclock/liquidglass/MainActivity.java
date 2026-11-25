@@ -20,6 +20,7 @@ import android.os.Bundle;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
+import android.provider.MediaStore;
 import android.view.DisplayCutout;
 import android.view.View;
 import android.view.WindowInsets;
@@ -125,10 +126,32 @@ public class MainActivity extends Activity {
                         }
                     }
                 }
+                awaitingExternalActivity = true;
+                if ("image/*".equals(mime)) {
+                    Intent[] candidates = Build.VERSION.SDK_INT >= 33
+                        ? new Intent[]{
+                            Api33Picker.photoIntent(),
+                            new Intent(Intent.ACTION_PICK).setDataAndType(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, "image/*"),
+                            new Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*")
+                          }
+                        : new Intent[]{
+                            new Intent(Intent.ACTION_PICK).setDataAndType(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, "image/*"),
+                            new Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*")
+                          };
+                    for (Intent candidate : candidates) {
+                        try {
+                            startActivityForResult(candidate, 10);
+                            return true;
+                        } catch (android.content.ActivityNotFoundException ignored) {}
+                    }
+                    awaitingExternalActivity = false;
+                    files.onReceiveValue(null);
+                    files = null;
+                    return false;
+                }
                 Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                 picker.addCategory(Intent.CATEGORY_OPENABLE);
                 picker.setType(mime);
-                awaitingExternalActivity = true;
                 try {
                     startActivityForResult(picker, 10);
                 } catch (android.content.ActivityNotFoundException e) {
@@ -178,6 +201,15 @@ public class MainActivity extends Activity {
         }
 
         web.loadUrl(ORIGIN + "/assets/index.html");
+    }
+
+    private static final class Api33Picker {
+        @android.annotation.SuppressLint("NewApi")
+        static Intent photoIntent() {
+            Intent i = new Intent(MediaStore.ACTION_PICK_IMAGES);
+            i.setType("image/*");
+            return i;
+        }
     }
 
     private static final class Api33Back {
@@ -418,7 +450,19 @@ public class MainActivity extends Activity {
         if (code == 10) {
             awaitingExternalActivity = false;
             if (files != null) {
-                files.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(result, data));
+                Uri[] uris = WebChromeClient.FileChooserParams.parseResult(result, data);
+                if (uris == null && result == RESULT_OK && data != null) {
+                    if (data.getData() != null) {
+                        uris = new Uri[]{ data.getData() };
+                    } else if (data.getClipData() != null && data.getClipData().getItemCount() > 0) {
+                        int count = data.getClipData().getItemCount();
+                        uris = new Uri[count];
+                        for (int i = 0; i < count; i++) {
+                            uris[i] = data.getClipData().getItemAt(i).getUri();
+                        }
+                    }
+                }
+                files.onReceiveValue(uris);
                 files = null;
             }
         }

@@ -3,7 +3,7 @@
 @font-face{font-family:Oswald;src:url('fonts/oswald-latin-400-normal.woff2') format('woff2');font-display:swap}
 /* Loaded before the original stylesheet; keep touch targets natural without distorting circular dots. */
 button{touch-action:manipulation}
-#edit{max-height:min(49dvh,390px);scrollbar-width:thin}
+#edit{max-height:min(46dvh,360px);scrollbar-width:thin}
 @media(prefers-reduced-motion:reduce){
  *,*::before,*::after{animation:none !important;transition-duration:.01ms !important;scroll-behavior:auto !important}
 }
