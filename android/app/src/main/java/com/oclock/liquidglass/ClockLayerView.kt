@@ -385,13 +385,12 @@ class ClockResizeOverlayView(
             scheduleAutoClose()
             onHaptic("tick")
         }
-        val undoBtn = makeActionPill("↺").apply {
-            (layoutParams as LinearLayout.LayoutParams).marginStart = (8f * dens).roundToInt()
-        }
-        undoBtn.setOnClickListener {
+        val undoBtn = makeActionPill("↺") {
             onUndo()
             scheduleAutoClose()
             onHaptic("tick")
+        }.apply {
+            (layoutParams as LinearLayout.LayoutParams).marginStart = (8f * dens).roundToInt()
         }
         actionsRow.addView(resetBtn)
         actionsRow.addView(undoBtn)
