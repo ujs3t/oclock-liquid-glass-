@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.net.Uri
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -40,7 +41,10 @@ data class TrackInfo(
     val durationSec: Int,
     val c1: Int,
     val c2: Int,
-    val c3: Int
+    val c3: Int,
+    val contentUri: Uri? = null,
+    val albumId: Long = 0L,
+    val albumName: String = ""
 )
 
 data class LockConfig(

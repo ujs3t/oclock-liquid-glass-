@@ -36,6 +36,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.MediaStore
+import android.provider.Settings
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
@@ -81,6 +82,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         private const val REQ_AUDIO = 103
         private const val REQ_ART = 104
         private const val REQ_CAM_PERM = 201
+        private const val REQ_MEDIA_PERM = 202
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -114,6 +116,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private lateinit var island: DynamicIslandView
     private lateinit var flashOverlay: FrameLayout
     private lateinit var cameraOverlay: CameraOverlayView
+    private lateinit var musicLibraryOverlay: MusicLibraryOverlayView
     private lateinit var editorSheet: EditorSheetView
     private lateinit var toastView: TextView
 
@@ -190,6 +193,19 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         adaptive = AdaptiveTheme()
         aiDepth = AIDepthManager(this)
 
+        media = MediaController(this) { track, art, playing, pos, dur ->
+            if (::npCard.isInitialized) {
+                npCard.setTrack(track, art)
+                npCard.setPlaying(playing)
+                npCard.updateTime(pos, dur)
+            }
+        }
+        media.setLibraryListener { tracks ->
+            if (::musicLibraryOverlay.isInitialized && musicLibraryOverlay.isOpen) {
+                musicLibraryOverlay.syncTracks(tracks)
+            }
+        }
+
         buildUi()
         setContentView(rootFrame)
 
@@ -201,12 +217,10 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             )
         }
 
-        media = MediaController(this) { track, art, playing, pos, dur ->
-            npCard.setTrack(track, art)
-            npCard.setPlaying(playing)
-            npCard.updateTime(pos, dur)
-        }
         media.emit()
+        if (media.hasAudioPermission()) {
+            media.scanDeviceMusic()
+        }
 
         registerReceivers()
         fetchWeatherAsync()
@@ -348,6 +362,12 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 showToast("مكبر الصوت: الهاتف")
             }
         ).apply {
+            onLongPress = {
+                if (!editorSheet.isOpen && !cameraOverlay.isOpen && !flashOn) {
+                    haptic("heavy")
+                    musicLibraryOverlay.open()
+                }
+            }
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
                 leftMargin = (12f * dens).roundToInt()
                 rightMargin = (12f * dens).roundToInt()
@@ -503,6 +523,34 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         }
         phoneShell.addView(editorSheet)
 
+        // 11b. Dark Liquid Glass Music Library Overlay (z = 10.5)
+        musicLibraryOverlay = MusicLibraryOverlayView(
+            this,
+            media,
+            backdrop,
+            perf,
+            onRequestPermission = {
+                ActivityCompat.requestPermissions(this, media.requiredPermissions(), REQ_MEDIA_PERM)
+            },
+            onOpenAppSettings = {
+                try {
+                    startActivity(
+                        Intent(
+                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.fromParts("package", packageName, null)
+                        )
+                    )
+                } catch (_: Throwable) {}
+            },
+            onPickManualAudio = { launchPhotoPicker(REQ_AUDIO) },
+            onHaptic = { k -> haptic(k) },
+            onNotify = { msg, col -> island.pulse(msg, col, 1600L) },
+            onClosed = {}
+        ).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        }
+        phoneShell.addView(musicLibraryOverlay)
+
         // 12. Floating Toast Capsule (z = 11)
         toastView = TextView(this).apply {
             layoutDirection = View.LAYOUT_DIRECTION_RTL
@@ -592,6 +640,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         (bottomRow.layoutParams as FrameLayout.LayoutParams).bottomMargin = safeBottomPx + (26f * dens).roundToInt()
         (homeBar.layoutParams as FrameLayout.LayoutParams).bottomMargin = safeBottomPx + (7f * dens).roundToInt()
         (toastView.layoutParams as FrameLayout.LayoutParams).topMargin = safeTopPx + (52f * dens).roundToInt()
+        musicLibraryOverlay.applySafeInsets(safeTopPx, safeBottomPx)
         phoneShell.requestLayout()
     }
 
@@ -948,6 +997,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         when {
             cameraOverlay.isOpen -> cameraOverlay.close()
             flashOn -> setFlashlight(false)
+            musicLibraryOverlay.isOpen -> musicLibraryOverlay.close()
             resizeOverlay.isOpen -> resizeOverlay.close()
             editorSheet.isOpen -> editorSheet.close()
             else -> finish()
@@ -991,6 +1041,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         if (requestCode == REQ_CAM_PERM) {
             val ok = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
             cameraOverlay.onPermissionResult(ok)
+        } else if (requestCode == REQ_MEDIA_PERM) {
+            musicLibraryOverlay.onPermissionResult(media.hasAudioPermission())
         }
     }
 
@@ -1274,6 +1326,12 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         super.onResume()
         perf.setVisible(true)
         media.setVisible(true)
+        if (media.hasAudioPermission() && !media.hasDeviceTracks()) {
+            media.scanDeviceMusic()
+        }
+        if (musicLibraryOverlay.isOpen) {
+            musicLibraryOverlay.onPermissionResult(media.hasAudioPermission())
+        }
         updateDateLabel()
         scheduleClockRender(force = false)
         scheduleMinuteTicker()

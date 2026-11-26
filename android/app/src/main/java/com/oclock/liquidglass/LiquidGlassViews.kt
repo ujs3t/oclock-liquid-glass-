@@ -23,6 +23,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.OvershootInterpolator
 import android.widget.FrameLayout
@@ -30,6 +31,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -610,6 +612,52 @@ class NowPlayingCardView(
     var uiInk = Color.WHITE
     var uiDim = Color.argb(189, 255, 255, 255)
     var glassBg = Color.argb(10, 255, 255, 255)
+    var onLongPress: (() -> Unit)? = null
+
+    private val lpHandler = Handler(Looper.getMainLooper())
+    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+    private var lpDownX = 0f
+    private var lpDownY = 0f
+    private var lpFired = false
+    private val lpRunnable = Runnable {
+        if (!scrubbing && onLongPress != null) {
+            lpFired = true
+            animate().cancel()
+            scaleX = 0.955f
+            scaleY = 0.955f
+            animate().scaleX(1f).scaleY(1f).setDuration(380L).setInterpolator(OvershootInterpolator(1.6f)).start()
+            onLongPress?.invoke()
+        }
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                lpDownX = ev.x
+                lpDownY = ev.y
+                lpFired = false
+                lpHandler.removeCallbacks(lpRunnable)
+                lpHandler.postDelayed(lpRunnable, 360L)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (scrubbing || hypot(ev.x - lpDownX, ev.y - lpDownY) > touchSlop) {
+                    lpHandler.removeCallbacks(lpRunnable)
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                lpHandler.removeCallbacks(lpRunnable)
+                if (lpFired) {
+                    val cancelEv = MotionEvent.obtain(ev)
+                    cancelEv.action = MotionEvent.ACTION_CANCEL
+                    super.dispatchTouchEvent(cancelEv)
+                    cancelEv.recycle()
+                    lpFired = false
+                    return true
+                }
+            }
+        }
+        return super.dispatchTouchEvent(ev)
+    }
 
     init {
         setWillNotDraw(false)

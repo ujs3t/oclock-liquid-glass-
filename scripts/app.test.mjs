@@ -40,6 +40,8 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(manifest.includes('@mipmap/ic_launcher'));
   assert.ok(manifest.includes('subject_segment'));
   assert.ok(manifest.includes('FileProvider'));
+  assert.ok(manifest.includes('READ_MEDIA_AUDIO'));
+  assert.ok(manifest.includes('READ_MEDIA_IMAGES'));
   assert.ok(existsSync('android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml'));
   assert.ok(readFileSync('android/app/src/main/res/values-v28/styles.xml','utf8').includes('shortEdges'));
   assert.ok(readFileSync('android/app/build.gradle','utf8').includes('play-services-mlkit-subject-segmentation'));
@@ -97,6 +99,16 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(viewsKt.includes('trackInitialized'));
   assert.ok(viewsKt.includes('playingInitialized'));
   assert.ok(!viewsKt.includes('artView.scaleX = 0.84f'));
+  assert.ok(viewsKt.includes('onLongPress'));
+
+  const mediaKt = readFileSync(ktDir + 'MediaController.kt','utf8');
+  assert.ok(mediaKt.includes('MediaStore.Audio.Media.EXTERNAL_CONTENT_URI'));
+  assert.ok(mediaKt.includes('startShuffled'));
+  assert.ok(mediaKt.includes('loadTrackPoster'));
+
+  const libKt = readFileSync(ktDir + 'MusicLibraryOverlayView.kt','utf8');
+  assert.ok(libKt.includes('مكتبة موسيقى الجهاز'));
+  assert.ok(libKt.includes('OvershootInterpolator'));
 
   const aiKt = readFileSync(ktDir + 'AIDepthManager.kt','utf8');
   assert.ok(aiKt.includes('SubjectSegmentation'));
