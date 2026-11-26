@@ -263,6 +263,10 @@ class ClockResizeOverlayView(
 
     private val dens = resources.displayMetrics.density
     private val handler = Handler(Looper.getMainLooper())
+    private val hitPadX = (22f * dens).roundToInt()
+    private val hitPadTop = (22f * dens).roundToInt()
+    private val hitPadBot = (94f * dens).roundToInt()
+    private val boxFrame: FrameLayout
     private val labelPill: TextView
     private val actionsRow: LinearLayout
     private val cornerDots = ArrayList<View>(4)
@@ -285,19 +289,34 @@ class ClockResizeOverlayView(
         layoutDirection = LAYOUT_DIRECTION_LTR
         clipChildren = false
         clipToPadding = false
-        isClickable = true
-        isFocusable = true
-        background = GradientDrawable().apply {
-            setColor(Color.TRANSPARENT)
-            setStroke((1f * dens).roundToInt(), Color.argb(90, 255, 255, 255))
-            cornerRadius = 22f * dens
-        }
+        isClickable = false
+        isFocusable = false
 
-        // 4 visible corner handles + invisible generous touch targets
-        val corners = listOf("nw" to (Gravity.TOP or Gravity.LEFT),
+        boxFrame = FrameLayout(context).apply {
+            layoutDirection = LAYOUT_DIRECTION_LTR
+            clipChildren = false
+            clipToPadding = false
+            isClickable = false
+            isFocusable = false
+            background = GradientDrawable().apply {
+                setColor(Color.TRANSPARENT)
+                setStroke((1.1f * dens).roundToInt(), Color.argb(115, 255, 255, 255))
+                cornerRadius = 22f * dens
+            }
+            layoutParams = LayoutParams((200f * dens).roundToInt(), (160f * dens).roundToInt(), Gravity.TOP or Gravity.LEFT).apply {
+                leftMargin = hitPadX
+                topMargin = hitPadTop
+            }
+        }
+        addView(boxFrame)
+
+        // 4 visible corner handles + invisible generous touch targets (all inside overlay bounds)
+        val corners = listOf(
+            "nw" to (Gravity.TOP or Gravity.LEFT),
             "ne" to (Gravity.TOP or Gravity.RIGHT),
             "sw" to (Gravity.BOTTOM or Gravity.LEFT),
-            "se" to (Gravity.BOTTOM or Gravity.RIGHT))
+            "se" to (Gravity.BOTTOM or Gravity.RIGHT)
+        )
         for ((dir, grav) in corners) {
             val hit = FrameLayout(context).apply {
                 val sz = (38f * dens).roundToInt()
@@ -334,7 +353,7 @@ class ClockResizeOverlayView(
             hit.addView(dot)
             cornerDots.add(dot)
             bindHandle(hit, dir)
-            addView(hit)
+            boxFrame.addView(hit)
         }
 
         // 4 wide invisible edge drag handles (n, s, w, e)
@@ -355,7 +374,7 @@ class ClockResizeOverlayView(
                 isClickable = true
             }
             bindHandle(edge, dir)
-            addView(edge)
+            boxFrame.addView(edge)
         }
 
         labelPill = TextView(context).apply {
@@ -367,8 +386,8 @@ class ClockResizeOverlayView(
                 setColor(Color.argb(184, 24, 24, 28))
                 cornerRadius = 12f * dens
             }
-            layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
-                bottomMargin = (-40f * dens).roundToInt()
+            layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                topMargin = hitPadTop + (172f * dens).roundToInt()
             }
         }
         addView(labelPill)
@@ -376,8 +395,8 @@ class ClockResizeOverlayView(
         actionsRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
-                bottomMargin = (-82f * dens).roundToInt()
+            layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                topMargin = hitPadTop + (206f * dens).roundToInt()
             }
         }
         val resetBtn = makeActionPill("تصغير") {
@@ -495,15 +514,64 @@ class ClockResizeOverlayView(
 
     fun layoutAroundClock() {
         val parentV = clockView.parent as? View ?: return
-        val cw = clockView.width * clockView.scaleX
-        val ch = clockView.height * clockView.scaleY
-        val cx = parentV.x + clockView.x + clockView.width * 0.5f - cw * 0.5f
-        val cy = parentV.y + clockView.y
-        val lp = layoutParams as? LayoutParams ?: return
-        lp.width = cw.roundToInt().coerceAtLeast((80f * dens).roundToInt())
-        lp.height = ch.roundToInt().coerceAtLeast((60f * dens).roundToInt())
-        lp.leftMargin = cx.roundToInt()
-        lp.topMargin = cy.roundToInt()
+        val art = clockView.activeArtifact
+        val viewW = if (clockView.width > 0) clockView.width.toFloat() else (art?.wDp ?: 260f) * dens
+        val parentW = if (parentV.width > 0) parentV.width.toFloat() else resources.displayMetrics.widthPixels.toFloat()
+        val viewX = if (clockView.width > 0) clockView.x else (parentW - viewW) * 0.5f
+
+        val inkL = (art?.inkLeftDp ?: 18f) * dens
+        val inkT = (art?.inkTopDp ?: 18f) * dens
+        val inkR = (art?.inkRightDp ?: (viewW / dens - 18f)) * dens
+        val inkB = (art?.inkBottomDp ?: ((if (clockView.height > 0) clockView.height / dens else (art?.hDp ?: 210f)) - 18f)) * dens
+
+        val pivX = viewW * 0.5f
+        val sL = pivX + (inkL - pivX) * clockView.scaleX
+        val sR = pivX + (inkR - pivX) * clockView.scaleX
+        val sT = inkT * clockView.scaleY
+        val sB = inkB * clockView.scaleY
+
+        val boxPadX = 10f * dens
+        val boxPadY = 10f * dens
+        var boxLeft = parentV.x + viewX + sL - boxPadX
+        var boxRight = parentV.x + viewX + sR + boxPadX
+        val boxTop = parentV.y + clockView.y + sT - boxPadY
+        val boxBottom = parentV.y + clockView.y + sB + boxPadY
+
+        val shellW = (parent as? View)?.width?.toFloat() ?: 0f
+        if (shellW > 90f * dens) {
+            val edgeMargin = 12f * dens
+            boxLeft = boxLeft.coerceIn(edgeMargin, shellW - 72f * dens)
+            boxRight = boxRight.coerceIn(boxLeft + 60f * dens, shellW - edgeMargin)
+        }
+
+        val boxW = (boxRight - boxLeft).roundToInt().coerceAtLeast((80f * dens).roundToInt())
+        val boxH = (boxBottom - boxTop).roundToInt().coerceAtLeast((60f * dens).roundToInt())
+
+        val boxLp = boxFrame.layoutParams as LayoutParams
+        boxLp.width = boxW
+        boxLp.height = boxH
+        boxLp.leftMargin = hitPadX
+        boxLp.topMargin = hitPadTop
+        boxFrame.layoutParams = boxLp
+
+        val pillLp = labelPill.layoutParams as LayoutParams
+        pillLp.topMargin = hitPadTop + boxH + (12f * dens).roundToInt()
+        labelPill.layoutParams = pillLp
+
+        val actLp = actionsRow.layoutParams as LayoutParams
+        actLp.topMargin = hitPadTop + boxH + (46f * dens).roundToInt()
+        actionsRow.layoutParams = actLp
+
+        val lp = (layoutParams as? LayoutParams) ?: LayoutParams(
+            boxW + hitPadX * 2,
+            boxH + hitPadTop + hitPadBot,
+            Gravity.TOP or Gravity.LEFT
+        )
+        lp.gravity = Gravity.TOP or Gravity.LEFT
+        lp.width = boxW + hitPadX * 2
+        lp.height = boxH + hitPadTop + hitPadBot
+        lp.leftMargin = (boxLeft - hitPadX).roundToInt()
+        lp.topMargin = (boxTop - hitPadTop).roundToInt()
         layoutParams = lp
     }
 

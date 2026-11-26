@@ -122,7 +122,8 @@ object LiquidGlassShaders {
             float2 uv = fragCoord / max(float2(1.0), uDstSize);
             float2 fp = uv * uFieldSize;
 
-            float alpha = uMask.eval(fp).r;
+            float4 msk = uMask.eval(fp);
+            float alpha = msk.r;
             if (alpha <= 0.002) return half4(0.0);
 
             float4 fld = uField.eval(fp);
@@ -148,19 +149,19 @@ object LiquidGlassShaders {
             // --clock-shadow-op subtle top ink glaze
             col = mix(col, uShadowTop.rgb, uShadowTop.a);
 
-            // Dynamic GPU directional inner rim shadow from exact SDF depth gradient
-            float depthPx = fld.b * 255.0 / 6.0;
+            // Dynamic GPU directional inner rim shadow from smooth double-precision SDF normal + depth
+            float depthPx = max(0.0, fld.b * 255.0 / 7.0 - 4.0);
             float thickDev = max(0.75, uInnerThick * uSS * 0.5);
             float fallLimit = max(1.2, thickDev * 2.2);
             if (uInnerOp > 0.001 && uInnerThick > 0.01 && depthPx < fallLimit) {
-                float gx = uField.eval(fp + float2(1.25, 0.0)).b - uField.eval(fp - float2(1.25, 0.0)).b;
-                float gy = uField.eval(fp + float2(0.0, 1.25)).b - uField.eval(fp - float2(0.0, 1.25)).b;
-                float gl = length(float2(gx, gy));
-                if (gl > 0.002) {
-                    float2 n = float2(gx, gy) / gl;
+                float2 nRaw = (msk.gb * 255.0 - 128.0) / 127.0;
+                float gl = length(nRaw);
+                if (gl > 0.01) {
+                    float ridgeFade = clamp(gl * 1.4, 0.0, 1.0);
+                    float2 n = nRaw / gl;
                     float k = abs(dot(n, uInnerDir));
-                    float fall = pow(clamp(1.0 - depthPx / fallLimit, 0.0, 1.0), 0.85);
-                    float rimA = pow(max(0.0, k), 1.6) * fall * uInnerOp;
+                    float fall = pow(clamp(1.0 - depthPx / fallLimit, 0.0, 1.0), 1.35);
+                    float rimA = pow(max(0.0, k), 1.6) * fall * ridgeFade * uInnerOp;
                     col = mix(col, uInnerColor.rgb, clamp(rimA, 0.0, 1.0));
                 }
             }

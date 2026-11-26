@@ -235,6 +235,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         }
 
         phoneShell = FrameLayout(this).apply {
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
             clipChildren = false
             clipToPadding = false
             layoutParams = FrameLayout.LayoutParams(
@@ -254,12 +255,18 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
         // 2. Clock Layer (z = 2)
         clockContainer = FrameLayout(this).apply {
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
             clipChildren = false
             clipToPadding = false
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP)
         }
         clockView = ClockGlassView(this, glyphRenderer, backdrop, perf).apply {
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+        }
+        clockView.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            if (resizeOverlay.isOpen) {
+                resizeOverlay.post { if (resizeOverlay.isOpen) resizeOverlay.layoutAroundClock() }
+            }
         }
         clockView.setOnArtifactCommitted {
             if (resizeOverlay.isOpen) {
@@ -314,7 +321,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 }
             },
             onHaptic = { k -> haptic(k) }
-        )
+        ).apply {
+            layoutParams = FrameLayout.LayoutParams(200, 200, Gravity.TOP or Gravity.LEFT)
+        }
         phoneShell.addView(resizeOverlay)
 
         // 5. Now Playing Glass Card (z = 4)
@@ -496,6 +505,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
         // 12. Floating Toast Capsule (z = 11)
         toastView = TextView(this).apply {
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
             visibility = View.GONE
             alpha = 0f
             setTextColor(Color.WHITE)

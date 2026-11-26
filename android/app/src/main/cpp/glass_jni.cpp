@@ -83,7 +83,10 @@ Java_com_oclock_liquidglass_NativeGlass_compute(JNIEnv* env, jclass, jbyteArray 
 }
 
 /* Direct Bitmap lock compute for Pure Native Android: zero byte-array copy,
-   zero PNG compression, outputs (R=dispX, G=dispY, B=interiorDepth*8, A=255). */
+   zero PNG compression.
+   Writes to outFieldBmp: (R=dispX, G=dispY, B=(depth+4)*7, A=255).
+   Also stores smooth double-precision SDF normal (nx, ny) into alphaBmp (G, B)
+   while keeping crisp anti-aliased alpha in alphaBmp.R and A=255. */
 extern "C" JNIEXPORT jdouble JNICALL
 Java_com_oclock_liquidglass_NativeGlass_computeClockField(
         JNIEnv* env, jclass, jobject alphaBmp, jobject outFieldBmp,
@@ -109,7 +112,7 @@ Java_com_oclock_liquidglass_NativeGlass_computeClockField(
     double maxAbsCss = -1.0;
     try {
         std::vector<uint8_t> alpha(size_t(w) * h);
-        const auto* aBytes = static_cast<const uint8_t*>(aPtr);
+        auto* aBytes = static_cast<uint8_t*>(aPtr);
         for (int y = 0; y < h; y++) {
             const uint8_t* srcRow = aBytes + size_t(y) * aInfo.stride;
             uint8_t* dstRow = alpha.data() + size_t(y) * w;
@@ -127,80 +130,121 @@ Java_com_oclock_liquidglass_NativeGlass_computeClockField(
                 const size_t count = size_t(w) * h;
                 for (size_t i = 0; i < count; i++) {
                     double s = sdf[i] > 0.f ? double(sdf[i]) - 0.5 : -(double(inside[i]) - 0.5);
-                    sdf[i] = float(s);
                     maxInside = std::max(maxInside, -s);
+                    // Subpixel contour correction on the 1px edge band removes binary EDT aliasing
+                    if (std::abs(s) <= 0.6) {
+                        s = (127.5 - double(alpha[i])) / 255.0;
+                    }
+                    sdf[i] = float(s);
                 }
                 std::vector<float>().swap(inside);
 
-                const double userBezel = std::max(2.0, bezel * ss);
-                const double effBezel = std::max(2.0, std::min(userBezel, std::max(2.0, 0.5 * maxInside)));
-                const double effThick = thickness * ss * (effBezel / userBezel);
-                double profile[127], maxAbs = 0.0;
-                for (int i = 0; i < 127; i++) {
-                    double x = double(i) / 126.0, x1 = std::max(0.0, x - 0.001), x2 = std::min(1.0, x + 0.001);
-                    double height = glass::surface(x, surfaceKind) * effThick;
-                    double slope = ((glass::surface(x2, surfaceKind) - glass::surface(x1, surfaceKind)) / (x2 - x1)) * effThick / effBezel;
-                    double len = std::hypot(-slope, 1.0), nx = -slope / len, nz = 1.0 / len, eta = 1.0 / ior;
-                    double sin2 = eta * eta * (1.0 - nz * nz), disp = 0.0;
-                    if (sin2 <= 1.0) {
-                        double factor = eta * nz - std::sqrt(1.0 - sin2);
-                        double tx = factor * nx, ty = -eta + factor * nz;
-                        if (ty != 0.0) disp = (-height / ty) * tx;
+                // 3 separable 5-tap Gaussian passes [1,4,6,4,1]/16 eliminate 4:1 diagonal staircase ripples
+                std::vector<float> smoothSdf = sdf;
+                std::vector<float> tmpSdf(count);
+                bool cancelled = false;
+                for (int pass = 0; pass < 3 && !cancelled; pass++) {
+                    for (int y = 0; y < h; y++) {
+                        if ((y & 63) == 0 && glass::isCancelled(&g_latest_version, expected)) {
+                            cancelled = true;
+                            break;
+                        }
+                        const float* src = smoothSdf.data() + size_t(y) * w;
+                        float* dst = tmpSdf.data() + size_t(y) * w;
+                        for (int x = 0; x < w; x++) {
+                            const int xm2 = std::max(0, x - 2), xm1 = std::max(0, x - 1);
+                            const int xp1 = std::min(w - 1, x + 1), xp2 = std::min(w - 1, x + 2);
+                            dst[x] = (src[xm2] + 4.f * src[xm1] + 6.f * src[x] + 4.f * src[xp1] + src[xp2]) * 0.0625f;
+                        }
                     }
-                    profile[i] = disp;
-                    maxAbs = std::max(maxAbs, std::abs(disp));
+                    if (cancelled) break;
+                    for (int y = 0; y < h; y++) {
+                        if ((y & 63) == 0 && glass::isCancelled(&g_latest_version, expected)) {
+                            cancelled = true;
+                            break;
+                        }
+                        const float* rm2 = tmpSdf.data() + size_t(std::max(0, y - 2)) * w;
+                        const float* rm1 = tmpSdf.data() + size_t(std::max(0, y - 1)) * w;
+                        const float* r0  = tmpSdf.data() + size_t(y) * w;
+                        const float* rp1 = tmpSdf.data() + size_t(std::min(h - 1, y + 1)) * w;
+                        const float* rp2 = tmpSdf.data() + size_t(std::min(h - 1, y + 2)) * w;
+                        float* dst = smoothSdf.data() + size_t(y) * w;
+                        for (int x = 0; x < w; x++) {
+                            dst[x] = (rm2[x] + 4.f * rm1[x] + 6.f * r0[x] + 4.f * rp1[x] + rp2[x]) * 0.0625f;
+                        }
+                    }
                 }
-                if (!maxAbs) maxAbs = 1e-6;
-                maxAbsCss = maxAbs / ss;
 
-                std::vector<float> smoothRing(size_t(w) * 3);
-                auto rowPtr = [&](int slot) -> float* { return smoothRing.data() + size_t(slot) * w; };
-                auto computeSmoothRow = [&](int ry, float* dst) {
-                    int rym = std::max(0, ry - 1), ryp = std::min(h - 1, ry + 1);
-                    const float* r0 = sdf.data() + size_t(rym) * w;
-                    const float* r1 = sdf.data() + size_t(ry) * w;
-                    const float* r2 = sdf.data() + size_t(ryp) * w;
-                    for (int x = 0; x < w; x++) {
-                        int xm = std::max(0, x - 1), xp = std::min(w - 1, x + 1);
-                        dst[x] = float((double(r0[xm]) + 2.0*r0[x] + r0[xp] + 2.0*r1[xm] + 4.0*r1[x] + 2.0*r1[xp] + r2[xm] + 2.0*r2[x] + r2[xp]) * 0.0625);
+                if (!cancelled) {
+                    const double userBezel = std::max(2.0, bezel * ss);
+                    const double effBezel = std::max(2.0, std::min(userBezel, std::max(2.0, 0.5 * maxInside)));
+                    const double effThick = thickness * ss * (effBezel / userBezel);
+                    double profile[127], maxAbs = 0.0;
+                    for (int i = 0; i < 127; i++) {
+                        double x = double(i) / 126.0, x1 = std::max(0.0, x - 0.001), x2 = std::min(1.0, x + 0.001);
+                        double height = glass::surface(x, surfaceKind) * effThick;
+                        double slope = ((glass::surface(x2, surfaceKind) - glass::surface(x1, surfaceKind)) / (x2 - x1)) * effThick / effBezel;
+                        double len = std::hypot(-slope, 1.0), nx = -slope / len, nz = 1.0 / len, eta = 1.0 / ior;
+                        double sin2 = eta * eta * (1.0 - nz * nz), disp = 0.0;
+                        if (sin2 <= 1.0) {
+                            double factor = eta * nz - std::sqrt(1.0 - sin2);
+                            double tx = factor * nx, ty = -eta + factor * nz;
+                            if (ty != 0.0) disp = (-height / ty) * tx;
+                        }
+                        profile[i] = disp;
+                        maxAbs = std::max(maxAbs, std::abs(disp));
                     }
-                };
-                computeSmoothRow(0, rowPtr(0));
-                computeSmoothRow(std::min(h - 1, 1), rowPtr(1));
+                    if (!maxAbs) maxAbs = 1e-6;
+                    maxAbsCss = maxAbs / ss;
 
-                auto* fBytes = static_cast<uint8_t*>(fPtr);
-                const bool flatCenter = std::abs(profile[126]) < 1e-9;
+                    auto* fBytes = static_cast<uint8_t*>(fPtr);
+                    const bool flatCenter = std::abs(profile[126]) < 1e-9;
 
-                for (int y = 0; y < h; y++) {
-                    if ((y & 31) == 0 && glass::isCancelled(&g_latest_version, expected)) {
-                        maxAbsCss = -1.0;
-                        break;
-                    }
-                    if (y >= 1 && y + 1 < h) computeSmoothRow(y + 1, rowPtr((y + 1) % 3));
-                    const float* sm = rowPtr(std::max(0, y - 1) % 3);
-                    const float* sc = rowPtr(y % 3);
-                    const float* sp = rowPtr(std::min(h - 1, y + 1) % 3);
-                    const float* sdfRow = sdf.data() + size_t(y) * w;
-                    uint8_t* outRow = fBytes + size_t(y) * fInfo.stride;
+                    for (int y = 0; y < h; y++) {
+                        if ((y & 31) == 0 && glass::isCancelled(&g_latest_version, expected)) {
+                            maxAbsCss = -1.0;
+                            break;
+                        }
+                        const int ym = std::max(0, y - 1), yp = std::min(h - 1, y + 1);
+                        const float* sm = smoothSdf.data() + size_t(ym) * w;
+                        const float* sc = smoothSdf.data() + size_t(y) * w;
+                        const float* sp = smoothSdf.data() + size_t(yp) * w;
+                        uint8_t* aRow = aBytes + size_t(y) * aInfo.stride;
+                        uint8_t* outRow = fBytes + size_t(y) * fInfo.stride;
 
-                    for (int x = 0; x < w; x++) {
-                        uint8_t* d = outRow + size_t(x) * 4;
-                        double dd = sdfRow[x];
-                        d[0] = 128; d[1] = 128;
-                        d[2] = dd < 0.0 ? glass::byte((-dd) * 6.0) : 0;
-                        d[3] = 255; // Opaque RGBA avoids any Android driver premultiply corruption
-                        if (dd > 0.0) continue;
-                        if (flatCenter && dd <= -effBezel) continue;
+                        for (int x = 0; x < w; x++) {
+                            const int xm = std::max(0, x - 1), xp = std::min(w - 1, x + 1);
+                            const double dd = sc[x];
+                            const double gx = (double(sc[xp]) - sc[xm]) * 0.5;
+                            const double gy = (double(sp[x]) - sm[x]) * 0.5;
+                            const double len = std::hypot(gx, gy);
+                            // Keep normal bounded smoothly at medial ridges instead of snapping
+                            const double div = std::max(1.0, len);
+                            const double rnx = len > 1e-4 ? gx / div : 0.0;
+                            const double rny = len > 1e-4 ? gy / div : 0.0;
 
-                        int xm = std::max(0, x - 1), xp = std::min(w - 1, x + 1);
-                        double gx = (double(sc[xp]) - sc[xm]) * 0.5, gy = (double(sp[x]) - sm[x]) * 0.5;
-                        double len = std::hypot(gx, gy); if (!len) len = 1.0;
-                        double nx = gx / len, ny = gy / len;
-                        double pos = glass::clamp(std::min(-dd, effBezel) / effBezel) * 126.0;
-                        int a = int(std::floor(pos)), b = std::min(126, a + 1);
-                        double t = pos - a, disp = profile[a] * (1.0 - t) + profile[b] * t;
-                        d[0] = glass::byte(128.0 - nx * (disp / maxAbs) * 127.0);
-                        d[1] = glass::byte(128.0 - ny * (disp / maxAbs) * 127.0);
+                            // Write smooth normal into alphaBmp G/B while leaving R (alpha) & A=255 intact
+                            uint8_t* ad = aRow + size_t(x) * 4;
+                            ad[1] = glass::byte(128.0 + rnx * 127.0);
+                            ad[2] = glass::byte(128.0 + rny * 127.0);
+                            ad[3] = 255;
+
+                            uint8_t* d = outRow + size_t(x) * 4;
+                            d[0] = 128; d[1] = 128;
+                            // Signed smooth depth: dd=+4px outside -> 0, dd=0 -> 28, dd=-32.4px -> 255
+                            d[2] = glass::byte((-dd + 4.0) * 7.0);
+                            d[3] = 255;
+                            if (dd > 0.0) continue;
+                            if (flatCenter && dd <= -effBezel) continue;
+
+                            const double uLen = len > 1e-4 ? len : 1.0;
+                            const double nx = gx / uLen, ny = gy / uLen;
+                            const double pos = glass::clamp(std::min(-dd, effBezel) / effBezel) * 126.0;
+                            const int a = int(std::floor(pos)), b = std::min(126, a + 1);
+                            const double t = pos - a, disp = profile[a] * (1.0 - t) + profile[b] * t;
+                            d[0] = glass::byte(128.0 - nx * (disp / maxAbs) * 127.0);
+                            d[1] = glass::byte(128.0 - ny * (disp / maxAbs) * 127.0);
+                        }
                     }
                 }
             }
@@ -294,17 +338,17 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
                 g = g * (1.f - shadowOp) + shG * shadowOp;
                 b = b * (1.f - shadowOp) + shB * shadowOp;
             }
-            // directional inner rim shadow
-            float depthPx = float(fd[2]) * 0.125f;
+            // directional inner rim shadow from smooth precomputed SDF normal + depth
+            float depthPx = std::max(0.f, float(fd[2]) / 7.f - 4.f);
             if (innerOp > 0.001f && innerThick > 0.01f && depthPx < fallLimit) {
-                int xm = std::max(0, x - 1), xp = std::min(w - 1, x + 1);
-                float gx = float(fRow[xp * 4 + 2]) - float(fRow[xm * 4 + 2]);
-                float gy = float(fRp[x * 4 + 2]) - float(fRm[x * 4 + 2]);
+                float gx = (float(aRow[size_t(x) * 4 + 1]) - 128.f) / 127.f;
+                float gy = (float(aRow[size_t(x) * 4 + 2]) - 128.f) / 127.f;
                 float gl = std::hypot(gx, gy);
                 if (gl > 0.01f) {
+                    float ridgeFade = clamp01f(gl * 1.4f);
                     float k = std::fabs((gx / gl) * ax + (gy / gl) * ay);
-                    float fall = std::pow(clamp01f(1.f - depthPx / fallLimit), 0.85f);
-                    float rimA = std::pow(k, 1.6f) * fall * innerOp;
+                    float fall = std::pow(clamp01f(1.f - depthPx / fallLimit), 1.35f);
+                    float rimA = std::pow(k, 1.6f) * fall * ridgeFade * innerOp;
                     r = r * (1.f - rimA) + inR * rimA;
                     g = g * (1.f - rimA) + inG * rimA;
                     b = b * (1.f - rimA) + inB * rimA;

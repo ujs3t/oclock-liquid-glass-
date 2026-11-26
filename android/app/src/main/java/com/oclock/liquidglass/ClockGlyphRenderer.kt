@@ -54,6 +54,10 @@ data class ClockArtifact(
     val textHDp: Float,
     val lineHDp: Float,
     val padDp: Float,
+    val inkLeftDp: Float,
+    val inkTopDp: Float,
+    val inkRightDp: Float,
+    val inkBottomDp: Float,
     val sx: Float,
     val sy: Float,
     val minuteKey: String,
@@ -461,6 +465,20 @@ class ClockGlyphRenderer(private val context: Context) {
         val lineStep = digitTargetH * 1.06f
         val startY = ((hDp * ss) - (lines.size - 1) * lineStep) * 0.5f
 
+        var inkMinX = Float.POSITIVE_INFINITY
+        var inkMinY = Float.POSITIVE_INFINITY
+        var inkMaxX = Float.NEGATIVE_INFINITY
+        var inkMaxY = Float.NEGATIVE_INFINITY
+        val tb = android.graphics.Rect()
+        fun includeInk(l: Float, t: Float, r: Float, b: Float) {
+            if (r > l && b > t) {
+                if (l < inkMinX) inkMinX = l
+                if (t < inkMinY) inkMinY = t
+                if (r > inkMaxX) inkMaxX = r
+                if (b > inkMaxY) inkMaxY = b
+            }
+        }
+
         for ((li, ln) in lines.withIndex()) {
             val advs = FloatArray(ln.length) { i -> probe.measureText(ln[i].toString()) }
             val totalW = advs.sum() + max(0, ln.length - 1) * cfg.tracking
@@ -482,16 +500,12 @@ class ClockGlyphRenderer(private val context: Context) {
                         val th = dots.topH * dotScale
                         val bw = dots.botW * dotScale
                         val bh = dots.botH * dotScale
-                        c.drawBitmap(
-                            dots.topBmp, null,
-                            RectF(charCenterPx - tw * 0.5f, lineCenterPx - sep - th * 0.5f, charCenterPx + tw * 0.5f, lineCenterPx - sep + th * 0.5f),
-                            paint
-                        )
-                        c.drawBitmap(
-                            dots.botBmp, null,
-                            RectF(charCenterPx - bw * 0.5f, lineCenterPx + sep - bh * 0.5f, charCenterPx + bw * 0.5f, lineCenterPx + sep + bh * 0.5f),
-                            paint
-                        )
+                        val topRect = RectF(charCenterPx - tw * 0.5f, lineCenterPx - sep - th * 0.5f, charCenterPx + tw * 0.5f, lineCenterPx - sep + th * 0.5f)
+                        val botRect = RectF(charCenterPx - bw * 0.5f, lineCenterPx + sep - bh * 0.5f, charCenterPx + bw * 0.5f, lineCenterPx + sep + bh * 0.5f)
+                        c.drawBitmap(dots.topBmp, null, topRect, paint)
+                        c.drawBitmap(dots.botBmp, null, botRect, paint)
+                        includeInk(topRect.left, topRect.top, topRect.right, topRect.bottom)
+                        includeInk(botRect.left, botRect.top, botRect.right, botRect.bottom)
                     }
                     continue
                 }
@@ -499,14 +513,21 @@ class ClockGlyphRenderer(private val context: Context) {
                 if (ch in '0'..'9' && cfg.sy >= 1.03f) {
                     val g = stretchDigitBitmap(ch, size, cfg.font, cfg.sx, cfg.sy, ss, refMidRel)
                     if (g != null) {
-                        c.drawBitmap(
-                            g.alphaBmp,
-                            charCenterPx - g.w * 0.5f + g.xCenterOffset,
-                            lineCenterPx - g.h * 0.5f + g.yCenterRel,
-                            paint
-                        )
+                        val gl = charCenterPx - g.w * 0.5f + g.xCenterOffset
+                        val gt = lineCenterPx - g.h * 0.5f + g.yCenterRel
+                        c.drawBitmap(g.alphaBmp, gl, gt, paint)
+                        includeInk(gl, gt, gl + g.w, gt + g.h)
                         continue
                     }
+                }
+
+                probe.getTextBounds(ch.toString(), 0, 1, tb)
+                if (!tb.isEmpty) {
+                    val gl = charCenterPx + (tb.left - adv * 0.5f) * ss * cfg.sx
+                    val gr = charCenterPx + (tb.right - adv * 0.5f) * ss * cfg.sx
+                    val gt = lineCenterPx + (-refMidRel * size + tb.top) * ss * cfg.sy
+                    val gb = lineCenterPx + (-refMidRel * size + tb.bottom) * ss * cfg.sy
+                    includeInk(gl, gt, gr, gb)
                 }
 
                 c.save()
@@ -516,6 +537,11 @@ class ClockGlyphRenderer(private val context: Context) {
                 c.restore()
             }
         }
+
+        val inkLeftDp = if (inkMaxX > inkMinX) (inkMinX / ss).coerceIn(0f, wDp * 0.45f) else pad
+        val inkTopDp = if (inkMaxY > inkMinY) (inkMinY / ss).coerceIn(0f, hDp * 0.45f) else pad
+        val inkRightDp = if (inkMaxX > inkMinX) (inkMaxX / ss).coerceIn(inkLeftDp + 20f, wDp) else (wDp - pad)
+        val inkBottomDp = if (inkMaxY > inkMinY) (inkMaxY / ss).coerceIn(inkTopDp + 20f, hDp) else (hDp - pad)
 
         val fieldBmp = Bitmap.createBitmap(wPx, hPx, Bitmap.Config.ARGB_8888).apply {
             setHasAlpha(false)
@@ -561,6 +587,10 @@ class ClockGlyphRenderer(private val context: Context) {
             textHDp = max(40f, lines.size * capH * cfg.sy),
             lineHDp = capH,
             padDp = pad * 2f,
+            inkLeftDp = inkLeftDp,
+            inkTopDp = inkTopDp,
+            inkRightDp = inkRightDp,
+            inkBottomDp = inkBottomDp,
             sx = cfg.sx,
             sy = cfg.sy,
             minuteKey = minuteKey,

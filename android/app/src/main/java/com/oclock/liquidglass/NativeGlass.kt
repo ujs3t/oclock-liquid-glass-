@@ -29,8 +29,8 @@ object NativeGlass {
 
     /**
      * Ultra-fast direct Bitmap lock C++ field compute:
-     * Reads [alphaBmp] (ARGB_8888 opaque R-channel mask) and writes (R=dispX, G=dispY, B=interiorDepth*6, A=255)
-     * directly into [outFieldBmp] (ARGB_8888, hasAlpha=false) without PNG encode/decode or array copies.
+     * Reads [alphaBmp] (ARGB_8888 opaque R-channel mask), stores smooth SDF normal (G, B), and writes
+     * (R=dispX, G=dispY, B=(depth+4)*7, A=255) directly into [outFieldBmp] without PNG encode/decode.
      */
     @JvmStatic
     external fun computeClockField(

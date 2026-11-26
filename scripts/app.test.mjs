@@ -55,17 +55,24 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(mainKt.includes('ACTION_PICK_IMAGES'));
   assert.ok(mainKt.includes('ClockGlassView'));
   assert.ok(mainKt.includes('EditorSheetView'));
+  assert.ok(mainKt.includes('Gravity.TOP or Gravity.LEFT'));
+
+  const layerKt = readFileSync(ktDir + 'ClockLayerView.kt','utf8');
+  assert.ok(layerKt.includes('inkLeftDp'));
+  assert.ok(layerKt.includes('Gravity.TOP or Gravity.LEFT'));
 
   const shadersKt = readFileSync(ktDir + 'LiquidGlassShaders.kt','utf8');
   assert.ok(shadersKt.includes('RuntimeShader'));
   assert.ok(shadersKt.includes('CARD_AGSL'));
   assert.ok(shadersKt.includes('CLOCK_AGSL'));
+  assert.ok(shadersKt.includes('msk.gb'));
 
   const glyphKt = readFileSync(ktDir + 'ClockGlyphRenderer.kt','utf8');
   assert.ok(glyphKt.includes('measureNumeralMetrics'));
   assert.ok(glyphKt.includes('stretchDigitBitmap'));
   assert.ok(glyphKt.includes('getColonDots'));
   assert.ok(glyphKt.includes('computeClockField'));
+  assert.ok(glyphKt.includes('inkLeftDp'));
 
   const nativeKt = readFileSync(ktDir + 'NativeGlass.kt','utf8');
   assert.ok(nativeKt.includes('computeClockField'));
@@ -75,6 +82,7 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   const jniCpp = readFileSync('android/app/src/main/cpp/glass_jni.cpp','utf8');
   assert.ok(jniCpp.includes('AndroidBitmap_lockPixels'));
   assert.ok(jniCpp.includes('computeClockField'));
+  assert.ok(jniCpp.includes('smoothSdf'));
 
   const aiKt = readFileSync(ktDir + 'AIDepthManager.kt','utf8');
   assert.ok(aiKt.includes('SubjectSegmentation'));
