@@ -24,6 +24,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Debug;
 import android.os.Environment;
+import android.os.SystemClock;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
@@ -78,6 +79,9 @@ public class MainActivity extends Activity {
     private final Map<String, byte[]> subjectResults = new ConcurrentHashMap<>();
     private ValueCallback<Uri[]> files;
     private volatile byte[] pendingPerfBytes;
+    private volatile String cachedPerfStatsJson = "";
+    private volatile long lastPerfSampleAt = 0;
+    private final java.util.concurrent.atomic.AtomicBoolean perfSampling = new java.util.concurrent.atomic.AtomicBoolean(false);
     private PermissionRequest camera;
     private volatile boolean awaitingExternalActivity;
     private volatile boolean pageReady;
@@ -639,7 +643,11 @@ public class MainActivity extends Activity {
             startSubjectSegmentation(requestId, dataUrl);
         }
         @JavascriptInterface public String getPerfStats() {
-            return buildPerfStatsJson();
+            long now = SystemClock.elapsedRealtime();
+            if (cachedPerfStatsJson.isEmpty() || now - lastPerfSampleAt >= 4000L) {
+                refreshPerfStatsAsync();
+            }
+            return cachedPerfStatsJson.isEmpty() ? "{}" : cachedPerfStatsJson;
         }
         @JavascriptInterface public String savePerfReport(String filename, String content, boolean silent) {
             return handleSavePerfReport(filename, content, silent);
@@ -649,6 +657,25 @@ public class MainActivity extends Activity {
         }
         @JavascriptInterface public boolean sharePerfReport(String filename, String content) {
             return handleSharePerfReport(filename, content);
+        }
+    }
+
+    private void refreshPerfStatsAsync() {
+        if (perfWriteExecutor.isShutdown()) return;
+        if (!perfSampling.compareAndSet(false, true)) return;
+        try {
+            perfWriteExecutor.execute(() -> {
+                try {
+                    String json = buildPerfStatsJson();
+                    if (json != null && !json.isEmpty()) cachedPerfStatsJson = json;
+                    lastPerfSampleAt = SystemClock.elapsedRealtime();
+                } catch (Throwable ignored) {
+                } finally {
+                    perfSampling.set(false);
+                }
+            });
+        } catch (Throwable t) {
+            perfSampling.set(false);
         }
     }
 
@@ -892,6 +919,7 @@ public class MainActivity extends Activity {
         if (web != null) {
             web.onResume();
             pushDeviceStatus();
+            refreshPerfStatsAsync();
         }
     }
 

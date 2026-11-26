@@ -50,6 +50,7 @@ test('UI bugfixes and native Android upgrades stay intact', () => {
   assert.ok(mainJava.includes('segmentSubject'));
   assert.ok(mainJava.includes('SubjectSegmentation'));
   assert.ok(mainJava.includes('getPerfStats'));
+  assert.ok(mainJava.includes('refreshPerfStatsAsync'));
   assert.ok(mainJava.includes('savePerfReport'));
   assert.ok(mainJava.includes('Api29Downloads'));
   assert.ok(readFileSync('android/app/build.gradle','utf8').includes('play-services-mlkit-subject-segmentation'));
@@ -71,6 +72,7 @@ test('UI bugfixes and native Android upgrades stay intact', () => {
   assert.ok(html.includes('PerfMonitor'));
   assert.ok(html.includes('id="perf-download"'));
   assert.ok(html.includes('preloadImg(meta.maskUrl)'));
+  assert.ok(html.includes('cv.toBlob'));
   assert.ok(html.includes('minuteKey'));
   assert.ok(!html.includes("document.body.classList.add('swapping')"));
   assert.ok(html.includes('Math.min(3, Math.max(2, Math.round(dpr * 2)))'));

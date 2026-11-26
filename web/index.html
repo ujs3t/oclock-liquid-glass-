@@ -194,7 +194,6 @@ body.resizing #clock-wrap{pointer-events:none}
   transition:opacity .26s var(--ease);
   -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
   -webkit-mask-size:100% 100%;mask-size:100% 100%;
-  will-change:opacity;
 }
 /* Digits: FLAT masked glyphs — no stroke, no glow, no halo.
    Exactly like the reference: the numbers are just tinted surfaces. */
@@ -202,7 +201,6 @@ body.resizing #clock-wrap{pointer-events:none}
   position:absolute;left:0;top:0;
   pointer-events:none;
   transition:filter .35s var(--ease);
-  will-change:filter;
   z-index:2;
 }
 #clock-shadow{
@@ -226,7 +224,6 @@ body.resizing #clock-wrap{pointer-events:none}
   -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
   -webkit-mask-size:100% 100%;mask-size:100% 100%;
   transition:opacity .26s var(--ease);
-  will-change:opacity;
   z-index:1;
 }
 #clock-fb{
@@ -350,7 +347,6 @@ body.resizing #clock-wrap{pointer-events:none}
   background:linear-gradient(135deg,#ff5f6d,#ffc371);
   box-shadow:0 2px 10px rgba(0,0,0,.22);
   transition:transform .52s var(--spring), opacity .35s var(--ease);
-  will-change:transform;
 }
 body.np-paused #np-art{transform:scale(.88);opacity:.9}
 .np-meta{flex:1;min-width:0;line-height:1.25;overflow:hidden}
@@ -380,8 +376,8 @@ body.np-paused #np-art{transform:scale(.88);opacity:.9}
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   display:block;margin-top:1px;
 }
-.np-wave{opacity:.72;flex:none}
-.np-wave rect{transform-box:fill-box;transform-origin:center bottom;will-change:transform}
+.np-wave{opacity:.72;flex:none;contain:paint}
+.np-wave rect{transform-box:fill-box;transform-origin:center bottom}
 body:not(.np-paused) .np-wave rect:nth-child(1){animation:eqBar .78s ease-in-out infinite alternate}
 body:not(.np-paused) .np-wave rect:nth-child(2){animation:eqBar .62s .15s ease-in-out infinite alternate}
 body:not(.np-paused) .np-wave rect:nth-child(3){animation:eqBar .88s .08s ease-in-out infinite alternate}
@@ -448,7 +444,6 @@ body:not(.np-paused) .np-wave rect:nth-child(4){animation:eqBar .70s .24s ease-i
   border-radius:12px;
   color:var(--ui);
   transition:transform .44s var(--bounce), opacity .26s var(--ease);
-  will-change:transform;
   -webkit-tap-highlight-color:transparent;
 }
 .np-btn:active{transform:scale(.84)}
@@ -514,7 +509,6 @@ body:not(.np-paused) .np-wave rect:nth-child(4){animation:eqBar .70s .24s ease-i
   isolation:isolate;
   transition:transform .42s var(--bounce), background .28s var(--ease),
              box-shadow .42s var(--bounce);
-  will-change:transform;
   touch-action:none;
   -webkit-tap-highlight-color:transparent;
 }
@@ -661,15 +655,13 @@ body:not(.np-paused) .np-wave rect:nth-child(4){animation:eqBar .70s .24s ease-i
   overscroll-behavior:contain;
   contain:layout style;
   padding:8px 14px calc(var(--safe-b) + 10px);
-  background:rgba(16,16,20,.84);
-  backdrop-filter:blur(16px) saturate(1.35);
-  -webkit-backdrop-filter:blur(16px) saturate(1.35);
+  background:rgba(18,19,24,.94);
   border-radius:26px 26px 0 0;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.14);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.14), 0 -14px 40px rgba(0,0,0,.45);
   transform:translateY(104%);
   transition:transform .36s cubic-bezier(.22,1.08,.36,1);
-  will-change:transform;
 }
+body.editing #edit{will-change:transform}
 #edit.open{transform:none}
 .edit-grabber{
   width:36px;height:4.5px;border-radius:3px;
@@ -1343,10 +1335,13 @@ const PerfMonitor = (() => {
     let nativeStats = null;
     try {
       const raw = window.AndroidHost?.getPerfStats?.();
-      if (raw) {
-        nativeStats = JSON.parse(raw);
-        metrics.latestNative = nativeStats;
-        if (nativeStats.totalPssMB > metrics.nativePeakPssMB) metrics.nativePeakPssMB = nativeStats.totalPssMB;
+      if (raw && raw.length > 2) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.totalPssMB === 'number') {
+          nativeStats = parsed;
+          metrics.latestNative = nativeStats;
+          if (nativeStats.totalPssMB > metrics.nativePeakPssMB) metrics.nativePeakPssMB = nativeStats.totalPssMB;
+        }
       }
     } catch (_) {}
 
@@ -1362,13 +1357,26 @@ const PerfMonitor = (() => {
     return { jsUsedMB, jsTotalMB, jsLimitMB, nativeStats };
   }
 
-  function getSummary() {
+  function getSummary(liveMem = true) {
     const samples = metrics.fpsSamples.slice().sort((a, b) => a - b);
     const avgFps = samples.length ? Math.round(samples.reduce((a, b) => a + b, 0) / samples.length) : currentFps;
     const minFps = samples.length ? samples[0] : currentFps;
     const lowIdx = samples.length ? Math.max(0, Math.floor(samples.length * 0.05)) : 0;
     const fps5PctLow = samples.length ? samples[lowIdx] : currentFps;
-    const snap = readMemSnapshot();
+    let snap;
+    if (liveMem) {
+      snap = readMemSnapshot();
+    } else {
+      const pm = performance.memory;
+      const jsUsedMB = pm ? Math.round((pm.usedJSHeapSize / 1048576) * 100) / 100 : null;
+      if (jsUsedMB != null && jsUsedMB > metrics.jsPeakMB) metrics.jsPeakMB = jsUsedMB;
+      snap = {
+        jsUsedMB,
+        jsTotalMB: pm ? Math.round((pm.totalJSHeapSize / 1048576) * 100) / 100 : null,
+        jsLimitMB: pm ? Math.round((pm.jsHeapSizeLimit / 1048576) * 100) / 100 : null,
+        nativeStats: metrics.latestNative
+      };
+    }
     const caches = cacheStatsFn ? cacheStatsFn() : {};
     return {
       appVersion: '1.3.0',
@@ -1464,7 +1472,7 @@ const PerfMonitor = (() => {
     if (!document.body.classList.contains('editing')) return;
     const fpsEl = $('perf-fps'), jankEl = $('perf-jank'), jsEl = $('perf-jsmem'), sysEl = $('perf-sysmem'), noteEl = $('perf-note');
     if (!fpsEl) return;
-    const s = getSummary();
+    const s = getSummary(false);
     fpsEl.textContent = s.fps.current ? `${s.fps.current} fps (avg ${s.fps.avg})` : `${s.fps.avg || '--'} fps`;
     jankEl.textContent = `${s.fps.jankOver50ms} jank · ${s.fps.maxFrameGapMs}ms`;
     const c = s.memory.caches || {};
@@ -1577,7 +1585,7 @@ const PerfMonitor = (() => {
       } catch (_) {}
     }
     startRaf();
-    memTimer = setInterval(() => { if (!document.hidden) readMemSnapshot(); }, 2000);
+    memTimer = setInterval(() => { if (!document.hidden) readMemSnapshot(); }, 5000);
     uiTimer = setInterval(updateUI, 1000);
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) { stopRaf(); flushOnExit(); }
@@ -1982,9 +1990,9 @@ function* computeGlassJob(alpha, w, h, ss, params, includeShadow = true) {
 }
 
 /* inner-shadow map for the clock digits. Runs off-thread and encodes to a PNG
-   blob there, so dragging the sliders never blocks a frame. */
+   blob there; capped at 520px since maskImage keeps the glyph silhouette 100% sharp. */
 function paintInnerShadow(alpha, w, h, cfg) {
-  const cover = cfg.cover ? Math.min(2, cfg.cover) : Math.max(1, Math.min(1.6, 1300 / Math.max(w, h)));
+  const cover = cfg.cover ? Math.min(2, cfg.cover) : Math.min(1, 520 / Math.max(w, h));
   const iw = Math.max(4, Math.round(w * cover));
   const ih = Math.max(4, Math.round(h * cover));
   const thickDev = Math.max(0.75, cfg.thickness * cfg.ss * cover * 0.5);
@@ -2088,6 +2096,7 @@ const Clock = (() => {
   let rafPending = 0;
   let pos = { x: 0, y: typeof state.clockY === 'number' ? Math.max(-20, Math.min(80, state.clockY)) : 0 };
   let activeDispUrl = '';
+  let activeMaskUrl = '';
   let activeInnerUrl = '';
   let applySeq = 0;
 
@@ -2725,7 +2734,7 @@ const Clock = (() => {
     // Tight side padding so wide/tall iOS clock fills near edge-to-edge cleanly
     const maxW = hostW - 12;
     const dpr = window.devicePixelRatio || 1;
-    let ss = Math.min(3, Math.max(2, Math.round(dpr * 1.5)));
+    let ss = Math.min(3, Math.max(2, Math.round(dpr)));
 
     const fontStr = fontStack();
     const weight = state.font === 'SF' ? 600 : c.weight;
@@ -2770,7 +2779,7 @@ const Clock = (() => {
     const hCss = Math.ceil(Math.max(40, lines.length * capH * c.sy) + pad * 2);
 
     const longSide = Math.max(wCss, hCss);
-    if (longSide * ss > 1600) ss = Math.max(1, Math.floor((1600 / longSide) * 10) / 10);
+    if (longSide * ss > 1080) ss = Math.max(1, Math.floor((1080 / longSide) * 10) / 10);
 
     const w = Math.max(4, Math.round(wCss * ss));
     const h = Math.max(4, Math.round(hCss * ss));
@@ -2807,14 +2816,25 @@ const Clock = (() => {
       alphaKey: maskKey,
       innerUrl, innerKey,
       maskCanvas: cv,
-      maskUrl: cv.toDataURL('image/png'),
+      maskUrl: '',
+      maskPromise: null,
       size, lines,
       textW: Math.max(40, maxLineW * c.sx),
       textH: Math.max(40, lines.length * capH * c.sy),
       lineH: capH,
       pad: pad * 2
     };
-    lruSet(maskCache, maskKey, built);
+    built.maskPromise = new Promise((resolve) => {
+      const done = (u) => { built.maskUrl = u; resolve(u); };
+      if (cv.toBlob) {
+        cv.toBlob((blob) => done(blob ? URL.createObjectURL(blob) : cv.toDataURL('image/png')), 'image/png');
+      } else {
+        done(cv.toDataURL('image/png'));
+      }
+    });
+    lruSet(maskCache, maskKey, built, (old) => {
+      if (old && old.maskUrl) scheduleRevoke(old.maskUrl, (u) => u === activeMaskUrl);
+    });
     PerfMonitor.record('clockBitmap', performance.now() - t0, { hit: false, w, h, ss });
     return built;
   }
@@ -2888,6 +2908,7 @@ const Clock = (() => {
     };
     const paint = () => {
       if (applySeq !== mySeq) return;
+      activeMaskUrl = meta.maskUrl || '';
       activeDispUrl = dispUrl || '';
       activeTargetInnerKey = meta.innerKey;
       const mask = `url(${meta.maskUrl})`;
@@ -2930,7 +2951,7 @@ const Clock = (() => {
         fbEl.style.display = 'none';
         const uid = 'clockFilter';
         const key = [meta.alphaKey, dispUrl, meta.wCss, meta.hCss, maxAbsCss].join('|');
-        const bf = `url(#${uid})` + (supportsChainedFilter ? ' blur(1.2px) saturate(1.25) brightness(1.04)' : '');
+        const bf = `url(#${uid})` + (supportsChainedFilter ? ' saturate(1.22) brightness(1.04)' : '');
         let f = document.getElementById(uid);
         /* A new <filter> node forces the whole clock to re-rasterise. When the
            displacement map has not changed we keep the node and touch nothing —
@@ -2989,7 +3010,11 @@ const Clock = (() => {
     };
 
     if (meta.hardCut) {
-      requestAnimationFrame(paint);
+      const mReady = meta.maskUrl ? Promise.resolve(meta.maskUrl) : (meta.maskPromise || Promise.resolve(''));
+      mReady.then((mUrl) => {
+        if (mUrl) meta.maskUrl = mUrl;
+        if (applySeq === mySeq) requestAnimationFrame(paint);
+      });
       return;
     }
 
@@ -3005,11 +3030,16 @@ const Clock = (() => {
     const innerPromise = (needInner && innerShownKey !== meta.innerKey)
       ? waitInnerCached(meta.innerKey).then((u) => preloadImg(u))
       : Promise.resolve();
-    Promise.all([
-      preloadImg(meta.maskUrl),
-      canGlass ? preloadImg(dispUrl) : Promise.resolve(),
-      innerPromise
-    ]).then(() => {
+    const maskReady = meta.maskUrl ? Promise.resolve(meta.maskUrl) : (meta.maskPromise || Promise.resolve(''));
+    maskReady.then((mUrl) => {
+      if (applySeq !== mySeq) return;
+      if (mUrl) meta.maskUrl = mUrl;
+      return Promise.all([
+        preloadImg(meta.maskUrl),
+        canGlass ? preloadImg(dispUrl) : Promise.resolve(),
+        innerPromise
+      ]);
+    }).then(() => {
       if (applySeq !== mySeq) return;
       requestAnimationFrame(paint);
     });
@@ -4873,21 +4903,20 @@ const GlassTargets = (() => {
 
   function attachAll() {
     targets.length = 0;
-    const np = $('np');
-    const pill = $('dnd');
-    const left = $('sh-left');
-    const right = $('sh-right');
-
+    const list = [$('np'), $('dnd'), $('sh-left'), $('sh-right')].filter(Boolean);
     const radiusOf = (el) => {
       const cs = getComputedStyle(el);
       return parseFloat(cs.borderTopLeftRadius) || CONFIG.radius;
     };
-
-    for (const el of [np, pill, left, right]) {
-      if (!el) continue;
+    let idx = 0;
+    const step = () => {
+      if (idx >= list.length) return;
+      const el = list[idx++];
       Glass.attach(el, radiusOf(el));
       targets.push(el);
-    }
+      if (idx < list.length) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
   }
 
   function refresh() {
@@ -5005,7 +5034,6 @@ async function boot() {
   shortcutsRender();
   Shortcuts.bindAll();
   GlassTargets.attachAll();
-  requestAnimationFrame(() => requestAnimationFrame(() => GlassTargets.refresh()));
 
   let initialClockScheduled = false;
   $('wall').addEventListener('load', () => {
