@@ -1,0 +1,1300 @@
+package com.oclock.liquidglass
+
+import android.Manifest
+import android.animation.ValueAnimator
+import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.ImageDecoder
+import android.graphics.Paint
+import android.graphics.RadialGradient
+import android.graphics.Shader
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.Uri
+import android.os.BatteryManager
+import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.provider.MediaStore
+import android.util.TypedValue
+import android.view.Gravity
+import android.view.HapticFeedbackConstants
+import android.view.MotionEvent
+import android.view.View
+import android.view.ViewConfiguration
+import android.view.WindowManager
+import android.view.animation.DecelerateInterpolator
+import android.view.animation.OvershootInterpolator
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.window.OnBackInvokedCallback
+import android.window.OnBackInvokedDispatcher
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.Executors
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.exp
+import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
+
+class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
+
+    companion object {
+        private const val REQ_WALL = 101
+        private const val REQ_SUBJECT = 102
+        private const val REQ_AUDIO = 103
+        private const val REQ_ART = 104
+        private const val REQ_CAM_PERM = 201
+    }
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val bgExecutor = Executors.newCachedThreadPool()
+
+    private lateinit var store: StateStore
+    private lateinit var cfg: LockConfig
+    private lateinit var perf: PerfMonitor
+    private lateinit var glyphRenderer: ClockGlyphRenderer
+    private lateinit var adaptive: AdaptiveTheme
+    private lateinit var aiDepth: AIDepthManager
+    private val backdrop = LiquidGlassShaders.BackdropState()
+
+    private lateinit var rootFrame: FrameLayout
+    private lateinit var phoneShell: FrameLayout
+    private lateinit var wallView: ImageView
+    private lateinit var clockContainer: FrameLayout
+    private lateinit var clockView: ClockGlassView
+    private lateinit var subjectView: ImageView
+    private lateinit var resizeOverlay: ClockResizeOverlayView
+    private lateinit var npCard: NowPlayingCardView
+    private lateinit var toplineRow: LinearLayout
+    private lateinit var dateText: TextView
+    private lateinit var wxText: TextView
+    private lateinit var bottomRow: FrameLayout
+    private lateinit var shLeft: ShortcutCircleButton
+    private lateinit var dndPill: DndPillView
+    private lateinit var shRight: ShortcutCircleButton
+    private lateinit var statusBar: StatusBarView
+    private lateinit var homeBar: View
+    private lateinit var island: DynamicIslandView
+    private lateinit var flashOverlay: FrameLayout
+    private lateinit var cameraOverlay: CameraOverlayView
+    private lateinit var editorSheet: EditorSheetView
+    private lateinit var toastView: TextView
+
+    private lateinit var media: MediaController
+    private var currentWallBmp: Bitmap? = null
+    private var customWallBmp: Bitmap? = null
+    private var customSubjectBmp: Bitmap? = null
+    private var currentColors: AdaptiveColors? = null
+    private var undoSnap: UndoSnapshot? = null
+
+    private var safeTopPx = 0
+    private var safeBottomPx = 0
+    private var pullY = 0f
+    private var pullAnimator: ValueAnimator? = null
+    private var flashOn = false
+    private var flashBurstTimer: Runnable? = null
+    private var toastTimer: Runnable? = null
+    private var geometryDebounce: Runnable? = null
+    private var minuteTickRunnable: Runnable? = null
+    private var weatherTempStr = "☁ −3°"
+    private var lastTapUpMs = 0L
+    private var lastTapX = 0f
+    private var lastTapY = 0f
+    private var backCallback: OnBackInvokedCallback? = null
+
+    private val timeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            updateDateLabel()
+            scheduleClockRender(force = false)
+        }
+    }
+
+    private val batteryReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent == null) return
+            val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+            val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
+            val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+            if (level >= 0 && scale > 0) {
+                val pct = ((level * 100f) / scale).roundToInt().coerceIn(1, 100)
+                val chg = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
+                statusBar.updateBattery(pct, chg)
+            }
+        }
+    }
+
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        val bootStartNs = SystemClock.elapsedRealtimeNanos()
+        super.onCreate(savedInstanceState)
+
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        if (Build.VERSION.SDK_INT >= 28) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
+        }
+
+        store = StateStore(this)
+        cfg = store.load()
+        customWallBmp = if (cfg.hasCustomWall) store.loadCustomWall() else null
+        customSubjectBmp = if (cfg.hasCustomSubject) store.loadCustomSubject() else null
+
+        perf = PerfMonitor(this)
+        glyphRenderer = ClockGlyphRenderer(this)
+        adaptive = AdaptiveTheme()
+        aiDepth = AIDepthManager(this)
+
+        buildUi()
+        setContentView(rootFrame)
+
+        if (Build.VERSION.SDK_INT >= 33) {
+            backCallback = OnBackInvokedCallback { handleBackNavigation() }
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(
+                OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                backCallback!!
+            )
+        }
+
+        media = MediaController(this) { track, art, playing, pos, dur ->
+            npCard.setTrack(track, art)
+            npCard.setPlaying(playing)
+            npCard.updateTime(pos, dur)
+        }
+        media.emit()
+
+        registerReceivers()
+        fetchWeatherAsync()
+
+        perf.setListener { snap ->
+            mainHandler.post { editorSheet.updatePerfUi(snap) }
+        }
+        perf.start()
+
+        phoneShell.post {
+            applyWallpaperAndTheme(reRenderClock = true)
+            updateDateLabel()
+            layoutScreenPositions()
+            perf.recordWork("boot", (SystemClock.elapsedRealtimeNanos() - bootStartNs) / 1_000_000.0)
+        }
+    }
+
+    private fun buildUi() {
+        val dens = resources.displayMetrics.density
+
+        rootFrame = FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            clipChildren = false
+            clipToPadding = false
+        }
+
+        phoneShell = FrameLayout(this).apply {
+            clipChildren = false
+            clipToPadding = false
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                Gravity.CENTER
+            )
+        }
+        rootFrame.addView(phoneShell)
+
+        // 1. Wallpaper Layer (z = 0)
+        wallView = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        }
+        phoneShell.addView(wallView)
+
+        // 2. Clock Layer (z = 2)
+        clockContainer = FrameLayout(this).apply {
+            clipChildren = false
+            clipToPadding = false
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP)
+        }
+        clockView = ClockGlassView(this, glyphRenderer, backdrop, perf).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+        }
+        clockView.setOnArtifactCommitted {
+            if (resizeOverlay.isOpen) {
+                resizeOverlay.post { resizeOverlay.layoutAroundClock() }
+            }
+            refreshAllGlass()
+        }
+        attachClockLongPressAndPull(clockView)
+        clockContainer.addView(clockView)
+        phoneShell.addView(clockContainer)
+
+        // 3. Foreground Depth Subject Cutout (z = 3: above clock, below cards & topline!)
+        subjectView = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            visibility = View.GONE
+            isClickable = false
+            isFocusable = false
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        }
+        phoneShell.addView(subjectView)
+
+        // 4. Resize Frame Overlay (z = 4)
+        resizeOverlay = ClockResizeOverlayView(
+            this,
+            clockView,
+            getLimits = { computeClockLimitsDp() },
+            onConfigChanged = { syncUi ->
+                if (syncUi && editorSheet.isOpen) editorSheet.syncFromConfig()
+            },
+            onCommit = {
+                store.save(cfg)
+                scheduleClockRender(force = true)
+            },
+            onReset = {
+                cfg.size = 172f
+                cfg.sx = 1.0f
+                cfg.sy = 1.22f
+                cfg.clockY = 0f
+                store.save(cfg)
+                layoutScreenPositions()
+                scheduleClockRender(force = true)
+                if (editorSheet.isOpen) editorSheet.syncFromConfig()
+            },
+            onUndo = {
+                undoSnap?.let { s ->
+                    cfg.size = s.size
+                    cfg.sx = s.sx
+                    cfg.sy = s.sy
+                    store.save(cfg)
+                    scheduleClockRender(force = true)
+                    if (editorSheet.isOpen) editorSheet.syncFromConfig()
+                }
+            },
+            onHaptic = { k -> haptic(k) }
+        )
+        phoneShell.addView(resizeOverlay)
+
+        // 5. Now Playing Glass Card (z = 4)
+        npCard = NowPlayingCardView(
+            this, backdrop, perf,
+            onPrev = { haptic("pop"); media.prev() },
+            onPlayToggle = {
+                haptic("pop")
+                media.togglePlay()
+                if (media.isPlaying()) island.pulse("قيد التشغيل الآن", 0xFF30D158.toInt(), 1500L)
+            },
+            onNext = { haptic("pop"); media.next() },
+            onScrub = { ratio -> media.seekRatio(ratio) },
+            onFavorite = {
+                haptic("pop")
+                island.pulse("تمت الإضافة للمفضلة", 0xFFFFD60A.toInt(), 1500L)
+                showToast("مفضلة ✓")
+            },
+            onAirPlay = {
+                haptic("pop")
+                island.pulse("AirPlay نشط", 0xFF38BDF8.toInt(), 1600L)
+                showToast("مكبر الصوت: الهاتف")
+            }
+        ).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+                leftMargin = (12f * dens).roundToInt()
+                rightMargin = (12f * dens).roundToInt()
+            }
+        }
+        phoneShell.addView(npCard)
+
+        // 6. Topline (Date + Weather) (z = 5)
+        toplineRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP)
+        }
+        dateText = TextView(this).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            setShadowLayer(8f * dens, 0f, 1f * dens, Color.argb(72, 0, 0, 0))
+        }
+        wxText = TextView(this).apply {
+            text = "  •  $weatherTempStr"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
+            setShadowLayer(8f * dens, 0f, 1f * dens, Color.argb(72, 0, 0, 0))
+        }
+        toplineRow.addView(dateText)
+        toplineRow.addView(wxText)
+        phoneShell.addView(toplineRow)
+
+        // 7. Bottom Shortcuts + DND Pill (z = 5)
+        bottomRow = FrameLayout(this).apply {
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            clipChildren = false
+            clipToPadding = false
+            setPadding((24f * dens).roundToInt(), 0, (24f * dens).roundToInt(), 0)
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, (54f * dens).roundToInt(), Gravity.BOTTOM)
+        }
+        val btnSz = (52f * dens).roundToInt()
+        shLeft = ShortcutCircleButton(
+            this, "flash", backdrop, perf,
+            onTapAction = { setFlashlight(!flashOn) },
+            onHoldAction = {
+                setFlashlight(true)
+                flashBurstTimer?.let { mainHandler.removeCallbacks(it) }
+                flashBurstTimer = Runnable { setFlashlight(false) }.also { mainHandler.postDelayed(it, 420L) }
+            },
+            onHaptic = { k -> haptic(k) }
+        ).apply {
+            layoutParams = FrameLayout.LayoutParams(btnSz, btnSz, Gravity.START or Gravity.CENTER_VERTICAL)
+        }
+
+        dndPill = DndPillView(this, backdrop, perf).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, (34f * dens).roundToInt(), Gravity.CENTER)
+            visibility = if (cfg.dnd) View.VISIBLE else View.GONE
+            setOnClickListener {
+                cfg.dnd = false
+                store.save(cfg)
+                applyToggles()
+                haptic("tick")
+            }
+        }
+
+        shRight = ShortcutCircleButton(
+            this, "cam", backdrop, perf,
+            onTapAction = { openCamera(autoShoot = false) },
+            onHoldAction = { openCamera(autoShoot = true) },
+            onHaptic = { k -> haptic(k) }
+        ).apply {
+            layoutParams = FrameLayout.LayoutParams(btnSz, btnSz, Gravity.END or Gravity.CENTER_VERTICAL)
+        }
+        bottomRow.addView(shLeft)
+        bottomRow.addView(dndPill)
+        bottomRow.addView(shRight)
+        phoneShell.addView(bottomRow)
+
+        // 8. Status Bar & Home Indicator & Dynamic Island (z = 6..7)
+        statusBar = StatusBarView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, (22f * dens).roundToInt(), Gravity.TOP)
+        }
+        phoneShell.addView(statusBar)
+
+        homeBar = View(this).apply {
+            layoutParams = FrameLayout.LayoutParams((134f * dens).roundToInt(), (5f * dens).roundToInt(), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadius = 99f
+            }
+            alpha = 0.65f
+        }
+        phoneShell.addView(homeBar)
+
+        island = DynamicIslandView(this)
+        phoneShell.addView(island)
+
+        // 9. Fullscreen Flashlight Overlay (z = 8)
+        flashOverlay = object : FrameLayout(this) {
+            private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+            override fun onDraw(canvas: Canvas) {
+                val r = max(width, height).toFloat()
+                p.shader = RadialGradient(
+                    width * 0.5f, height * 0.82f, r,
+                    intArrayOf(0xFFFFFEF4.toInt(), Color.WHITE),
+                    floatArrayOf(0f, 1f),
+                    Shader.TileMode.CLAMP
+                )
+                canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), p)
+            }
+        }.apply {
+            setWillNotDraw(false)
+            visibility = View.GONE
+            alpha = 0f
+            isClickable = true
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+            val offBtn = TextView(context).apply {
+                text = "إطفاء المصباح"
+                setTextColor(Color.BLACK)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                setPadding((22f * dens).roundToInt(), (11f * dens).roundToInt(), (22f * dens).roundToInt(), (11f * dens).roundToInt())
+                background = GradientDrawable().apply {
+                    setColor(Color.argb(36, 0, 0, 0))
+                    cornerRadius = 999f
+                }
+                layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+                    bottomMargin = (56f * dens).roundToInt()
+                }
+                setOnClickListener { setFlashlight(false) }
+            }
+            addView(offBtn)
+        }
+        phoneShell.addView(flashOverlay)
+
+        // 10. Fullscreen Camera2 Overlay (z = 9)
+        cameraOverlay = CameraOverlayView(
+            this,
+            onRequestPermission = {
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), REQ_CAM_PERM)
+            },
+            onShutterFired = {
+                haptic("shutter")
+                island.pulse("تم التقاط الصورة", Color.WHITE, 1600L)
+                showToast("تم التقاط الصورة")
+            },
+            onClosed = {}
+        ).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        }
+        phoneShell.addView(cameraOverlay)
+
+        // 11. Editor Bottom Sheet (z = 10)
+        editorSheet = EditorSheetView(this, cfg, perf, this).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        }
+        phoneShell.addView(editorSheet)
+
+        // 12. Floating Toast Capsule (z = 11)
+        toastView = TextView(this).apply {
+            visibility = View.GONE
+            alpha = 0f
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            setPadding((16f * dens).roundToInt(), (8f * dens).roundToInt(), (16f * dens).roundToInt(), (8f * dens).roundToInt())
+            background = GradientDrawable().apply {
+                setColor(Color.argb(208, 18, 20, 26))
+                cornerRadius = 999f
+                setStroke((0.8f * dens).roundToInt(), Color.argb(46, 255, 255, 255))
+            }
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+        }
+        phoneShell.addView(toastView)
+
+        attachWallpaperPullAndDoubleTap()
+        attachInsetsListener()
+        phoneShell.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
+            if ((r - l) > 0 && (b - t) > 0 && (r - l != or - ol || b - t != ob - ot)) {
+                phoneShell.post {
+                    applyWallpaperAndTheme(reRenderClock = true)
+                    if (resizeOverlay.isOpen) resizeOverlay.layoutAroundClock()
+                }
+            }
+        }
+    }
+
+    private fun attachInsetsListener() {
+        val dens = resources.displayMetrics.density
+        ViewCompat.setOnApplyWindowInsetsListener(rootFrame) { _, insets ->
+            val sys = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            safeTopPx = max(sys.top, (14f * dens).roundToInt())
+            safeBottomPx = max(sys.bottom, (14f * dens).roundToInt())
+            layoutScreenPositions()
+            insets
+        }
+    }
+
+    private fun layoutScreenPositions() {
+        val dens = resources.displayMetrics.density
+        val isShortLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE &&
+                (resources.displayMetrics.heightPixels / dens) < 560f
+
+        // Wide tablet frame (mirrors @media (min-width: 560px) desktop/tablet shell)
+        val screenWDp = resources.displayMetrics.widthPixels / dens
+        val screenHDp = resources.displayMetrics.heightPixels / dens
+        val shellLp = phoneShell.layoutParams as FrameLayout.LayoutParams
+        if (screenWDp >= 560f && screenHDp >= 600f && resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT) {
+            shellLp.width = (430f * dens).roundToInt()
+            shellLp.height = FrameLayout.LayoutParams.MATCH_PARENT
+            phoneShell.clipToOutline = true
+            phoneShell.outlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(v: View, outline: android.graphics.Outline) {
+                    outline.setRoundRect(0, 0, v.width, v.height, 44f * dens)
+                }
+            }
+        } else {
+            shellLp.width = FrameLayout.LayoutParams.MATCH_PARENT
+            shellLp.height = FrameLayout.LayoutParams.MATCH_PARENT
+            phoneShell.clipToOutline = false
+        }
+        phoneShell.layoutParams = shellLp
+
+        (statusBar.layoutParams as FrameLayout.LayoutParams).topMargin = safeTopPx + (6f * dens).roundToInt()
+        (island.layoutParams as FrameLayout.LayoutParams).topMargin = safeTopPx + (7f * dens).roundToInt()
+        island.visibility = if (isShortLandscape) View.GONE else View.VISIBLE
+
+        (toplineRow.layoutParams as FrameLayout.LayoutParams).topMargin = safeTopPx + (if (isShortLandscape) 26f else 50f).let { (it * dens).roundToInt() }
+        (clockContainer.layoutParams as FrameLayout.LayoutParams).topMargin =
+            safeTopPx + ((if (isShortLandscape) 48f else 82f) + cfg.clockY).let { (it * dens).roundToInt() }
+
+        val npLp = npCard.layoutParams as FrameLayout.LayoutParams
+        if (isShortLandscape) {
+            npLp.width = min((340f * dens).roundToInt(), (resources.displayMetrics.widthPixels * 0.54f).roundToInt())
+            npLp.gravity = Gravity.BOTTOM or Gravity.LEFT
+            npLp.bottomMargin = safeBottomPx + (14f * dens).roundToInt()
+        } else {
+            npLp.width = FrameLayout.LayoutParams.MATCH_PARENT
+            npLp.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            npLp.bottomMargin = safeBottomPx + (84f * dens).roundToInt()
+        }
+        npCard.layoutParams = npLp
+
+        (bottomRow.layoutParams as FrameLayout.LayoutParams).bottomMargin = safeBottomPx + (26f * dens).roundToInt()
+        (homeBar.layoutParams as FrameLayout.LayoutParams).bottomMargin = safeBottomPx + (7f * dens).roundToInt()
+        (toastView.layoutParams as FrameLayout.LayoutParams).topMargin = safeTopPx + (52f * dens).roundToInt()
+        phoneShell.requestLayout()
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun attachClockLongPressAndPull(target: View) {
+        val dens = resources.displayMetrics.density
+        val slop = ViewConfiguration.get(this).scaledTouchSlop.toFloat()
+        val wobble = 14f * dens
+        var downX = 0f
+        var downY = 0f
+        var holdFired = false
+        var pulling = false
+        val holdRunnable = Runnable {
+            if (!holdFired && !pulling && !editorSheet.isOpen && !resizeOverlay.isOpen) {
+                holdFired = true
+                undoSnap = cfg.snapshotForUndo()
+                resizeOverlay.open()
+            }
+        }
+
+        target.setOnTouchListener { _, ev ->
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    if (resizeOverlay.isOpen) return@setOnTouchListener false
+                    pullAnimator?.cancel()
+                    downX = ev.rawX
+                    downY = ev.rawY
+                    holdFired = false
+                    pulling = false
+                    mainHandler.postDelayed(holdRunnable, 360L)
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = ev.rawX - downX
+                    val dy = ev.rawY - downY
+                    if (!holdFired && hypot(dx, dy) > wobble) {
+                        mainHandler.removeCallbacks(holdRunnable)
+                    }
+                    if (!holdFired && !pulling && dy > slop && abs(dy) > abs(dx)) {
+                        pulling = true
+                        mainHandler.removeCallbacks(holdRunnable)
+                    }
+                    if (pulling) {
+                        val posDy = max(0f, dy / dens)
+                        val yDp = 150f * (1f - exp(-posDy / 500f))
+                        applyPullOffset(yDp * dens)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    mainHandler.removeCallbacks(holdRunnable)
+                    if (pulling) {
+                        pulling = false
+                        releasePullSpring()
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun attachWallpaperPullAndDoubleTap() {
+        val dens = resources.displayMetrics.density
+        val slop = ViewConfiguration.get(this).scaledTouchSlop.toFloat()
+        var dragging = false
+        var startY = 0f
+        var startX = 0f
+
+        wallView.setOnTouchListener { _, ev ->
+            if (editorSheet.isOpen || cameraOverlay.isOpen || flashOn) return@setOnTouchListener false
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    pullAnimator?.cancel()
+                    startX = ev.rawX
+                    startY = ev.rawY
+                    dragging = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dy = ev.rawY - startY
+                    val dx = ev.rawX - startX
+                    if (!dragging && dy > slop && abs(dy) > abs(dx)) {
+                        dragging = true
+                        if (resizeOverlay.isOpen) resizeOverlay.close()
+                    }
+                    if (dragging) {
+                        val posDy = max(0f, dy / dens)
+                        val yDp = 150f * (1f - exp(-posDy / 500f))
+                        applyPullOffset(yDp * dens)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (dragging) {
+                        dragging = false
+                        releasePullSpring()
+                    } else {
+                        val now = SystemClock.uptimeMillis()
+                        if (now - lastTapUpMs < 320L && hypot(ev.rawX - lastTapX, ev.rawY - lastTapY) < 42f * dens) {
+                            lastTapUpMs = 0L
+                            if (resizeOverlay.isOpen) resizeOverlay.close()
+                            media.setSheetOpen(true)
+                            editorSheet.open()
+                        } else {
+                            lastTapUpMs = now
+                            lastTapX = ev.rawX
+                            lastTapY = ev.rawY
+                            if (resizeOverlay.isOpen) resizeOverlay.close()
+                        }
+                    }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    if (dragging) {
+                        dragging = false
+                        releasePullSpring()
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    private fun applyPullOffset(yPx: Float) {
+        pullY = yPx
+        val dens = resources.displayMetrics.density
+        val yDp = yPx / dens
+        val zoom = 1f + yDp * 0.00028f
+
+        wallView.scaleX = zoom
+        wallView.scaleY = zoom
+        subjectView.scaleX = zoom
+        subjectView.scaleY = zoom
+
+        clockContainer.translationY = yPx
+        clockView.pullOffsetYPx = yPx
+        toplineRow.translationY = yPx
+        npCard.translationY = yPx * 0.6f
+        bottomRow.translationY = yPx * 0.4f
+
+        backdrop.updateZoomOnly(phoneShell.width, phoneShell.height, zoom)
+        refreshAllGlass()
+    }
+
+    private fun releasePullSpring() {
+        val start = pullY
+        if (start <= 0.5f) {
+            applyPullOffset(0f)
+            return
+        }
+        pullAnimator?.cancel()
+        pullAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 620L
+            addUpdateListener { a ->
+                val k = a.animatedValue as Float
+                val env = exp(-7f * k) * cos(10f * k)
+                val v = if (k >= 0.99f) 0f else start * env
+                applyPullOffset(v)
+            }
+            start()
+        }
+    }
+
+    private fun applyWallpaperAndTheme(reRenderClock: Boolean) {
+        val bmp = WallpaperEngine.getWallpaper(cfg.wall, customWallBmp)
+        currentWallBmp = bmp
+        wallView.setImageBitmap(bmp)
+
+        val subj = if (cfg.depth) customSubjectBmp else null
+        if (subj != null) {
+            subjectView.setImageBitmap(subj)
+            subjectView.visibility = View.VISIBLE
+        } else {
+            subjectView.visibility = View.GONE
+        }
+
+        val wallKey = if (cfg.wall == "custom") "custom:${bmp.generationId}" else cfg.wall
+        val cols = adaptive.sample(wallKey, bmp, cfg)
+        currentColors = cols
+
+        backdrop.updateWallAndSubject(
+            bmp, subj, cfg.depth,
+            max(1, phoneShell.width), max(1, phoneShell.height),
+            wallView.scaleX
+        )
+
+        clockView.colors = cols
+        clockView.config = cfg
+        dateText.setTextColor(cols.uiInk)
+        wxText.setTextColor(cols.uiInk)
+        (homeBar.background as? GradientDrawable)?.setColor(cols.uiInk)
+        statusBar.applyTheme(cols.uiInk, cfg.dnd)
+        npCard.applyTheme(cols.uiInk, cols.uiDim, cols.glassBg)
+        dndPill.applyTheme(cols.uiInk, cols.glassBg)
+        shLeft.uiInk = cols.uiInk; shLeft.glassBg = cols.glassBg
+        shRight.uiInk = cols.uiInk; shRight.glassBg = cols.glassBg
+
+        applyToggles()
+        refreshAllGlass()
+        if (reRenderClock) scheduleClockRender(force = true)
+    }
+
+    private fun applyToggles() {
+        wxText.visibility = if (cfg.weather) View.VISIBLE else View.GONE
+        npCard.visibility = if (cfg.music) View.VISIBLE else View.GONE
+        dndPill.visibility = if (cfg.dnd) View.VISIBLE else View.GONE
+        subjectView.visibility = if (cfg.depth && customSubjectBmp != null) View.VISIBLE else View.GONE
+        statusBar.applyTheme(currentColors?.uiInk ?: Color.WHITE, cfg.dnd)
+    }
+
+    private fun refreshAllGlass() {
+        clockView.invalidate()
+        npCard.invalidate()
+        dndPill.invalidate()
+        shLeft.invalidate()
+        shRight.invalidate()
+    }
+
+    private fun computeClockLimitsDp(): Pair<Float, Float> {
+        val dens = resources.displayMetrics.density
+        val hostW = (phoneShell.width / dens).coerceAtLeast(320f)
+        val hostH = (phoneShell.height / dens).coerceAtLeast(480f)
+        val topSafe = ((toplineRow.y + toplineRow.height) / dens) + 10f
+        val obstacleTop = if (cfg.music && npCard.y > 0f) npCard.y / dens else if (bottomRow.y > 0f) bottomRow.y / dens else (hostH - 180f)
+        val maxW = max(140f, hostW - 16f - 36f)
+        val maxH = max(96f, min(obstacleTop - topSafe - 12f, hostH * 0.78f))
+        return maxW to maxH
+    }
+
+    private fun scheduleClockRender(force: Boolean) {
+        val dens = resources.displayMetrics.density
+        val hostW = (phoneShell.width / dens).takeIf { it > 100f } ?: (resources.displayMetrics.widthPixels / dens)
+        val obstacleTop = if (cfg.music && npCard.y > 0f) npCard.y else (phoneShell.height - (180f * dens))
+        val layerTop = clockContainer.y
+        val availH = ((obstacleTop - layerTop) / dens).coerceIn(96f, (resources.displayMetrics.heightPixels / dens) * 0.78f)
+        clockView.scheduleRender(cfg, hostW, availH, force)
+    }
+
+    private fun updateDateLabel() {
+        val cal = Calendar.getInstance()
+        val sdf = SimpleDateFormat("EEE، d MMM", Locale("ar"))
+        dateText.text = sdf.format(cal.time)
+    }
+
+    private fun scheduleMinuteTicker() {
+        minuteTickRunnable?.let { mainHandler.removeCallbacks(it) }
+        val cal = Calendar.getInstance()
+        val delayMs = (60 - cal.get(Calendar.SECOND)) * 1000L - cal.get(Calendar.MILLISECOND) + 30L
+        minuteTickRunnable = Runnable {
+            updateDateLabel()
+            scheduleClockRender(force = false)
+            scheduleMinuteTicker()
+        }
+        mainHandler.postDelayed(minuteTickRunnable!!, max(500L, delayMs))
+    }
+
+    private fun fetchWeatherAsync() {
+        bgExecutor.execute {
+            try {
+                val url = URL("https://api.open-meteo.com/v1/forecast?latitude=33.31&longitude=44.36&current=temperature_2m,weather_code&timezone=auto")
+                val conn = (url.openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 5000
+                    readTimeout = 5000
+                }
+                val txt = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                val cur = JSONObject(txt).optJSONObject("current") ?: return@execute
+                val temp = cur.optDouble("temperature_2m", -3.0).roundToInt()
+                val code = cur.optInt("weather_code", 3)
+                val ico = when {
+                    code == 0 -> "☀"
+                    code in 1..3 -> "⛅"
+                    code in 51..67 || code in 80..82 -> "🌧"
+                    code in 71..77 -> "❄"
+                    code >= 95 -> "⛈"
+                    else -> "☁"
+                }
+                val signTemp = if (temp < 0) "−${abs(temp)}°" else "$temp°"
+                weatherTempStr = "$ico $signTemp"
+                mainHandler.post { wxText.text = "  •  $weatherTempStr" }
+            } catch (_: Throwable) {}
+        }
+    }
+
+    private fun setFlashlight(on: Boolean) {
+        flashBurstTimer?.let { mainHandler.removeCallbacks(it) }
+        flashOn = on
+        shLeft.isActive = on
+        if (on) {
+            flashOverlay.visibility = View.VISIBLE
+            flashOverlay.animate().alpha(1f).setDuration(240L).start()
+            island.pulse("المصباح قيد التشغيل", 0xFFFFD60A.toInt(), 1600L)
+        } else {
+            flashOverlay.animate().alpha(0f).setDuration(200L).withEndAction {
+                if (!flashOn) flashOverlay.visibility = View.GONE
+            }.start()
+        }
+        try {
+            val cm = getSystemService(Context.CAMERA_SERVICE) as? CameraManager ?: return
+            for (id in cm.cameraIdList) {
+                val hasFlash = cm.getCameraCharacteristics(id).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                if (hasFlash) {
+                    cm.setTorchMode(id, on)
+                    break
+                }
+            }
+        } catch (_: Throwable) {}
+    }
+
+    private fun openCamera(autoShoot: Boolean) {
+        if (flashOn) setFlashlight(false)
+        cameraOverlay.open(autoShoot)
+    }
+
+    private fun haptic(kind: String) {
+        try {
+            val vib = if (Build.VERSION.SDK_INT >= 31) {
+                (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            }
+            if (vib != null && vib.hasVibrator()) {
+                val (ms, amp) = when (kind) {
+                    "heavy" -> 22L to 210
+                    "shutter" -> 18L to 180
+                    "pop" -> 10L to 130
+                    else -> 8L to 90
+                }
+                vib.vibrate(VibrationEffect.createOneShot(ms, amp))
+                return
+            }
+        } catch (_: Throwable) {}
+        rootFrame.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+    }
+
+    private fun showToast(msg: String) {
+        toastTimer?.let { mainHandler.removeCallbacks(it) }
+        toastView.text = msg
+        toastView.visibility = View.VISIBLE
+        toastView.animate().cancel()
+        toastView.animate().alpha(1f).setDuration(180L).start()
+        toastTimer = Runnable {
+            toastView.animate().alpha(0f).setDuration(240L).withEndAction {
+                toastView.visibility = View.GONE
+            }.start()
+        }.also { mainHandler.postDelayed(it, 1900L) }
+    }
+
+    private fun handleBackNavigation() {
+        when {
+            cameraOverlay.isOpen -> cameraOverlay.close()
+            flashOn -> setFlashlight(false)
+            resizeOverlay.isOpen -> resizeOverlay.close()
+            editorSheet.isOpen -> editorSheet.close()
+            else -> finish()
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        handleBackNavigation()
+    }
+
+    private fun registerReceivers() {
+        ContextCompat.registerReceiver(this, timeReceiver, IntentFilter(Intent.ACTION_TIME_TICK), ContextCompat.RECEIVER_NOT_EXPORTED)
+        ContextCompat.registerReceiver(this, batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+            val updateNet = {
+                val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+                when {
+                    caps == null -> statusBar.updateNetwork("غير متصل", wifi = false, offline = true)
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> statusBar.updateNetwork("Wi-Fi", wifi = true, offline = false)
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> statusBar.updateNetwork("5G", wifi = false, offline = false)
+                    else -> statusBar.updateNetwork("متصل", wifi = false, offline = false)
+                }
+            }
+            updateNet()
+            val cb = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) { mainHandler.post { updateNet() } }
+                override fun onLost(network: Network) { mainHandler.post { updateNet() } }
+                override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                    mainHandler.post { updateNet() }
+                }
+            }
+            networkCallback = cb
+            cm.registerDefaultNetworkCallback(cb)
+        } catch (_: Throwable) {}
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_CAM_PERM) {
+            val ok = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+            cameraOverlay.onPermissionResult(ok)
+        }
+    }
+
+    private fun launchPhotoPicker(reqCode: Int) {
+        val intent = when {
+            reqCode == REQ_AUDIO -> Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "audio/*"
+                addCategory(Intent.CATEGORY_OPENABLE)
+            }
+            Build.VERSION.SDK_INT >= 33 && reqCode != REQ_SUBJECT -> {
+                Intent(MediaStore.ACTION_PICK_IMAGES).apply { type = "image/*" }
+            }
+            else -> Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "image/*"
+                addCategory(Intent.CATEGORY_OPENABLE)
+            }
+        }
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, reqCode)
+        } catch (_: Throwable) {
+            val fallback = Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = if (reqCode == REQ_AUDIO) "audio/*" else "image/*"
+                addCategory(Intent.CATEGORY_OPENABLE)
+            }
+            @Suppress("DEPRECATION")
+            startActivityForResult(fallback, reqCode)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (resultCode != RESULT_OK || data?.data == null) return
+        val uri = data.data!!
+        when (requestCode) {
+            REQ_AUDIO -> {
+                media.loadLocalAudio(uri)
+                island.pulse("تم اختيار مقطع صوتي", 0xFF30D158.toInt(), 1600L)
+            }
+            REQ_WALL, REQ_SUBJECT, REQ_ART -> {
+                bgExecutor.execute {
+                    val bmp = decodeUriBitmap(uri, maxSide = if (requestCode == REQ_ART) 512 else 1920) ?: return@execute
+                    mainHandler.post {
+                        when (requestCode) {
+                            REQ_WALL -> {
+                                customWallBmp = bmp
+                                cfg.wall = "custom"
+                                cfg.hasCustomWall = store.saveCustomWall(bmp)
+                                cfg.hasCustomSubject = false
+                                customSubjectBmp = null
+                                store.clearCustomSubject()
+                                store.save(cfg)
+                                applyWallpaperAndTheme(reRenderClock = true)
+                                if (cfg.depth) onExtractAiDepth()
+                            }
+                            REQ_SUBJECT -> {
+                                customSubjectBmp = bmp
+                                cfg.depth = true
+                                cfg.hasCustomSubject = store.saveCustomSubject(bmp)
+                                store.save(cfg)
+                                applyWallpaperAndTheme(reRenderClock = false)
+                                editorSheet.setAiStatus("تم تطبيق صورة العمق يدوياً ✓", false)
+                            }
+                            REQ_ART -> {
+                                media.setCustomArt(bmp)
+                                showToast("تم تحديث الغلاف ✓")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun decodeUriBitmap(uri: Uri, maxSide: Int): Bitmap? {
+        return try {
+            if (Build.VERSION.SDK_INT >= 28) {
+                val src = ImageDecoder.createSource(contentResolver, uri)
+                ImageDecoder.decodeBitmap(src) { decoder, info, _ ->
+                    decoder.isMutableRequired = false
+                    decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                    val w = info.size.width
+                    val h = info.size.height
+                    val scale = min(1f, maxSide / max(w, h).toFloat())
+                    if (scale < 1f) {
+                        decoder.setTargetSize((w * scale).roundToInt(), (h * scale).roundToInt())
+                    }
+                }
+            } else {
+                contentResolver.openInputStream(uri)?.use { stream ->
+                    val raw = BitmapFactory.decodeStream(stream) ?: return null
+                    val scale = min(1f, maxSide / max(raw.width, raw.height).toFloat())
+                    if (scale < 1f) Bitmap.createScaledBitmap(raw, (raw.width * scale).roundToInt(), (raw.height * scale).roundToInt(), true) else raw
+                }
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    // ─────────────── EditorCallbacks ───────────────
+    override fun onClose() {
+        media.setSheetOpen(false)
+    }
+
+    override fun onFontChanged(fontId: String) {
+        haptic("tick")
+        store.save(cfg)
+        scheduleClockRender(force = true)
+    }
+
+    override fun onGeometryPreview(sizeChanged: Boolean, stretchChanged: Boolean, yChanged: Boolean) {
+        if (yChanged) {
+            layoutScreenPositions()
+        } else {
+            val baseSize = max(40f, clockView.activeArtifact?.sizeDp ?: clockView.committedSize())
+            val baseSy = max(0.5f, clockView.committedSy())
+            val kSize = cfg.size / baseSize
+            clockView.updatePreviewTransform(kSize, kSize * (cfg.sy / baseSy))
+        }
+        geometryDebounce?.let { mainHandler.removeCallbacks(it) }
+        geometryDebounce = Runnable {
+            store.save(cfg)
+            scheduleClockRender(force = true)
+        }.also { mainHandler.postDelayed(it, 110L) }
+    }
+
+    override fun onGeometryCommit() {
+        store.save(cfg)
+        scheduleClockRender(force = true)
+    }
+
+    override fun onFormatToggled() {
+        haptic("tick")
+        store.save(cfg)
+        scheduleClockRender(force = true)
+    }
+
+    override fun onColorOrOpacityChanged() {
+        val bmp = currentWallBmp ?: return
+        val wallKey = if (cfg.wall == "custom") "custom:${bmp.generationId}" else cfg.wall
+        currentColors = adaptive.sample(wallKey, bmp, cfg)
+        clockView.colors = currentColors
+        clockView.config = cfg
+        clockView.invalidate()
+        store.save(cfg)
+    }
+
+    override fun onWallSelected(wallId: String) {
+        haptic("tick")
+        cfg.wall = wallId
+        customSubjectBmp = null
+        cfg.hasCustomSubject = false
+        store.clearCustomSubject()
+        store.save(cfg)
+        applyWallpaperAndTheme(reRenderClock = true)
+    }
+
+    override fun onPickCustomWall() = launchPhotoPicker(REQ_WALL)
+
+    override fun onExtractAiDepth() {
+        val wall = currentWallBmp ?: return
+        if (aiDepth.isBusy) return
+        haptic("pop")
+        aiDepth.extractSubject(
+            wall,
+            onProgress = { pct, msg ->
+                mainHandler.post { editorSheet.setAiStatus("$msg ($pct%)", true) }
+            },
+            onReady = { cutout ->
+                mainHandler.post {
+                    customSubjectBmp = cutout
+                    cfg.depth = true
+                    cfg.hasCustomSubject = store.saveCustomSubject(cutout)
+                    store.save(cfg)
+                    applyWallpaperAndTheme(reRenderClock = false)
+                    editorSheet.syncFromConfig()
+                    editorSheet.setAiStatus("تم عزل العنصر بنجاح ✓", false)
+                    island.pulse("تم عزل العمق بنجاح", 0xFFA78BFA.toInt(), 1800L)
+                    showToast("تم عزل العنصر أمام الساعة ✓")
+                }
+            },
+            onError = { err ->
+                mainHandler.post {
+                    editorSheet.setAiStatus(err, false)
+                    showToast(err)
+                }
+            }
+        )
+    }
+
+    override fun onPickManualSubject() = launchPhotoPicker(REQ_SUBJECT)
+
+    override fun onInnerShadowChanged() {
+        clockView.config = cfg
+        clockView.invalidate()
+        store.save(cfg)
+    }
+
+    override fun onToggleWeather() {
+        cfg.weather = !cfg.weather
+        store.save(cfg)
+        applyToggles()
+        haptic("tick")
+    }
+
+    override fun onToggleMusic() {
+        cfg.music = !cfg.music
+        store.save(cfg)
+        applyToggles()
+        scheduleClockRender(force = true)
+        haptic("tick")
+    }
+
+    override fun onToggleDepth() {
+        cfg.depth = !cfg.depth
+        store.save(cfg)
+        applyWallpaperAndTheme(reRenderClock = false)
+        if (cfg.depth && customSubjectBmp == null && cfg.wall == "custom") {
+            onExtractAiDepth()
+        }
+        haptic("tick")
+    }
+
+    override fun onToggleDnd() {
+        cfg.dnd = !cfg.dnd
+        store.save(cfg)
+        applyToggles()
+        haptic("tick")
+    }
+
+    override fun onPickAudio() = launchPhotoPicker(REQ_AUDIO)
+    override fun onPickAlbumArt() = launchPhotoPicker(REQ_ART)
+
+    override fun onDownloadPerf() {
+        haptic("pop")
+        bgExecutor.execute {
+            val savedPath = perf.saveReportToDownloads(cfg)
+            mainHandler.post {
+                if (savedPath != null) {
+                    editorSheet.setPerfStatus("تم الحفظ: $savedPath")
+                    showToast("تم حفظ تقرير الأداء ✓")
+                } else {
+                    editorSheet.setPerfStatus("تعذر الحفظ")
+                }
+            }
+        }
+    }
+
+    override fun onSharePerf() {
+        haptic("pop")
+        bgExecutor.execute {
+            val intent = perf.shareReport(cfg)
+            mainHandler.post {
+                if (intent != null) {
+                    startActivity(Intent.createChooser(intent, "مشاركة تقرير الأداء"))
+                }
+            }
+        }
+    }
+
+    override fun onResetPerf() {
+        haptic("tick")
+        perf.reset()
+        editorSheet.updatePerfUi(perf.snapshot())
+        editorSheet.setPerfStatus("تم تصفير العداد")
+    }
+
+    override fun onHaptic(kind: String) = haptic(kind)
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        phoneShell.post {
+            layoutScreenPositions()
+            applyWallpaperAndTheme(reRenderClock = true)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        perf.setVisible(true)
+        media.setVisible(true)
+        updateDateLabel()
+        scheduleClockRender(force = false)
+        scheduleMinuteTicker()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        perf.setVisible(false)
+        media.setVisible(false)
+        minuteTickRunnable?.let { mainHandler.removeCallbacks(it) }
+        val snapCfg = cfg.copy()
+        bgExecutor.execute { perf.saveReportToDownloads(snapCfg, "OClock-Perf-Latest.json") }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (Build.VERSION.SDK_INT >= 33 && backCallback != null) {
+            try { onBackInvokedDispatcher.unregisterOnBackInvokedCallback(backCallback!!) } catch (_: Throwable) {}
+        }
+        try { unregisterReceiver(timeReceiver) } catch (_: Throwable) {}
+        try { unregisterReceiver(batteryReceiver) } catch (_: Throwable) {}
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            networkCallback?.let { cm?.unregisterNetworkCallback(it) }
+        } catch (_: Throwable) {}
+        if (flashOn) setFlashlight(false)
+        cameraOverlay.close()
+        clockView.shutdown()
+        media.shutdown()
+        aiDepth.shutdown()
+        perf.shutdown()
+        bgExecutor.shutdownNow()
+    }
+}

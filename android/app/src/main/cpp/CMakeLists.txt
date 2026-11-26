@@ -4,3 +4,6 @@ add_library(oclock_glass SHARED glass_jni.cpp)
 target_compile_features(oclock_glass PRIVATE cxx_std_17)
 # Keep IEEE semantics: no fast-math, so edge lighting stays faithful.
 target_compile_options(oclock_glass PRIVATE -O3 -ffp-contract=off)
+find_library(jnigraphics-lib jnigraphics)
+target_link_libraries(oclock_glass ${jnigraphics-lib})
+
