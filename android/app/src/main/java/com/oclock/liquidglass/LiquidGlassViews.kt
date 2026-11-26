@@ -100,33 +100,137 @@ class LiquidGlassCardHelper(
 }
 
 class DynamicIslandView(context: Context) : FrameLayout(context) {
+    private enum class Mode { IDLE, PULSE, COMPACT_MUSIC, COMPACT_FLASH, COMPACT_DND, EXPANDED }
+
     private val dens = resources.displayMetrics.density
-    private val dot = View(context)
-    private val label = TextView(context)
     private val handler = Handler(Looper.getMainLooper())
-    private var collapseRunnable = Runnable { collapse() }
-    private var expanded = false
+    private var mode = Mode.IDLE
+
+    private val pillBg = GradientDrawable().apply {
+        setColor(Color.BLACK)
+        cornerRadius = 18f * dens
+        setStroke((0.8f * dens).roundToInt(), Color.argb(28, 255, 255, 255))
+    }
+    private var curCornerPx = 18f * dens
+    private var morphAnim: ValueAnimator? = null
+
+    var onPrev: (() -> Unit)? = null
+    var onPlayToggle: (() -> Unit)? = null
+    var onNext: (() -> Unit)? = null
+    var onToggleFlash: (() -> Unit)? = null
+    var onOpenLibrary: (() -> Unit)? = null
+    var onHaptic: ((String) -> Unit)? = null
+
+    private var currentTrack: TrackInfo = AppConstants.QUEUE[0]
+    private var currentArt: Bitmap? = null
+    private var lastSongId = ""
+    private var playingState = false
+    private var flashOn = false
+    private var dndOn = false
+    private var batPct = 92
+    private var batCharging = false
+    private var accentColor = 0xFF30D158.toInt()
+
+    // 1) Pulse / compact status row
+    private val pulseRow: LinearLayout
+    private val pulseDot: View
+    private val pulseIcon: ImageView
+    private val pulseLabel: TextView
+
+    // 2) Compact live music pill row
+    private val compactRow: LinearLayout
+    private val compactArt: ImageView
+    private val compactTitle: TextView
+    private val compactFlashBadge: ImageView
+    private val compactEq: MiniEqView
+
+    // 3) Expanded interactive island card
+    private val expandedBox: LinearLayout
+    private val expArt: ImageView
+    private val expTitle: TextView
+    private val expSub: TextView
+    private val expStatusBadge: TextView
+    private val expEq: MiniEqView
+    private val expPrevBtn: ImageView
+    private val expPlayBtn: ImageView
+    private val expNextBtn: ImageView
+    private val expLibBtn: ImageView
+    private val expFlashBtn: ImageView
+
+    private val settleRunnable = Runnable { settleToRestingMode() }
+
+    private class MiniEqView(context: Context) : View(context) {
+        private val dens = resources.displayMetrics.density
+        private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        var barColor = 0xFF30D158.toInt()
+        private var phase = 0f
+        var active = false
+            set(value) {
+                if (field == value) return
+                field = value
+                if (value && isAttachedToWindow && visibility == VISIBLE) startAnim() else stopAnim()
+                invalidate()
+            }
+        private val anim = ValueAnimator.ofFloat(0f, (Math.PI * 2).toFloat()).apply {
+            duration = 880L
+            repeatCount = ValueAnimator.INFINITE
+            addUpdateListener { a ->
+                phase = a.animatedValue as Float
+                invalidate()
+            }
+        }
+        private fun startAnim() { if (!anim.isStarted) anim.start() }
+        private fun stopAnim() { anim.cancel() }
+        override fun onAttachedToWindow() { super.onAttachedToWindow(); if (active && visibility == VISIBLE) startAnim() }
+        override fun onDetachedFromWindow() { stopAnim(); super.onDetachedFromWindow() }
+        override fun onVisibilityChanged(changedView: View, visibility: Int) {
+            super.onVisibilityChanged(changedView, visibility)
+            if (active && visibility == VISIBLE && isAttachedToWindow) startAnim() else stopAnim()
+        }
+        override fun onDraw(canvas: Canvas) {
+            val bw = 2.4f * dens
+            val gap = 2f * dens
+            val totalW = bw * 4f + gap * 3f
+            val sx = (width - totalW) * 0.5f
+            val h = height.toFloat()
+            val phases = floatArrayOf(0f, 1.5f, 3.0f, 4.3f)
+            p.color = barColor
+            for (i in 0 until 4) {
+                val frac = if (active) (0.28f + 0.72f * abs(sin(phase + phases[i]))) else 0.25f
+                val bh = max(bw, h * frac)
+                val x = sx + i * (bw + gap)
+                canvas.drawRoundRect(x, (h - bh) * 0.5f, x + bw, (h + bh) * 0.5f, bw * 0.5f, bw * 0.5f, p)
+            }
+        }
+    }
 
     init {
+        layoutDirection = LAYOUT_DIRECTION_LTR
         val wCollapsed = (122f * dens).roundToInt()
         val hCollapsed = (34f * dens).roundToInt()
         layoutParams = LayoutParams(wCollapsed, hCollapsed, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
-        background = GradientDrawable().apply {
-            setColor(Color.BLACK)
-            cornerRadius = 999f
-            setStroke((0.8f * dens).roundToInt(), Color.argb(20, 255, 255, 255))
+        background = pillBg
+        elevation = 12f * dens
+        clipToOutline = true
+        outlineProvider = object : android.view.ViewOutlineProvider() {
+            override fun getOutline(v: View, outline: android.graphics.Outline) {
+                outline.setRoundRect(0, 0, v.width, v.height, curCornerPx)
+            }
         }
-        elevation = 10f * dens
+        isClickable = true
+        isFocusable = true
 
-        val row = LinearLayout(context).apply {
+        // 1) Pulse Row
+        pulseRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutDirection = LAYOUT_DIRECTION_RTL
             alpha = 0f
+            visibility = GONE
             setPadding((14f * dens).roundToInt(), 0, (14f * dens).roundToInt(), 0)
             layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
         }
-        dot.apply {
+        pulseDot = View(context).apply {
             val ds = (8f * dens).roundToInt()
             layoutParams = LinearLayout.LayoutParams(ds, ds).apply { marginEnd = (8f * dens).roundToInt() }
             background = GradientDrawable().apply {
@@ -134,7 +238,12 @@ class DynamicIslandView(context: Context) : FrameLayout(context) {
                 setColor(0xFF30D158.toInt())
             }
         }
-        label.apply {
+        pulseIcon = ImageView(context).apply {
+            val s = (16f * dens).roundToInt()
+            layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = (7f * dens).roundToInt() }
+            visibility = GONE
+        }
+        pulseLabel = TextView(context).apply {
             setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
@@ -142,47 +251,566 @@ class DynamicIslandView(context: Context) : FrameLayout(context) {
             ellipsize = TextUtils.TruncateAt.END
             layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT)
         }
-        row.addView(dot)
-        row.addView(label)
-        addView(row)
-        tag = row
+        pulseRow.addView(pulseDot)
+        pulseRow.addView(pulseIcon)
+        pulseRow.addView(pulseLabel)
+        addView(pulseRow)
+
+        // 2) Compact Live Music Row
+        compactRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutDirection = LAYOUT_DIRECTION_LTR
+            alpha = 0f
+            visibility = GONE
+            setPadding((8f * dens).roundToInt(), 0, (10f * dens).roundToInt(), 0)
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+        }
+        compactArt = ImageView(context).apply {
+            val s = (22f * dens).roundToInt()
+            layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = (8f * dens).roundToInt() }
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            clipToOutline = true
+            outlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(v: View, outline: android.graphics.Outline) {
+                    outline.setRoundRect(0, 0, v.width, v.height, 6f * dens)
+                }
+            }
+        }
+        compactTitle = TextView(context).apply {
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+        }
+        compactFlashBadge = ImageView(context).apply {
+            val s = (15f * dens).roundToInt()
+            layoutParams = LinearLayout.LayoutParams(s, s).apply {
+                marginStart = (5f * dens).roundToInt()
+                marginEnd = (4f * dens).roundToInt()
+            }
+            visibility = GONE
+            setImageBitmap(drawMiniFlashBitmap(s, Color.WHITE))
+        }
+        compactEq = MiniEqView(context).apply {
+            layoutParams = LinearLayout.LayoutParams((18f * dens).roundToInt(), (14f * dens).roundToInt()).apply {
+                marginStart = (6f * dens).roundToInt()
+            }
+        }
+        compactRow.addView(compactArt)
+        compactRow.addView(compactTitle)
+        compactRow.addView(compactFlashBadge)
+        compactRow.addView(compactEq)
+        addView(compactRow)
+
+        // 3) Expanded Interactive Box
+        expandedBox = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutDirection = LAYOUT_DIRECTION_LTR
+            alpha = 0f
+            visibility = GONE
+            setPadding((14f * dens).roundToInt(), (11f * dens).roundToInt(), (14f * dens).roundToInt(), (10f * dens).roundToInt())
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+        }
+        val expTop = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+        }
+        expArt = ImageView(context).apply {
+            val s = (40f * dens).roundToInt()
+            layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = (11f * dens).roundToInt() }
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            clipToOutline = true
+            outlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(v: View, outline: android.graphics.Outline) {
+                    outline.setRoundRect(0, 0, v.width, v.height, 10f * dens)
+                }
+            }
+            setOnClickListener {
+                onHaptic?.invoke("pop")
+                collapseNow()
+                onOpenLibrary?.invoke()
+            }
+        }
+        val expMeta = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener {
+                onHaptic?.invoke("pop")
+                collapseNow()
+                onOpenLibrary?.invoke()
+            }
+        }
+        expTitle = TextView(context).apply {
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            isSingleLine = true
+            ellipsize = TextUtils.TruncateAt.MARQUEE
+            marqueeRepeatLimit = -1
+            isSelected = true
+        }
+        expSub = TextView(context).apply {
+            setTextColor(Color.argb(175, 255, 255, 255))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            isSingleLine = true
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        expMeta.addView(expTitle)
+        expMeta.addView(expSub)
+
+        expStatusBadge = TextView(context).apply {
+            setTextColor(Color.argb(215, 255, 255, 255))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            setPadding((7f * dens).roundToInt(), (2f * dens).roundToInt(), (7f * dens).roundToInt(), (2f * dens).roundToInt())
+            background = GradientDrawable().apply {
+                setColor(Color.argb(34, 255, 255, 255))
+                cornerRadius = 999f
+            }
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+                marginEnd = (6f * dens).roundToInt()
+            }
+        }
+        expEq = MiniEqView(context).apply {
+            layoutParams = LinearLayout.LayoutParams((18f * dens).roundToInt(), (16f * dens).roundToInt())
+        }
+        expTop.addView(expArt)
+        expTop.addView(expMeta)
+        expTop.addView(expStatusBadge)
+        expTop.addView(expEq)
+
+        val expCtrlRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                topMargin = (9f * dens).roundToInt()
+            }
+        }
+        fun makeIslandBtn(wDp: Float, hDp: Float, bgAlpha: Int = 26, onTap: (View) -> Unit): ImageView {
+            return ImageView(context).apply {
+                layoutParams = LinearLayout.LayoutParams((wDp * dens).roundToInt(), (hDp * dens).roundToInt()).apply {
+                    marginStart = (4f * dens).roundToInt()
+                    marginEnd = (4f * dens).roundToInt()
+                }
+                scaleType = ImageView.ScaleType.CENTER
+                background = GradientDrawable().apply {
+                    setColor(Color.argb(bgAlpha, 255, 255, 255))
+                    cornerRadius = 999f
+                }
+                setOnClickListener { v ->
+                    onHaptic?.invoke("pop")
+                    v.animate().cancel()
+                    v.scaleX = 0.80f; v.scaleY = 0.80f
+                    v.animate().scaleX(1f).scaleY(1f).setDuration(360L).setInterpolator(OvershootInterpolator(1.9f)).start()
+                    resetExpandTimer()
+                    onTap(v)
+                }
+            }
+        }
+
+        expPrevBtn = makeIslandBtn(44f, 32f) { onPrev?.invoke() }
+        expPlayBtn = makeIslandBtn(54f, 34f, bgAlpha = 46) { onPlayToggle?.invoke() }
+        expNextBtn = makeIslandBtn(44f, 32f) { onNext?.invoke() }
+        expLibBtn = makeIslandBtn(40f, 32f) {
+            collapseNow()
+            onOpenLibrary?.invoke()
+        }
+        expFlashBtn = makeIslandBtn(40f, 32f) {
+            onToggleFlash?.invoke()
+        }
+
+        val ic = (17f * dens).roundToInt()
+        expPrevBtn.setImageBitmap(drawMiniSkipBitmap(ic, Color.WHITE, false))
+        expNextBtn.setImageBitmap(drawMiniSkipBitmap(ic, Color.WHITE, true))
+        expLibBtn.setImageBitmap(drawMiniLibraryBitmap(ic, Color.WHITE))
+        refreshExpandedControls()
+
+        expCtrlRow.addView(expPrevBtn)
+        expCtrlRow.addView(expPlayBtn)
+        expCtrlRow.addView(expNextBtn)
+        expCtrlRow.addView(expLibBtn)
+        expCtrlRow.addView(expFlashBtn)
+
+        expandedBox.addView(expTop)
+        expandedBox.addView(expCtrlRow)
+        addView(expandedBox)
+
+        setOnClickListener {
+            onHaptic?.invoke("pop")
+            if (mode == Mode.EXPANDED) {
+                settleToRestingMode()
+            } else {
+                expandInteractive()
+            }
+        }
+        setOnLongClickListener {
+            onHaptic?.invoke("heavy")
+            expandInteractive()
+            true
+        }
     }
 
-    fun pulse(text: String, dotColor: Int = 0xFF30D158.toInt(), ms: Long = 1800L) {
-        handler.removeCallbacks(collapseRunnable)
-        label.text = text
-        (dot.background as? GradientDrawable)?.setColor(dotColor)
-        val row = tag as View
-        val targetW = (max(216f, min(330f, 54f + text.length * 7.6f)) * dens).roundToInt()
+    fun syncMedia(track: TrackInfo, art: Bitmap?, playing: Boolean) {
+        val songId = "${track.contentUri}|${track.title}|${track.artist}"
+        val changed = songId != lastSongId || art !== currentArt || playing != playingState
+        if (!changed) return
+        val songChanged = lastSongId.isNotEmpty() && songId != lastSongId
+        val playStarted = !playingState && playing
+        val playStopped = playingState && !playing
+
+        lastSongId = songId
+        currentTrack = track
+        currentArt = art
+        playingState = playing
+
+        // Brighten track color so equalizer bars glow cleanly on black island
+        val r = min(255, (Color.red(track.c2) * 1.25f + 55f).roundToInt())
+        val g = min(255, (Color.green(track.c2) * 1.25f + 55f).roundToInt())
+        val b = min(255, (Color.blue(track.c2) * 1.25f + 55f).roundToInt())
+        accentColor = Color.rgb(r, g, b)
+        compactEq.barColor = accentColor
+        expEq.barColor = accentColor
+        compactEq.active = playing
+        expEq.active = playing
+
+        val artBmp = art ?: makeTrackSwatch(track, (40f * dens).roundToInt())
+        compactArt.setImageBitmap(artBmp)
+        expArt.setImageBitmap(artBmp)
+        compactTitle.text = track.title
+        expTitle.text = track.title
+        updateExpandedSubtitle()
+        refreshExpandedControls()
+
+        if (mode == Mode.EXPANDED) {
+            if (songChanged) {
+                expArt.animate().cancel()
+                expArt.scaleX = 0.74f; expArt.scaleY = 0.74f
+                expArt.animate().scaleX(1f).scaleY(1f).setDuration(420L).setInterpolator(OvershootInterpolator(1.8f)).start()
+                springBounce(1.03f)
+            }
+            resetExpandTimer()
+        } else if (songChanged) {
+            pulse("♪ ${track.title}", accentColor, 1650L, artBmp = artBmp)
+        } else if (playStarted || playStopped) {
+            settleToRestingMode()
+            springBounce(1.045f)
+        }
+    }
+
+    fun syncFlashlight(on: Boolean) {
+        if (flashOn == on) return
+        flashOn = on
+        compactFlashBadge.visibility = if (on) VISIBLE else GONE
+        updateExpandedSubtitle()
+        refreshExpandedControls()
+        if (mode == Mode.EXPANDED) {
+            springBounce(1.03f)
+            resetExpandTimer()
+        } else if (on) {
+            val icon = drawMiniFlashBitmap((16f * dens).roundToInt(), Color.WHITE)
+            pulse("المصباح قيد التشغيل", Color.WHITE, 1400L, iconBmp = icon)
+        } else {
+            val icon = drawMiniFlashBitmap((16f * dens).roundToInt(), Color.argb(165, 255, 255, 255))
+            pulse("تم إطفاء المصباح", Color.argb(165, 255, 255, 255), 1100L, iconBmp = icon)
+        }
+    }
+
+    fun syncDnd(on: Boolean, silent: Boolean = false) {
+        if (dndOn == on) return
+        dndOn = on
+        updateExpandedSubtitle()
+        if (!silent) {
+            if (mode == Mode.EXPANDED) {
+                resetExpandTimer()
+            } else {
+                val icon = StatusBarView.renderMoonBitmap(0xFFA78BFA.toInt(), (15f * dens).roundToInt())
+                pulse(if (on) "عدم الإزعاج مفعّل" else "تم إيقاف عدم الإزعاج", 0xFFA78BFA.toInt(), 1500L, iconBmp = icon)
+            }
+        } else if (mode != Mode.EXPANDED && mode != Mode.PULSE) {
+            settleToRestingMode()
+        }
+    }
+
+    fun updateBattery(pct: Int, charging: Boolean) {
+        val pluggedIn = !batCharging && charging
+        batPct = pct
+        batCharging = charging
+        updateExpandedSubtitle()
+        if (pluggedIn) {
+            pulse("جاري الشحن • $pct%", 0xFF30D158.toInt(), 2000L)
+        }
+    }
+
+    fun pulse(
+        text: String,
+        dotColor: Int = 0xFF30D158.toInt(),
+        ms: Long = 1700L,
+        iconBmp: Bitmap? = null,
+        artBmp: Bitmap? = null
+    ) {
+        if (mode == Mode.EXPANDED) {
+            resetExpandTimer()
+            return
+        }
+        handler.removeCallbacks(settleRunnable)
+        mode = Mode.PULSE
+        pulseLabel.text = text
+        if (artBmp != null) {
+            pulseDot.visibility = GONE
+            pulseIcon.visibility = VISIBLE
+            pulseIcon.setImageBitmap(artBmp)
+        } else if (iconBmp != null) {
+            pulseDot.visibility = GONE
+            pulseIcon.visibility = VISIBLE
+            pulseIcon.setImageBitmap(iconBmp)
+        } else {
+            pulseIcon.visibility = GONE
+            pulseDot.visibility = VISIBLE
+            (pulseDot.background as? GradientDrawable)?.setColor(dotColor)
+        }
+        showOnly(pulseRow)
+        val targetW = (max(204f, min(326f, 58f + text.length * 7.6f)) * dens).roundToInt()
         val targetH = (36f * dens).roundToInt()
-        animateSize(targetW, targetH, 1f)
-        row.animate().alpha(1f).setDuration(220L).start()
-        expanded = true
-        handler.postDelayed(collapseRunnable, ms)
+        morphTo(targetW, targetH, 18f * dens, expandCurve = true)
+        springBounce(1.045f)
+        handler.postDelayed(settleRunnable, ms)
     }
 
-    private fun collapse() {
-        if (!expanded) return
-        expanded = false
-        val row = tag as View
-        row.animate().alpha(0f).setDuration(150L).start()
-        animateSize((122f * dens).roundToInt(), (34f * dens).roundToInt(), 0f)
+    fun expandInteractive() {
+        handler.removeCallbacks(settleRunnable)
+        mode = Mode.EXPANDED
+        updateExpandedSubtitle()
+        refreshExpandedControls()
+        showOnly(expandedBox)
+        val avail = (parent as? View)?.width?.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
+        val targetW = min((326f * dens).roundToInt(), avail - (28f * dens).roundToInt())
+        val targetH = (106f * dens).roundToInt()
+        morphTo(targetW, targetH, 30f * dens, expandCurve = true)
+        springBounce(1.035f)
+        resetExpandTimer()
     }
 
-    private fun animateSize(wTarget: Int, hTarget: Int, alphaTarget: Float) {
+    val isExpanded: Boolean
+        get() = mode == Mode.EXPANDED
+
+    fun collapseIfExpanded() {
+        if (mode == Mode.EXPANDED) settleToRestingMode()
+    }
+
+    private fun collapseNow() {
+        settleToRestingMode()
+    }
+
+    private fun resetExpandTimer() {
+        handler.removeCallbacks(settleRunnable)
+        handler.postDelayed(settleRunnable, 4800L)
+    }
+
+    private fun settleToRestingMode() {
+        handler.removeCallbacks(settleRunnable)
+        when {
+            playingState -> {
+                mode = Mode.COMPACT_MUSIC
+                showOnly(compactRow)
+                val avail = (parent as? View)?.width?.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
+                val w = min((232f * dens).roundToInt(), avail - (90f * dens).roundToInt())
+                morphTo(w, (36f * dens).roundToInt(), 18f * dens, expandCurve = false)
+            }
+            flashOn -> {
+                mode = Mode.COMPACT_FLASH
+                pulseDot.visibility = GONE
+                pulseIcon.visibility = VISIBLE
+                pulseIcon.setImageBitmap(drawMiniFlashBitmap((15f * dens).roundToInt(), Color.WHITE))
+                pulseLabel.text = "المصباح"
+                showOnly(pulseRow)
+                morphTo((152f * dens).roundToInt(), (35f * dens).roundToInt(), 17.5f * dens, expandCurve = false)
+            }
+            dndOn -> {
+                mode = Mode.COMPACT_DND
+                pulseDot.visibility = GONE
+                pulseIcon.visibility = VISIBLE
+                pulseIcon.setImageBitmap(StatusBarView.renderMoonBitmap(0xFFA78BFA.toInt(), (14f * dens).roundToInt()))
+                pulseLabel.text = "عدم الإزعاج"
+                showOnly(pulseRow)
+                morphTo((164f * dens).roundToInt(), (35f * dens).roundToInt(), 17.5f * dens, expandCurve = false)
+            }
+            else -> {
+                mode = Mode.IDLE
+                showOnly(null)
+                morphTo((122f * dens).roundToInt(), (34f * dens).roundToInt(), 17f * dens, expandCurve = false)
+            }
+        }
+    }
+
+    private fun showOnly(target: View?) {
+        for (v in arrayOf(pulseRow, compactRow, expandedBox)) {
+            if (v === target) {
+                v.visibility = VISIBLE
+                v.animate().cancel()
+                v.animate().withEndAction(null).alpha(1f).setDuration(220L).start()
+            } else if (v.visibility == VISIBLE) {
+                v.animate().cancel()
+                v.animate().alpha(0f).setDuration(140L).withEndAction {
+                    if ((mode == Mode.IDLE) || (v !== target)) v.visibility = GONE
+                }.start()
+            }
+        }
+    }
+
+    private fun morphTo(wTarget: Int, hTarget: Int, rTarget: Float, expandCurve: Boolean) {
+        morphAnim?.cancel()
         val wStart = layoutParams.width
         val hStart = layoutParams.height
-        ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = if (alphaTarget > 0.5f) 460L else 360L
-            interpolator = if (alphaTarget > 0.5f) OvershootInterpolator(1.1f) else DecelerateInterpolator()
+        val rStart = curCornerPx
+        if (wStart == wTarget && hStart == hTarget && abs(rStart - rTarget) < 0.5f) return
+        morphAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = if (expandCurve) 440L else 360L
+            interpolator = if (expandCurve) OvershootInterpolator(1.18f) else OvershootInterpolator(0.70f)
             addUpdateListener { a ->
                 val f = a.animatedValue as Float
-                layoutParams.width = (wStart + (wTarget - wStart) * f).roundToInt()
-                layoutParams.height = (hStart + (hTarget - hStart) * f).roundToInt()
+                layoutParams.width = max((96f * dens).roundToInt(), (wStart + (wTarget - wStart) * f).roundToInt())
+                layoutParams.height = max((30f * dens).roundToInt(), (hStart + (hTarget - hStart) * f).roundToInt())
+                curCornerPx = max(12f * dens, rStart + (rTarget - rStart) * f)
+                pillBg.cornerRadius = curCornerPx
+                invalidateOutline()
                 requestLayout()
             }
             start()
         }
+    }
+
+    private fun springBounce(peak: Float) {
+        animate().cancel()
+        scaleX = peak
+        scaleY = peak * 0.985f
+        animate().scaleX(1f).scaleY(1f).setDuration(380L).setInterpolator(OvershootInterpolator(1.85f)).start()
+    }
+
+    private fun updateExpandedSubtitle() {
+        val parts = ArrayList<String>(3)
+        parts.add(currentTrack.artist)
+        if (flashOn) parts.add("المصباح يعمل")
+        if (dndOn) parts.add("عدم الإزعاج")
+        expSub.text = parts.joinToString(" • ")
+        expStatusBadge.text = if (batCharging) "⚡ $batPct%" else "$batPct%"
+        (expStatusBadge.background as? GradientDrawable)?.setColor(
+            if (batCharging) Color.argb(65, 48, 209, 88) else Color.argb(34, 255, 255, 255)
+        )
+    }
+
+    private fun refreshExpandedControls() {
+        val playSz = (19f * dens).roundToInt()
+        expPlayBtn.setImageBitmap(drawMiniPlayPauseBitmap(playSz, Color.WHITE, playingState))
+        val flashCol = if (flashOn) Color.WHITE else Color.argb(150, 255, 255, 255)
+        expFlashBtn.setImageBitmap(drawMiniFlashBitmap((17f * dens).roundToInt(), flashCol))
+        (expFlashBtn.background as? GradientDrawable)?.setColor(
+            if (flashOn) Color.argb(90, 255, 255, 255) else Color.argb(26, 255, 255, 255)
+        )
+    }
+
+    private fun makeTrackSwatch(track: TrackInfo, sz: Int): Bitmap {
+        val bmp = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = LinearGradient(
+                0f, 0f, sz.toFloat(), sz.toFloat(),
+                intArrayOf(track.c1, track.c2, track.c3),
+                floatArrayOf(0f, 0.55f, 1f),
+                Shader.TileMode.CLAMP
+            )
+        }
+        c.drawRect(0f, 0f, sz.toFloat(), sz.toFloat(), p)
+        return bmp
+    }
+
+    private fun drawMiniFlashBitmap(sz: Int, col: Int): Bitmap {
+        val bmp = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp)
+        val cx = sz * 0.5f
+        val cy = sz * 0.5f
+        val s = sz / 20f
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = col
+            style = Paint.Style.STROKE
+            strokeWidth = 1.7f * s
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+        val path = Path().apply {
+            moveTo(cx - 3.6f * s, cy - 6.8f * s)
+            lineTo(cx + 3.6f * s, cy - 6.8f * s)
+            lineTo(cx + 3.6f * s, cy - 4.0f * s)
+            lineTo(cx + 1.9f * s, cy - 1.9f * s)
+            lineTo(cx + 1.9f * s, cy + 6.4f * s)
+            lineTo(cx - 1.9f * s, cy + 6.4f * s)
+            lineTo(cx - 1.9f * s, cy - 1.9f * s)
+            lineTo(cx - 3.6f * s, cy - 4.0f * s)
+            close()
+        }
+        c.drawPath(path, p)
+        c.drawLine(cx - 3.6f * s, cy - 4.0f * s, cx + 3.6f * s, cy - 4.0f * s, p)
+        return bmp
+    }
+
+    private fun drawMiniPlayPauseBitmap(sz: Int, col: Int, playing: Boolean): Bitmap {
+        val bmp = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = col }
+        if (playing) {
+            c.drawRoundRect(sz * 0.24f, sz * 0.18f, sz * 0.42f, sz * 0.82f, sz * 0.06f, sz * 0.06f, p)
+            c.drawRoundRect(sz * 0.58f, sz * 0.18f, sz * 0.76f, sz * 0.82f, sz * 0.06f, sz * 0.06f, p)
+        } else {
+            val path = Path().apply {
+                moveTo(sz * 0.28f, sz * 0.16f)
+                lineTo(sz * 0.82f, sz * 0.50f)
+                lineTo(sz * 0.28f, sz * 0.84f)
+                close()
+            }
+            c.drawPath(path, p)
+        }
+        return bmp
+    }
+
+    private fun drawMiniSkipBitmap(sz: Int, col: Int, forward: Boolean): Bitmap {
+        val bmp = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp)
+        if (!forward) c.scale(-1f, 1f, sz * 0.5f, sz * 0.5f)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = col }
+        fun tri(x0: Float, x1: Float) {
+            val path = Path().apply {
+                moveTo(sz * x0, sz * 0.24f)
+                lineTo(sz * x1, sz * 0.50f)
+                lineTo(sz * x0, sz * 0.76f)
+                close()
+            }
+            c.drawPath(path, p)
+        }
+        tri(0.14f, 0.50f)
+        tri(0.48f, 0.84f)
+        return bmp
+    }
+
+    private fun drawMiniLibraryBitmap(sz: Int, col: Int): Bitmap {
+        val bmp = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = col
+            style = Paint.Style.STROKE
+            strokeWidth = sz * 0.11f
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+        c.drawLine(sz * 0.42f, sz * 0.24f, sz * 0.42f, sz * 0.70f, p)
+        c.drawLine(sz * 0.76f, sz * 0.18f, sz * 0.76f, sz * 0.62f, p)
+        c.drawLine(sz * 0.42f, sz * 0.24f, sz * 0.76f, sz * 0.18f, p)
+        p.style = Paint.Style.FILL
+        c.drawCircle(sz * 0.32f, sz * 0.72f, sz * 0.13f, p)
+        c.drawCircle(sz * 0.66f, sz * 0.64f, sz * 0.13f, p)
+        return bmp
     }
 }
 
@@ -398,6 +1026,11 @@ class ShortcutCircleButton(
     private val dens = resources.displayMetrics.density
     private val glassHelper = LiquidGlassCardHelper(backdrop, perf, 26f, 20f, 16f, 1.48f, 0.28f)
     private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
     private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
@@ -407,11 +1040,23 @@ class ShortcutCircleButton(
 
     var uiInk = Color.WHITE
     var glassBg = Color.argb(10, 255, 255, 255)
+    private var activeFrac = 0f
+    private var activeAnim: ValueAnimator? = null
     var isActive = false
         set(value) {
+            if (field == value) return
             field = value
-            animate().scaleX(if (value) 1.06f else 1f).scaleY(if (value) 1.06f else 1f).setDuration(240L).start()
-            invalidate()
+            activeAnim?.cancel()
+            val target = if (value) 1f else 0f
+            activeAnim = ValueAnimator.ofFloat(activeFrac, target).apply {
+                duration = 460L
+                interpolator = OvershootInterpolator(1.75f)
+                addUpdateListener { a ->
+                    activeFrac = a.animatedValue as Float
+                    invalidate()
+                }
+                start()
+            }
         }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -433,25 +1078,26 @@ class ShortcutCircleButton(
                 MotionEvent.ACTION_DOWN -> {
                     downTs = SystemClock.uptimeMillis()
                     holdFired = false
+                    animate().cancel()
                     animate().scaleX(0.90f).scaleY(0.90f).setDuration(110L).start()
-                    handler.postDelayed(holdRunnable, 350L)
+                    handler.postDelayed(holdRunnable, 360L)
                     true
                 }
                 MotionEvent.ACTION_UP -> {
                     handler.removeCallbacks(holdRunnable)
                     val held = SystemClock.uptimeMillis() - downTs
-                    if (!holdFired && held < 350L) {
+                    if (!holdFired && held < 360L) {
                         onHaptic("pop")
                         pop()
                         onTapAction()
                     } else {
-                        animate().scaleX(if (isActive) 1.06f else 1f).scaleY(if (isActive) 1.06f else 1f).setDuration(240L).start()
+                        animate().scaleX(1f).scaleY(1f).setDuration(260L).setInterpolator(OvershootInterpolator(1.5f)).start()
                     }
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     handler.removeCallbacks(holdRunnable)
-                    animate().scaleX(if (isActive) 1.06f else 1f).scaleY(if (isActive) 1.06f else 1f).setDuration(200L).start()
+                    animate().scaleX(1f).scaleY(1f).setDuration(220L).start()
                     true
                 }
                 else -> false
@@ -464,11 +1110,20 @@ class ShortcutCircleButton(
         scaleX = 0.88f
         scaleY = 0.88f
         animate()
-            .scaleX(if (isActive) 1.06f else 1f)
-            .scaleY(if (isActive) 1.06f else 1f)
+            .scaleX(1f)
+            .scaleY(1f)
             .setDuration(420L)
-            .setInterpolator(OvershootInterpolator(1.8f))
+            .setInterpolator(OvershootInterpolator(1.85f))
             .start()
+    }
+
+    private fun lerpArgb(c0: Int, c1: Int, t: Float): Int {
+        val f = t.coerceIn(0f, 1f)
+        val a = (Color.alpha(c0) + (Color.alpha(c1) - Color.alpha(c0)) * f).roundToInt().coerceIn(0, 255)
+        val r = (Color.red(c0) + (Color.red(c1) - Color.red(c0)) * f).roundToInt().coerceIn(0, 255)
+        val g = (Color.green(c0) + (Color.green(c1) - Color.green(c0)) * f).roundToInt().coerceIn(0, 255)
+        val b = (Color.blue(c0) + (Color.blue(c1) - Color.blue(c0)) * f).roundToInt().coerceIn(0, 255)
+        return Color.argb(a, r, g, b)
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -479,11 +1134,20 @@ class ShortcutCircleButton(
 
         val cx = width * 0.5f
         val cy = height * 0.5f
-        strokePaint.color = if (isActive && kind == "flash") Color.WHITE else uiInk
-        iconPaint.color = strokePaint.color
 
         if (kind == "flash") {
-            // Exact iOS Flashlight silhouette (flared head + slim handle + power dot)
+            val t = activeFrac.coerceIn(0f, 1f)
+            val inkLum = 0.2126f * Color.red(uiInk) + 0.7152f * Color.green(uiInk) + 0.0722f * Color.blue(uiInk)
+            val offCol = if (inkLum > 165f) {
+                Color.argb(148, 178, 188, 206)
+            } else {
+                Color.argb(220, Color.red(uiInk), Color.green(uiInk), Color.blue(uiInk))
+            }
+            val iconCol = lerpArgb(offCol, Color.WHITE, t)
+            val iconScale = 1f + 0.09f * activeFrac
+
+            canvas.save()
+            canvas.scale(iconScale, iconScale, cx, cy)
             val s = dens
             val path = Path().apply {
                 moveTo(cx - 4.2f * s, cy - 8f * s)
@@ -496,10 +1160,29 @@ class ShortcutCircleButton(
                 lineTo(cx - 4.2f * s, cy - 4.8f * s)
                 close()
             }
+            if (t > 0.02f) {
+                glowPaint.color = Color.argb((44 * t).roundToInt(), 255, 255, 255)
+                glowPaint.strokeWidth = 4.6f * s
+                canvas.drawPath(path, glowPaint)
+
+                glowPaint.color = Color.argb((78 * t).roundToInt(), 255, 255, 255)
+                glowPaint.strokeWidth = 2.8f * s
+                canvas.drawPath(path, glowPaint)
+
+                iconPaint.color = Color.argb((195 * t).roundToInt(), 255, 255, 255)
+                canvas.drawPath(path, iconPaint)
+            }
+            strokePaint.color = iconCol
             canvas.drawPath(path, strokePaint)
             canvas.drawLine(cx - 4.2f * s, cy - 4.8f * s, cx + 4.2f * s, cy - 4.8f * s, strokePaint)
-            canvas.drawCircle(cx, cy + 1.6f * s, 1.3f * s, iconPaint)
+
+            // Power switch dot blends cleanly when flashlight icon lights white
+            iconPaint.color = lerpArgb(iconCol, Color.argb(190, 26, 30, 38), t)
+            canvas.drawCircle(cx, cy + 1.6f * s, 1.35f * s, iconPaint)
+            canvas.restore()
         } else {
+            strokePaint.color = uiInk
+            iconPaint.color = uiInk
             // Exact iOS Camera body + lens circle + viewfinder bump
             val s = dens
             val body = RectF(cx - 8.5f * s, cy - 5.2f * s, cx + 8.5f * s, cy + 6.8f * s)

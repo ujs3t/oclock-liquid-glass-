@@ -158,7 +158,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             if (level >= 0 && scale > 0) {
                 val pct = ((level * 100f) / scale).roundToInt().coerceIn(1, 100)
                 val chg = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
-                statusBar.updateBattery(pct, chg)
+                if (::statusBar.isInitialized) statusBar.updateBattery(pct, chg)
+                if (::island.isInitialized) island.updateBattery(pct, chg)
             }
         }
     }
@@ -198,6 +199,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 npCard.setTrack(track, art)
                 npCard.setPlaying(playing)
                 npCard.updateTime(pos, dur)
+            }
+            if (::island.isInitialized) {
+                island.syncMedia(track, art, playing)
             }
         }
         media.setLibraryListener { tracks ->
@@ -347,7 +351,6 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             onPlayToggle = {
                 haptic("pop")
                 media.togglePlay()
-                if (media.isPlaying()) island.pulse("قيد التشغيل الآن", 0xFF30D158.toInt(), 1500L)
             },
             onNext = { haptic("pop"); media.next() },
             onScrub = { ratio -> media.seekRatio(ratio) },
@@ -363,7 +366,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             }
         ).apply {
             onLongPress = {
-                if (!editorSheet.isOpen && !cameraOverlay.isOpen && !flashOn) {
+                if (!editorSheet.isOpen && !cameraOverlay.isOpen) {
                     haptic("heavy")
                     musicLibraryOverlay.open()
                 }
@@ -409,11 +412,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         shLeft = ShortcutCircleButton(
             this, "flash", backdrop, perf,
             onTapAction = { setFlashlight(!flashOn) },
-            onHoldAction = {
-                setFlashlight(true)
-                flashBurstTimer?.let { mainHandler.removeCallbacks(it) }
-                flashBurstTimer = Runnable { setFlashlight(false) }.also { mainHandler.postDelayed(it, 420L) }
-            },
+            onHoldAction = { setFlashlight(!flashOn) },
             onHaptic = { k -> haptic(k) }
         ).apply {
             layoutParams = FrameLayout.LayoutParams(btnSz, btnSz, Gravity.START or Gravity.CENTER_VERTICAL)
@@ -426,6 +425,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 cfg.dnd = false
                 store.save(cfg)
                 applyToggles()
+                island.syncDnd(false)
                 haptic("tick")
             }
         }
@@ -459,7 +459,19 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         }
         phoneShell.addView(homeBar)
 
-        island = DynamicIslandView(this)
+        island = DynamicIslandView(this).apply {
+            onPrev = { media.prev() }
+            onPlayToggle = { media.togglePlay() }
+            onNext = { media.next() }
+            onToggleFlash = { setFlashlight(!flashOn) }
+            onOpenLibrary = {
+                if (!editorSheet.isOpen && !cameraOverlay.isOpen) {
+                    musicLibraryOverlay.open()
+                }
+            }
+            onHaptic = { k -> haptic(k) }
+            syncDnd(cfg.dnd, silent = true)
+        }
         phoneShell.addView(island)
 
         // 9. Fullscreen Flashlight Overlay (z = 8)
@@ -659,6 +671,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 holdFired = true
                 undoSnap = cfg.snapshotForUndo()
                 resizeOverlay.open()
+                island.pulse("تخصيص حجم الساعة", 0xFF38BDF8.toInt(), 1500L)
             }
         }
 
@@ -713,9 +726,10 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         var startX = 0f
 
         wallView.setOnTouchListener { _, ev ->
-            if (editorSheet.isOpen || cameraOverlay.isOpen || flashOn) return@setOnTouchListener false
+            if (editorSheet.isOpen || cameraOverlay.isOpen) return@setOnTouchListener false
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    if (island.isExpanded) island.collapseIfExpanded()
                     pullAnimator?.cancel()
                     startX = ev.rawX
                     startY = ev.rawY
@@ -839,8 +853,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         statusBar.applyTheme(cols.uiInk, cfg.dnd)
         npCard.applyTheme(cols.uiInk, cols.uiDim, cols.glassBg)
         dndPill.applyTheme(cols.uiInk, cols.glassBg)
-        shLeft.uiInk = cols.uiInk; shLeft.glassBg = cols.glassBg
-        shRight.uiInk = cols.uiInk; shRight.glassBg = cols.glassBg
+        shLeft.uiInk = cols.uiInk; shLeft.glassBg = cols.glassBg; shLeft.invalidate()
+        shRight.uiInk = cols.uiInk; shRight.glassBg = cols.glassBg; shRight.invalidate()
 
         applyToggles()
         refreshAllGlass()
@@ -933,15 +947,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         flashBurstTimer?.let { mainHandler.removeCallbacks(it) }
         flashOn = on
         shLeft.isActive = on
-        if (on) {
-            flashOverlay.visibility = View.VISIBLE
-            flashOverlay.animate().alpha(1f).setDuration(240L).start()
-            island.pulse("المصباح قيد التشغيل", 0xFFFFD60A.toInt(), 1600L)
-        } else {
-            flashOverlay.animate().alpha(0f).setDuration(200L).withEndAction {
-                if (!flashOn) flashOverlay.visibility = View.GONE
-            }.start()
-        }
+        flashOverlay.visibility = View.GONE
+        island.syncFlashlight(on)
         try {
             val cm = getSystemService(Context.CAMERA_SERVICE) as? CameraManager ?: return
             for (id in cm.cameraIdList) {
@@ -997,10 +1004,10 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private fun handleBackNavigation() {
         when {
             cameraOverlay.isOpen -> cameraOverlay.close()
-            flashOn -> setFlashlight(false)
             musicLibraryOverlay.isOpen -> musicLibraryOverlay.close()
             resizeOverlay.isOpen -> resizeOverlay.close()
             editorSheet.isOpen -> editorSheet.close()
+            island.isExpanded -> island.collapseIfExpanded()
             else -> finish()
         }
     }
@@ -1273,6 +1280,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         cfg.dnd = !cfg.dnd
         store.save(cfg)
         applyToggles()
+        island.syncDnd(cfg.dnd)
         haptic("tick")
     }
 

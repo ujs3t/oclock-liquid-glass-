@@ -102,6 +102,10 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(viewsKt.includes('onLongPress'));
   assert.ok(viewsKt.includes('longPressTimeoutMs'));
   assert.ok(viewsKt.includes('springCapsule'));
+  assert.ok(viewsKt.includes('syncMedia'));
+  assert.ok(viewsKt.includes('syncFlashlight'));
+  assert.ok(viewsKt.includes('expandInteractive'));
+  assert.ok(viewsKt.includes('activeFrac'));
 
   const mediaKt = readFileSync(ktDir + 'MediaController.kt','utf8');
   assert.ok(mediaKt.includes('MediaStore.Audio.Media.EXTERNAL_CONTENT_URI'));
