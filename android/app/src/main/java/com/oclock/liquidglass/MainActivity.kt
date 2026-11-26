@@ -73,7 +73,6 @@ import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
-import kotlin.math.sqrt
 
 class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
@@ -1017,11 +1016,13 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val dens = resources.displayMetrics.density
         val yDp = pullY / dens
         val exp = notifExpandFrac.coerceIn(0f, 1f)
-        val upEase = 1f - (1f - exp).let { it * it * it }
-        val fadeEase = (exp / 0.72f).coerceIn(0f, 1f).let { it * sqrt(it) }
-        val topFadeEase = (exp / 0.58f).coerceIn(0f, 1f).let { it * sqrt(it) }
+        // liftLead >= exp at all t in (0,1), guaranteeing npCard & clock ALWAYS clear NotificationCenter upward with zero overlap!
+        val liftLead = 1f - (1f - exp) * (1f - exp)
+        val fastFade = (exp / 0.40f).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
+        val clockFade = (exp / 0.52f).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
         val ncTravel = if (::notificationCenter.isInitialized) notificationCenter.restingOffsetPx else 0f
-        val liftTravel = max(260f * dens, ncTravel + 22f * dens)
+        val clockLiftTravel = max(290f * dens, ncTravel + 64f * dens)
+        val npLiftTravel = ncTravel + 52f * dens
 
         // Keep wallpaper & foreground depth subject 100% locked together during notification scroll so depth cutout stays intact!
         val wallZoom = 1f + yDp * 0.00028f
@@ -1031,29 +1032,31 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         subjectView.scaleY = wallZoom
         subjectView.translationY = 0f
 
-        val clockLift = clockRestOffset + pullY - liftTravel * upEase
+        val clockLift = clockRestOffset + pullY - clockLiftTravel * liftLead
         clockContainer.cameraDistance = 12000f * dens
         clockContainer.translationY = clockLift
-        clockContainer.rotationX = upEase * 12f
-        val cScale = 1f - 0.11f * upEase
+        clockContainer.rotationX = liftLead * 10f
+        val cScale = 1f - 0.11f * liftLead
         clockContainer.scaleX = cScale
         clockContainer.scaleY = cScale
-        clockContainer.alpha = (1f - fadeEase).coerceIn(0f, 1f)
+        clockContainer.alpha = (1f - clockFade).coerceIn(0f, 1f)
         clockView.pullOffsetYPx = clockLift
 
-        toplineRow.translationY = clockRestOffset * 1.04f + pullY - (liftTravel + 18f * dens) * upEase
-        val tScale = 1f - 0.08f * upEase
+        toplineRow.translationY = clockRestOffset * 1.04f + pullY - (clockLiftTravel + 18f * dens) * liftLead
+        val tScale = 1f - 0.08f * liftLead
         toplineRow.scaleX = tScale
         toplineRow.scaleY = tScale
-        toplineRow.alpha = (1f - topFadeEase).coerceIn(0f, 1f)
+        toplineRow.alpha = (1f - fastFade).coerceIn(0f, 1f)
 
         npCard.cameraDistance = 12000f * dens
-        npCard.translationY = npBaseTranslationY + pullY * 0.6f + notifCouplingY - (liftTravel * 0.96f) * upEase
-        npCard.rotationX = upEase * 10f
-        val mScale = 1f - 0.09f * upEase
+        npCard.translationY = npBaseTranslationY + pullY * 0.6f + notifCouplingY - npLiftTravel * liftLead
+        npCard.rotationX = liftLead * 9f
+        val mScale = 1f - 0.11f * liftLead
         npCard.scaleX = mScale
         npCard.scaleY = mScale
-        npCard.alpha = (1f - fadeEase).coerceIn(0f, 1f)
+        npCard.alpha = (1f - fastFade).coerceIn(0f, 1f)
+        npCard.isClickable = cfg.music && exp < 0.12f
+        npCard.isFocusable = npCard.isClickable
 
         if (::notificationCenter.isInitialized) {
             notificationCenter.translationY = pullY * 0.52f
