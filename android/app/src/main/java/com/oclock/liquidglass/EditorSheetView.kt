@@ -260,7 +260,7 @@ class EditorSheetView(
         body.addView(fontRow)
 
         // 2. Size slider
-        val (sHdr, sValTv) = secHeaderWithValue("حجم الساعة", "100%")
+        val (sHdr, sValTv) = secHeaderWithValue("حجم الساعة", "121%")
         sizeVal = sValTv
         body.addView(sHdr)
         sizeSeek = makeSeekBar(56, 420) { v, fromUser ->
@@ -272,7 +272,7 @@ class EditorSheetView(
         body.addView(sizeSeek)
 
         // 3. Stretch slider (100%..310%)
-        val (stHdr, stValTv) = secHeaderWithValue("طول الساعة (بدون تشويه الوزن)", "122%")
+        val (stHdr, stValTv) = secHeaderWithValue("طول الساعة (بدون تشويه الوزن)", "168%")
         stretchVal = stValTv
         body.addView(stHdr)
         stretchSeek = makeSeekBar(100, 310) { v, fromUser ->
@@ -439,7 +439,7 @@ class EditorSheetView(
         }.apply { layoutDirection = LAYOUT_DIRECTION_LTR }
         proCard.addView(toneSeek)
 
-        val (opHdr, opTv) = secHeaderWithValue("شفافية لون الساعة", "22%")
+        val (opHdr, opTv) = secHeaderWithValue("شفافية لون الساعة", "14%")
         opacityVal = opTv
         proCard.addView(opHdr)
         opacitySeek = makeSeekBar(0, 100) { v, fromUser ->
@@ -503,7 +503,7 @@ class EditorSheetView(
 
         // 8. Inner Shadow
         body.addView(secHeader("شادو الساعة الداخلي (الساعة فقط)"))
-        val (ioH, ioV) = secHeaderWithValue("الشفافية", "85%")
+        val (ioH, ioV) = secHeaderWithValue("الشفافية", "100%")
         inOpVal = ioV
         body.addView(ioH)
         inOpSeek = makeSeekBar(0, 100) { v, fromUser ->
@@ -514,7 +514,7 @@ class EditorSheetView(
         }
         body.addView(inOpSeek)
 
-        val (itH, itV) = secHeaderWithValue("السُمك", "2.5")
+        val (itH, itV) = secHeaderWithValue("السُمك", "0.9")
         inThVal = itV
         body.addView(itH)
         inThSeek = makeSeekBar(0, 80) { v, fromUser ->
@@ -536,7 +536,7 @@ class EditorSheetView(
         }
         body.addView(inAngSeek)
 
-        val (ifH, ifV) = secHeaderWithValue("نسبة التلاشي", "50%")
+        val (ifH, ifV) = secHeaderWithValue("نسبة التلاشي", "100%")
         inFadeVal = ifV
         body.addView(ifH)
         inFadeSeek = makeSeekBar(0, 100) { v, fromUser ->

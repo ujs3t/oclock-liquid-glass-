@@ -1265,7 +1265,7 @@ class NowPlayingCardView(
     private val onAirPlay: () -> Unit
 ) : FrameLayout(context) {
     private val dens = resources.displayMetrics.density
-    private val glassHelper = LiquidGlassCardHelper(backdrop, perf, 34f, 25f, 18f, 1.50f, 0.29f)
+    private val glassHelper = LiquidGlassCardHelper(backdrop, perf, 26f, 20f, 15f, 1.48f, 0.27f)
 
     private val artView: ImageView
     private val metaCol: LinearLayout
@@ -1385,7 +1385,7 @@ class NowPlayingCardView(
     init {
         setWillNotDraw(false)
         layoutDirection = LAYOUT_DIRECTION_LTR
-        setPadding((17f * dens).roundToInt(), (15f * dens).roundToInt(), (17f * dens).roundToInt(), (13f * dens).roundToInt())
+        setPadding((14f * dens).roundToInt(), (9f * dens).roundToInt(), (14f * dens).roundToInt(), (8f * dens).roundToInt())
 
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -1399,13 +1399,13 @@ class NowPlayingCardView(
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
         }
         artView = ImageView(context).apply {
-            val s = (50f * dens).roundToInt()
-            layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = (13f * dens).roundToInt() }
+            val s = (40f * dens).roundToInt()
+            layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = (11f * dens).roundToInt() }
             scaleType = ImageView.ScaleType.CENTER_CROP
             clipToOutline = true
             outlineProvider = object : android.view.ViewOutlineProvider() {
                 override fun getOutline(v: View, outline: android.graphics.Outline) {
-                    outline.setRoundRect(0, 0, v.width, v.height, 13f * dens)
+                    outline.setRoundRect(0, 0, v.width, v.height, 10f * dens)
                 }
             }
         }
@@ -1416,7 +1416,7 @@ class NowPlayingCardView(
         titleView = TextView(context).apply {
             text = currentTrack.title
             setTextColor(uiInk)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
             isSingleLine = true
             ellipsize = TextUtils.TruncateAt.MARQUEE
@@ -1426,7 +1426,7 @@ class NowPlayingCardView(
         artistView = TextView(context).apply {
             text = currentTrack.artist
             setTextColor(uiDim)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
             isSingleLine = true
             ellipsize = TextUtils.TruncateAt.END
         }
@@ -1436,20 +1436,20 @@ class NowPlayingCardView(
         val eqRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.BOTTOM
-            layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, (17f * dens).roundToInt()).apply {
-                marginStart = (10f * dens).roundToInt()
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, (14f * dens).roundToInt()).apply {
+                marginStart = (8f * dens).roundToInt()
             }
         }
         for (i in 0 until 4) {
             val bar = View(context).apply {
-                layoutParams = LinearLayout.LayoutParams((3f * dens).roundToInt(), (16f * dens).roundToInt()).apply {
-                    marginStart = if (i > 0) (2.5f * dens).roundToInt() else 0
+                layoutParams = LinearLayout.LayoutParams((2.6f * dens).roundToInt(), (13f * dens).roundToInt()).apply {
+                    marginStart = if (i > 0) (2.2f * dens).roundToInt() else 0
                 }
                 background = GradientDrawable().apply {
                     setColor(uiInk)
                     cornerRadius = 99f
                 }
-                pivotY = 16f * dens
+                pivotY = 13f * dens
                 scaleY = 0.22f
             }
             eqBars.add(bar)
@@ -1478,7 +1478,7 @@ class NowPlayingCardView(
             private val trackRect = RectF()
             private val fillRect = RectF()
             override fun onDraw(canvas: Canvas) {
-                val trackH = 5.5f * dens
+                val trackH = 4.2f * dens
                 val cy = height * 0.5f
                 trackRect.set(0f, cy - trackH * 0.5f, width.toFloat(), cy + trackH * 0.5f)
                 p.color = Color.argb(56, Color.red(uiInk), Color.green(uiInk), Color.blue(uiInk))
@@ -1489,13 +1489,13 @@ class NowPlayingCardView(
                 p.color = uiInk
                 canvas.drawRoundRect(fillRect, trackH * 0.5f, trackH * 0.5f, p)
 
-                val thumbR = (if (scrubbing) 8.5f else 5f) * dens
+                val thumbR = (if (scrubbing) 7.2f else 4.2f) * dens
                 p.color = Color.WHITE
                 canvas.drawCircle(fillW.coerceIn(thumbR, width - thumbR), cy, thumbR, p)
             }
         }.apply {
-            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, (22f * dens).roundToInt()).apply {
-                topMargin = (7f * dens).roundToInt()
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, (15f * dens).roundToInt()).apply {
+                topMargin = (3f * dens).roundToInt()
             }
             setOnTouchListener { v, ev ->
                 when (ev.actionMasked) {
@@ -1521,13 +1521,13 @@ class NowPlayingCardView(
         val timeRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                topMargin = (-2f * dens).roundToInt()
+                topMargin = (-3f * dens).roundToInt()
             }
         }
         curTimeText = TextView(context).apply {
             text = "0:00"
             setTextColor(uiDim)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
             fontFeatureSettings = "tnum"
             layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
@@ -1535,7 +1535,7 @@ class NowPlayingCardView(
         remTimeText = TextView(context).apply {
             text = "-4:23"
             setTextColor(uiDim)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
             fontFeatureSettings = "tnum"
             gravity = Gravity.END
@@ -1549,7 +1549,7 @@ class NowPlayingCardView(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                topMargin = (5f * dens).roundToInt()
+                topMargin = (2f * dens).roundToInt()
             }
         }
 
@@ -1567,25 +1567,25 @@ class NowPlayingCardView(
             }
         }
 
-        starBtn = makeCtrlIcon(40f, 40f, 0.65f) {
+        starBtn = makeCtrlIcon(34f, 30f, 0.65f) {
             starred = !starred
             updateControlIcons()
             springCapsule(0.975f, 360L, 1.8f)
             onFavorite()
         }
-        prevBtn = makeCtrlIcon(48f, 44f, 1f) {
+        prevBtn = makeCtrlIcon(40f, 32f, 1f) {
             springCapsule(0.968f, 380L, 1.9f)
             onPrev()
         }
-        playBtn = makeCtrlIcon(56f, 48f, 1f) {
+        playBtn = makeCtrlIcon(46f, 34f, 1f) {
             springCapsule(0.968f, 380L, 1.9f)
             onPlayToggle()
         }
-        nextBtn = makeCtrlIcon(48f, 44f, 1f) {
+        nextBtn = makeCtrlIcon(40f, 32f, 1f) {
             springCapsule(0.968f, 380L, 1.9f)
             onNext()
         }
-        airBtn = makeCtrlIcon(40f, 40f, 0.65f) {
+        airBtn = makeCtrlIcon(34f, 30f, 0.65f) {
             springCapsule(0.975f, 360L, 1.8f)
             onAirPlay()
         }
@@ -1720,12 +1720,12 @@ class NowPlayingCardView(
     }
 
     private fun updateControlIcons() {
-        val sz = (29f * dens).roundToInt()
-        val sm = (20f * dens).roundToInt()
+        val sz = (23f * dens).roundToInt()
+        val sm = (17f * dens).roundToInt()
         starBtn.setImageBitmap(drawStarIcon(sm, if (starred) 0xFFFFD60A.toInt() else uiInk, starred))
         starBtn.alpha = if (starred) 1f else 0.65f
         prevBtn.setImageBitmap(drawSkipIcon(sz, uiInk, forward = false))
-        playBtn.setImageBitmap(if (playingState) drawPauseIcon((34f * dens).roundToInt(), uiInk) else drawPlayIcon((34f * dens).roundToInt(), uiInk))
+        playBtn.setImageBitmap(if (playingState) drawPauseIcon((26f * dens).roundToInt(), uiInk) else drawPlayIcon((26f * dens).roundToInt(), uiInk))
         nextBtn.setImageBitmap(drawSkipIcon(sz, uiInk, forward = true))
         airBtn.setImageBitmap(drawAirPlayIcon(sm, uiInk))
     }

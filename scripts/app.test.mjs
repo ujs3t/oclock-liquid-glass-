@@ -72,6 +72,9 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
 
   const stateKt = readFileSync(ktDir + 'AppState.kt','utf8');
   assert.ok(stateKt.includes('innerFade'));
+  assert.ok(stateKt.includes('innerOpacity: Int = 100'));
+  assert.ok(stateKt.includes('innerThickness: Float = 0.9f'));
+  assert.ok(stateKt.includes('innerFade: Int = 100'));
 
   const sheetKt = readFileSync(ktDir + 'EditorSheetView.kt','utf8');
   assert.ok(sheetKt.includes('نسبة التلاشي'));
@@ -133,9 +136,11 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(notifKt.includes('nudgeFromMusic'));
   assert.ok(notifKt.includes('LiquidGlassCardHelper'));
   assert.ok(notifKt.includes('GlassMoreHintPill'));
+  assert.ok(!notifKt.includes('GlassShowLessPill'));
   assert.ok(notifKt.includes('configureLayoutBounds'));
   assert.ok(notifKt.includes('playEntrance3D'));
   assert.ok(notifKt.includes('updateCard3DAndPeek'));
+  assert.ok(notifKt.includes('clipRect(-width * 2'));
 
   const aiKt = readFileSync(ktDir + 'AIDepthManager.kt','utf8');
   assert.ok(aiKt.includes('SubjectSegmentation'));

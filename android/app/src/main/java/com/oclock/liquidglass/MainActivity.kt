@@ -351,9 +351,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 scheduleClockRender(force = true)
             },
             onReset = {
-                cfg.size = 172f
+                cfg.size = 208f
                 cfg.sx = 1.0f
-                cfg.sy = 1.22f
+                cfg.sy = 1.68f
                 cfg.clockY = 0f
                 store.save(cfg)
                 layoutScreenPositions()
@@ -442,14 +442,11 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 notifHub.openNotificationSettings()
                 showToast("فعّل إشعارات OClock زجاج من القائمة")
             },
-            onStackModeToggled = {
-                updateMusicAndNotificationsLayout(animated = true)
-            },
             onScrollExpandChanged = { frac ->
                 notifExpandFrac = frac.coerceIn(0f, 1f)
                 applyDepthAndLayerTransforms()
                 if (cfg.music) {
-                    val interactive = notifExpandFrac < 0.62f
+                    val interactive = notifExpandFrac < 0.50f
                     npCard.isClickable = interactive
                     npCard.isFocusable = interactive
                 }
@@ -725,14 +722,14 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
         val npLp = npCard.layoutParams as FrameLayout.LayoutParams
         if (isShortLandscape) {
-            npLp.width = min((330f * dens).roundToInt(), (resources.displayMetrics.widthPixels * 0.45f).roundToInt())
+            npLp.width = min((310f * dens).roundToInt(), (resources.displayMetrics.widthPixels * 0.43f).roundToInt())
             npLp.gravity = Gravity.BOTTOM or Gravity.LEFT
             npLp.bottomMargin = safeBottomPx + (20f * dens).roundToInt()
         } else {
             val availW = max(1, phoneShell.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels)
-            npLp.width = min((400f * dens).roundToInt(), availW - (28f * dens).roundToInt())
+            npLp.width = min((368f * dens).roundToInt(), availW - (36f * dens).roundToInt())
             npLp.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            npLp.bottomMargin = safeBottomPx + (122f * dens).roundToInt()
+            npLp.bottomMargin = safeBottomPx + (110f * dens).roundToInt()
         }
         npCard.layoutParams = npLp
 
@@ -783,8 +780,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val shortcutsReserve = safeBottomPx + (90f * dens).roundToInt()
         val shortcutsTop = shellH - shortcutsReserve
         val expandedTop = safeTopPx + (54f * dens).roundToInt()
-        val npBaseBottom = safeBottomPx + (122f * dens).roundToInt()
-        val npH = npCard.height.takeIf { it > 0 } ?: (148f * dens).roundToInt()
+        val npBaseBottom = safeBottomPx + (110f * dens).roundToInt()
+        val npH = npCard.height.takeIf { it > 0 } ?: (108f * dens).roundToInt()
         val headerH = ((if (notifHub.hasNotificationAccess()) 44f else 76f) * dens).roundToInt()
 
         val clockNaturalTop = safeTopPx + ((82f + cfg.clockY) * dens).roundToInt()
@@ -811,17 +808,13 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 }
             }
         } else {
-            val desiredListH = if (notificationCenter.stackedCollapsed) {
-                (108f * dens).roundToInt()
-            } else {
-                when {
-                    items.size <= 1 -> (86f * dens).roundToInt()
-                    items.size == 2 -> (162f * dens).roundToInt()
-                    else -> (228f * dens).roundToInt()
-                }
+            val desiredListH = when {
+                items.size <= 1 -> (84f * dens).roundToInt()
+                items.size == 2 -> (112f * dens).roundToInt()
+                else -> (126f * dens).roundToInt()
             }
             val desiredTotalNotifH = headerH + desiredListH
-            val minTotalNotifH = headerH + (96f * dens).roundToInt()
+            val minTotalNotifH = headerH + (84f * dens).roundToInt()
 
             val restingTop: Int
             if (cfg.music) {
@@ -1023,38 +1016,43 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val dens = resources.displayMetrics.density
         val yDp = pullY / dens
         val exp = notifExpandFrac.coerceIn(0f, 1f)
+        val upEase = 1f - (1f - exp).let { it * it * it }
+        val fadeEase = (exp / 0.56f).coerceIn(0f, 1f).let { it * it }
+        val topFadeEase = (exp / 0.44f).coerceIn(0f, 1f).let { it * it }
+        val ncTravel = if (::notificationCenter.isInitialized) notificationCenter.restingOffsetPx else 0f
+        val liftTravel = max(280f * dens, ncTravel + 36f * dens)
 
-        val wallZoom = 1f + yDp * 0.00028f + exp * 0.036f
-        val subjZoom = 1f + yDp * 0.00028f + exp * 0.068f
+        val wallZoom = 1f + yDp * 0.00028f + upEase * 0.038f
+        val subjZoom = 1f + yDp * 0.00028f + upEase * 0.074f
         wallView.scaleX = wallZoom
         wallView.scaleY = wallZoom
         subjectView.scaleX = subjZoom
         subjectView.scaleY = subjZoom
-        subjectView.translationY = -exp * 26f * dens
+        subjectView.translationY = -upEase * 28f * dens
 
-        val clockLift = clockRestOffset + pullY - exp * 170f * dens
+        val clockLift = clockRestOffset + pullY - liftTravel * upEase
         clockContainer.cameraDistance = 12000f * dens
         clockContainer.translationY = clockLift
-        clockContainer.rotationX = exp * 14f
-        val cScale = 1f - 0.14f * exp
+        clockContainer.rotationX = upEase * 15f
+        val cScale = 1f - 0.14f * upEase
         clockContainer.scaleX = cScale
         clockContainer.scaleY = cScale
-        clockContainer.alpha = (1f - exp * 1.25f).coerceIn(0f, 1f)
+        clockContainer.alpha = (1f - fadeEase).coerceIn(0f, 1f)
         clockView.pullOffsetYPx = clockLift
 
-        toplineRow.translationY = clockRestOffset * 1.04f + pullY - exp * 195f * dens
-        val tScale = 1f - 0.10f * exp
+        toplineRow.translationY = clockRestOffset * 1.04f + pullY - (liftTravel + 24f * dens) * upEase
+        val tScale = 1f - 0.10f * upEase
         toplineRow.scaleX = tScale
         toplineRow.scaleY = tScale
-        toplineRow.alpha = (1f - exp * 1.45f).coerceIn(0f, 1f)
+        toplineRow.alpha = (1f - topFadeEase).coerceIn(0f, 1f)
 
         npCard.cameraDistance = 12000f * dens
-        npCard.translationY = npBaseTranslationY + pullY * 0.6f + notifCouplingY - exp * 155f * dens
-        npCard.rotationX = exp * 11f
-        val mScale = 1f - 0.10f * exp
+        npCard.translationY = npBaseTranslationY + pullY * 0.6f + notifCouplingY - (liftTravel * 0.92f) * upEase
+        npCard.rotationX = upEase * 12f
+        val mScale = 1f - 0.10f * upEase
         npCard.scaleX = mScale
         npCard.scaleY = mScale
-        npCard.alpha = (1f - exp * 1.35f).coerceIn(0f, 1f)
+        npCard.alpha = (1f - fadeEase).coerceIn(0f, 1f)
 
         if (::notificationCenter.isInitialized) {
             notificationCenter.translationY = pullY * 0.52f
@@ -1062,7 +1060,12 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         bottomRow.translationY = pullY * 0.4f
 
         backdrop.updateZoomOnly(phoneShell.width, phoneShell.height, wallZoom)
-        refreshAllGlass()
+        if (clockContainer.alpha > 0.02f) clockView.invalidate()
+        if (npCard.alpha > 0.02f) npCard.invalidate()
+        if (::notificationCenter.isInitialized) notificationCenter.invalidateCards()
+        dndPill.invalidate()
+        shLeft.invalidate()
+        shRight.invalidate()
     }
 
     private fun releasePullSpring() {
@@ -1160,7 +1163,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val topSafe = ((toplineRow.y + toplineRow.height) / dens) + 10f
         val showNotifs = ::notificationCenter.isInitialized && cfg.notifications && notifHub.getItems().isNotEmpty()
         val obstaclePx = when {
-            cfg.music && npCard.height > 0 -> (phoneShell.height - (safeBottomPx + 122f * dens) + npBaseTranslationY - npCard.height)
+            cfg.music && npCard.height > 0 -> (phoneShell.height - (safeBottomPx + 110f * dens) + npBaseTranslationY - npCard.height)
             showNotifs && bottomRow.y > 0f -> (bottomRow.y - 160f * dens)
             bottomRow.y > 0f -> bottomRow.y
             else -> (hostH - 180f) * dens
