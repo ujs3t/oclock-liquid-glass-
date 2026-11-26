@@ -369,8 +369,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 }
             }
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
-                leftMargin = (12f * dens).roundToInt()
-                rightMargin = (12f * dens).roundToInt()
+                leftMargin = (22f * dens).roundToInt()
+                rightMargin = (22f * dens).roundToInt()
             }
         }
         phoneShell.addView(npCard)
@@ -627,13 +627,14 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
         val npLp = npCard.layoutParams as FrameLayout.LayoutParams
         if (isShortLandscape) {
-            npLp.width = min((340f * dens).roundToInt(), (resources.displayMetrics.widthPixels * 0.54f).roundToInt())
+            npLp.width = min((316f * dens).roundToInt(), (resources.displayMetrics.widthPixels * 0.50f).roundToInt())
             npLp.gravity = Gravity.BOTTOM or Gravity.LEFT
-            npLp.bottomMargin = safeBottomPx + (14f * dens).roundToInt()
+            npLp.bottomMargin = safeBottomPx + (18f * dens).roundToInt()
         } else {
-            npLp.width = FrameLayout.LayoutParams.MATCH_PARENT
+            val availW = max(1, phoneShell.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels)
+            npLp.width = min((352f * dens).roundToInt(), availW - (44f * dens).roundToInt())
             npLp.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            npLp.bottomMargin = safeBottomPx + (84f * dens).roundToInt()
+            npLp.bottomMargin = safeBottomPx + (104f * dens).roundToInt()
         }
         npCard.layoutParams = npLp
 

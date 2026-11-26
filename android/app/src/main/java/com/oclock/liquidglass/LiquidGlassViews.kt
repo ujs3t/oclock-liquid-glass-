@@ -582,9 +582,10 @@ class NowPlayingCardView(
     private val onAirPlay: () -> Unit
 ) : FrameLayout(context) {
     private val dens = resources.displayMetrics.density
-    private val glassHelper = LiquidGlassCardHelper(backdrop, perf, 26f, 22f, 18f, 1.50f, 0.30f)
+    private val glassHelper = LiquidGlassCardHelper(backdrop, perf, 32f, 24f, 17f, 1.48f, 0.28f)
 
     private val artView: ImageView
+    private val metaCol: LinearLayout
     private val titleView: TextView
     private val artistView: TextView
     private val eqBars = ArrayList<View>(4)
@@ -605,6 +606,7 @@ class NowPlayingCardView(
 
     private var customArtBmp: Bitmap? = null
     private var currentTrack: TrackInfo = AppConstants.QUEUE[0]
+    private var lastSongIdentity: String = ""
     private var playingState = false
     private var trackInitialized = false
     private var playingInitialized = false
@@ -616,18 +618,36 @@ class NowPlayingCardView(
 
     private val lpHandler = Handler(Looper.getMainLooper())
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+    private val longPressTimeoutMs = max(480L, ViewConfiguration.getLongPressTimeout().toLong())
     private var lpDownX = 0f
     private var lpDownY = 0f
+    private var lpDownTime = 0L
+    private var isHolding = false
     private var lpFired = false
     private val lpRunnable = Runnable {
-        if (!scrubbing && onLongPress != null) {
+        if (isHolding && !scrubbing && onLongPress != null &&
+            (SystemClock.uptimeMillis() - lpDownTime) >= (longPressTimeoutMs - 30L)
+        ) {
+            isHolding = false
             lpFired = true
             animate().cancel()
-            scaleX = 0.955f
-            scaleY = 0.955f
-            animate().scaleX(1f).scaleY(1f).setDuration(380L).setInterpolator(OvershootInterpolator(1.6f)).start()
+            scaleX = 0.945f
+            scaleY = 0.945f
+            animate().scaleX(1f).scaleY(1f).setDuration(400L).setInterpolator(OvershootInterpolator(1.9f)).start()
             onLongPress?.invoke()
         }
+    }
+
+    private fun springCapsule(squash: Float = 0.965f, durationMs: Long = 400L, tension: Float = 1.9f) {
+        animate().cancel()
+        scaleX = squash
+        scaleY = squash
+        animate()
+            .scaleX(1f)
+            .scaleY(1f)
+            .setDuration(durationMs)
+            .setInterpolator(OvershootInterpolator(tension))
+            .start()
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
@@ -635,16 +655,33 @@ class NowPlayingCardView(
             MotionEvent.ACTION_DOWN -> {
                 lpDownX = ev.x
                 lpDownY = ev.y
+                lpDownTime = SystemClock.uptimeMillis()
                 lpFired = false
                 lpHandler.removeCallbacks(lpRunnable)
-                lpHandler.postDelayed(lpRunnable, 360L)
+
+                val scrubTop = scrubBar.top + (scrubBar.parent as? View)?.top.let { it ?: 0 }
+                val scrubBot = scrubBar.bottom + (scrubBar.parent as? View)?.top.let { it ?: 0 }
+                val inScrub = ev.y >= (scrubTop - 6f * dens) && ev.y <= (scrubBot + 6f * dens)
+                isHolding = !inScrub
+                if (isHolding) {
+                    lpHandler.postDelayed(lpRunnable, longPressTimeoutMs)
+                    animate().cancel()
+                    animate().scaleX(0.982f).scaleY(0.982f).setDuration(140L).setInterpolator(DecelerateInterpolator()).start()
+                }
+                super.dispatchTouchEvent(ev)
+                return true
             }
             MotionEvent.ACTION_MOVE -> {
                 if (scrubbing || hypot(ev.x - lpDownX, ev.y - lpDownY) > touchSlop) {
+                    isHolding = false
                     lpHandler.removeCallbacks(lpRunnable)
+                    if (!lpFired && scaleX < 0.999f) {
+                        springCapsule(squash = scaleX, durationMs = 260L, tension = 1.5f)
+                    }
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                isHolding = false
                 lpHandler.removeCallbacks(lpRunnable)
                 if (lpFired) {
                     val cancelEv = MotionEvent.obtain(ev)
@@ -654,6 +691,9 @@ class NowPlayingCardView(
                     lpFired = false
                     return true
                 }
+                if (scaleX < 0.999f) {
+                    springCapsule(squash = scaleX, durationMs = 340L, tension = 1.85f)
+                }
             }
         }
         return super.dispatchTouchEvent(ev)
@@ -662,7 +702,7 @@ class NowPlayingCardView(
     init {
         setWillNotDraw(false)
         layoutDirection = LAYOUT_DIRECTION_LTR
-        setPadding((14f * dens).roundToInt(), (13f * dens).roundToInt(), (14f * dens).roundToInt(), (11f * dens).roundToInt())
+        setPadding((13f * dens).roundToInt(), (10f * dens).roundToInt(), (13f * dens).roundToInt(), (9f * dens).roundToInt())
 
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -676,24 +716,24 @@ class NowPlayingCardView(
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
         }
         artView = ImageView(context).apply {
-            val s = (44f * dens).roundToInt()
-            layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = (12f * dens).roundToInt() }
+            val s = (38f * dens).roundToInt()
+            layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = (11f * dens).roundToInt() }
             scaleType = ImageView.ScaleType.CENTER_CROP
             clipToOutline = true
             outlineProvider = object : android.view.ViewOutlineProvider() {
                 override fun getOutline(v: View, outline: android.graphics.Outline) {
-                    outline.setRoundRect(0, 0, v.width, v.height, 9f * dens)
+                    outline.setRoundRect(0, 0, v.width, v.height, 11f * dens)
                 }
             }
         }
-        val metaCol = LinearLayout(context).apply {
+        metaCol = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
         }
         titleView = TextView(context).apply {
             text = currentTrack.title
             setTextColor(uiInk)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
             isSingleLine = true
             ellipsize = TextUtils.TruncateAt.MARQUEE
@@ -703,7 +743,7 @@ class NowPlayingCardView(
         artistView = TextView(context).apply {
             text = currentTrack.artist
             setTextColor(uiDim)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
             isSingleLine = true
             ellipsize = TextUtils.TruncateAt.END
         }
@@ -713,20 +753,20 @@ class NowPlayingCardView(
         val eqRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.BOTTOM
-            layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, (16f * dens).roundToInt()).apply {
-                marginStart = (10f * dens).roundToInt()
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, (14f * dens).roundToInt()).apply {
+                marginStart = (8f * dens).roundToInt()
             }
         }
         for (i in 0 until 4) {
             val bar = View(context).apply {
-                layoutParams = LinearLayout.LayoutParams((2.5f * dens).roundToInt(), (14f * dens).roundToInt()).apply {
+                layoutParams = LinearLayout.LayoutParams((2.5f * dens).roundToInt(), (13f * dens).roundToInt()).apply {
                     marginStart = if (i > 0) (2.5f * dens).roundToInt() else 0
                 }
                 background = GradientDrawable().apply {
                     setColor(uiInk)
                     cornerRadius = 99f
                 }
-                pivotY = 14f * dens
+                pivotY = 13f * dens
                 scaleY = 0.22f
             }
             eqBars.add(bar)
@@ -755,7 +795,7 @@ class NowPlayingCardView(
             private val trackRect = RectF()
             private val fillRect = RectF()
             override fun onDraw(canvas: Canvas) {
-                val trackH = 5f * dens
+                val trackH = 4.5f * dens
                 val cy = height * 0.5f
                 trackRect.set(0f, cy - trackH * 0.5f, width.toFloat(), cy + trackH * 0.5f)
                 p.color = Color.argb(56, Color.red(uiInk), Color.green(uiInk), Color.blue(uiInk))
@@ -766,13 +806,13 @@ class NowPlayingCardView(
                 p.color = uiInk
                 canvas.drawRoundRect(fillRect, trackH * 0.5f, trackH * 0.5f, p)
 
-                val thumbR = (if (scrubbing) 7.5f else 4.5f) * dens
+                val thumbR = (if (scrubbing) 7f else 4f) * dens
                 p.color = Color.WHITE
                 canvas.drawCircle(fillW.coerceIn(thumbR, width - thumbR), cy, thumbR, p)
             }
         }.apply {
-            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, (20f * dens).roundToInt()).apply {
-                topMargin = (6f * dens).roundToInt()
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, (16f * dens).roundToInt()).apply {
+                topMargin = (4f * dens).roundToInt()
             }
             setOnTouchListener { v, ev ->
                 when (ev.actionMasked) {
@@ -798,13 +838,13 @@ class NowPlayingCardView(
         val timeRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                topMargin = (-3f * dens).roundToInt()
+                topMargin = (-2f * dens).roundToInt()
             }
         }
         curTimeText = TextView(context).apply {
             text = "0:00"
             setTextColor(uiDim)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
             fontFeatureSettings = "tnum"
             layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
@@ -812,7 +852,7 @@ class NowPlayingCardView(
         remTimeText = TextView(context).apply {
             text = "-4:23"
             setTextColor(uiDim)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
             fontFeatureSettings = "tnum"
             gravity = Gravity.END
@@ -826,7 +866,7 @@ class NowPlayingCardView(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                topMargin = (4f * dens).roundToInt()
+                topMargin = (2f * dens).roundToInt()
             }
         }
 
@@ -837,22 +877,35 @@ class NowPlayingCardView(
                 alpha = alphaVal
                 setOnClickListener { v ->
                     v.animate().cancel()
-                    v.scaleX = 0.84f; v.scaleY = 0.84f
-                    v.animate().scaleX(1f).scaleY(1f).setDuration(380L).setInterpolator(OvershootInterpolator(1.6f)).start()
+                    v.scaleX = 0.80f; v.scaleY = 0.80f
+                    v.animate().scaleX(1f).scaleY(1f).setDuration(380L).setInterpolator(OvershootInterpolator(1.8f)).start()
                     onClick(v)
                 }
             }
         }
 
-        starBtn = makeCtrlIcon(38f, 38f, 0.65f) {
+        starBtn = makeCtrlIcon(34f, 34f, 0.65f) {
             starred = !starred
             updateControlIcons()
+            springCapsule(0.975f, 360L, 1.8f)
             onFavorite()
         }
-        prevBtn = makeCtrlIcon(44f, 40f, 1f) { onPrev() }
-        playBtn = makeCtrlIcon(52f, 44f, 1f) { onPlayToggle() }
-        nextBtn = makeCtrlIcon(44f, 40f, 1f) { onNext() }
-        airBtn = makeCtrlIcon(38f, 38f, 0.65f) { onAirPlay() }
+        prevBtn = makeCtrlIcon(40f, 36f, 1f) {
+            springCapsule(0.968f, 380L, 1.9f)
+            onPrev()
+        }
+        playBtn = makeCtrlIcon(46f, 38f, 1f) {
+            springCapsule(0.968f, 380L, 1.9f)
+            onPlayToggle()
+        }
+        nextBtn = makeCtrlIcon(40f, 36f, 1f) {
+            springCapsule(0.968f, 380L, 1.9f)
+            onNext()
+        }
+        airBtn = makeCtrlIcon(34f, 34f, 0.65f) {
+            springCapsule(0.975f, 360L, 1.8f)
+            onAirPlay()
+        }
 
         ctrlRow.addView(starBtn)
         ctrlRow.addView(prevBtn)
@@ -872,7 +925,11 @@ class NowPlayingCardView(
 
     fun setTrack(track: TrackInfo, customArt: Bitmap?) {
         if (trackInitialized && track == currentTrack && customArtBmp === customArt) return
+        val songId = "${track.contentUri}|${track.title}|${track.artist}"
+        val songChanged = trackInitialized && songId != lastSongIdentity
+        val artArrived = trackInitialized && !songChanged && customArt != null && customArtBmp == null
         trackInitialized = true
+        lastSongIdentity = songId
         currentTrack = track
         customArtBmp = customArt
         titleView.text = track.title
@@ -880,7 +937,7 @@ class NowPlayingCardView(
         if (customArt != null) {
             artView.setImageBitmap(customArt)
         } else {
-            val s = (44f * dens).roundToInt()
+            val s = (38f * dens).roundToInt()
             val bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888)
             val c = Canvas(bmp)
             val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -894,20 +951,57 @@ class NowPlayingCardView(
             c.drawRect(0f, 0f, s.toFloat(), s.toFloat(), p)
             artView.setImageBitmap(bmp)
         }
-        artView.animate().cancel()
-        artView.scaleX = 1f
-        artView.scaleY = 1f
-        artView.alpha = 1f
+
+        if (songChanged) {
+            artView.animate().cancel()
+            artView.scaleX = 0.72f
+            artView.scaleY = 0.72f
+            artView.alpha = 0.35f
+            artView.animate()
+                .scaleX(1f)
+                .scaleY(1f)
+                .alpha(1f)
+                .setDuration(460L)
+                .setInterpolator(OvershootInterpolator(1.85f))
+                .start()
+
+            metaCol.animate().cancel()
+            metaCol.translationY = 10f * dens
+            metaCol.scaleX = 0.94f
+            metaCol.scaleY = 0.94f
+            metaCol.alpha = 0.15f
+            metaCol.animate()
+                .translationY(0f)
+                .scaleX(1f)
+                .scaleY(1f)
+                .alpha(1f)
+                .setDuration(420L)
+                .setInterpolator(OvershootInterpolator(1.55f))
+                .start()
+
+            springCapsule(0.962f, 420L, 2.0f)
+        } else if (artArrived) {
+            artView.animate().cancel()
+            artView.scaleX = 1f
+            artView.scaleY = 1f
+            artView.alpha = 0.65f
+            artView.animate().alpha(1f).setDuration(200L).start()
+        } else {
+            artView.animate().cancel()
+            artView.scaleX = 1f
+            artView.scaleY = 1f
+            artView.alpha = 1f
+        }
     }
 
     fun setPlaying(playing: Boolean) {
         if (playingInitialized && playing == playingState) return
+        val toggledAfterInit = playingInitialized
         playingInitialized = true
         playingState = playing
-        artView.animate().cancel()
-        artView.scaleX = 1f
-        artView.scaleY = 1f
-        artView.alpha = 1f
+        if (toggledAfterInit) {
+            springCapsule(0.974f, 360L, 1.85f)
+        }
         if (playing) {
             if (!eqAnimator.isStarted) eqAnimator.start()
         } else {
