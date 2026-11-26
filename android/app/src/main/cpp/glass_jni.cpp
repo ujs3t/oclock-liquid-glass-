@@ -285,7 +285,7 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
         jfloat dstX, jfloat dstY, jfloat dstW, jfloat dstH, jfloat wallLeft, jfloat wallTop, jfloat wallScaleX, jfloat wallScaleY,
         jfloat maxAbsPx, jfloat ss,
         jint topColor, jint botColor, jfloat shadowOp, jint shadowTopColor,
-        jint innerColor, jfloat innerThick, jfloat innerOp, jfloat innerAngleDeg) {
+        jint innerColor, jfloat innerThick, jfloat innerOp, jfloat innerAngleDeg, jfloat innerFade) {
     if (!alphaBmp || !fieldBmp || !wallBmp || !outBmp) return JNI_FALSE;
     AndroidBitmapInfo aI{}, fI{}, wI{}, oI{};
     if (AndroidBitmap_getInfo(env, alphaBmp, &aI) != ANDROID_BITMAP_RESULT_SUCCESS ||
@@ -365,7 +365,9 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
                     float k = std::fabs((gx / gl) * ax + (gy / gl) * ay);
                     float tDepth = clamp01f(depthPx / fallLimit);
                     float fall = (1.f - tDepth) * (1.f - tDepth) * (1.f + 0.6f * tDepth);
-                    float dirTerm = 0.32f + 0.68f * std::pow(k, 1.35f);
+                    float fadeAmt = clamp01f(innerFade);
+                    float dirExp = 1.f + 2.4f * fadeAmt;
+                    float dirTerm = (1.f - fadeAmt) + fadeAmt * std::pow(k, dirExp);
                     float rimA = clamp01f(dirTerm * fall * ridgeFade * innerOp);
                     r = r * (1.f - rimA) + inR * rimA;
                     g = g * (1.f - rimA) + inG * rimA;

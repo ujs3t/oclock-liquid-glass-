@@ -116,6 +116,7 @@ object LiquidGlassShaders {
         uniform float4 uInnerColor;
         uniform float uInnerThick;
         uniform float uInnerOp;
+        uniform float uInnerFade;
         uniform float2 uInnerDir;
 
         half4 main(float2 fragCoord) {
@@ -161,7 +162,9 @@ object LiquidGlassShaders {
                     float k = abs(dot(n, uInnerDir));
                     float tDepth = clamp(depthPx / fallLimit, 0.0, 1.0);
                     float fall = (1.0 - tDepth) * (1.0 - tDepth) * (1.0 + 0.6 * tDepth);
-                    float dirTerm = mix(0.32, 1.0, pow(max(0.0, k), 1.35));
+                    float fadeAmt = clamp(uInnerFade, 0.0, 1.0);
+                    float dirExp = mix(1.0, 3.4, fadeAmt);
+                    float dirTerm = mix(1.0 - fadeAmt, 1.0, pow(max(0.0, k), dirExp));
                     float rimA = clamp(dirTerm * fall * ridgeFade * uInnerOp, 0.0, 1.0);
                     col = mix(col, uInnerColor.rgb, rimA);
                 }

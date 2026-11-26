@@ -60,6 +60,7 @@ data class LockConfig(
     var innerOpacity: Int = 85,
     var innerThickness: Float = 2.5f,
     var innerAngle: Float = 55f,
+    var innerFade: Int = 50,
     var innerColor: String = "#ffffff",
     var depth: Boolean = true,
     var weather: Boolean = true,
@@ -75,6 +76,7 @@ data class LockConfig(
         innerOpacity = innerOpacity.coerceIn(0, 100)
         innerThickness = innerThickness.coerceIn(0f, 8f)
         innerAngle = innerAngle.coerceIn(0f, 360f)
+        innerFade = innerFade.coerceIn(0, 100)
     }
 
     fun snapshotForUndo() = UndoSnapshot(size, sx, sy)
@@ -187,6 +189,7 @@ class StateStore(context: Context) {
             cfg.innerOpacity = j.optInt("innerOpacity", cfg.innerOpacity)
             cfg.innerThickness = j.optDouble("innerThickness", cfg.innerThickness.toDouble()).toFloat()
             cfg.innerAngle = j.optDouble("innerAngle", cfg.innerAngle.toDouble()).toFloat()
+            cfg.innerFade = j.optInt("innerFade", cfg.innerFade)
             cfg.innerColor = j.optString("innerColor", cfg.innerColor)
             cfg.depth = j.optBoolean("depth", cfg.depth)
             cfg.weather = j.optBoolean("weather", cfg.weather)
@@ -218,6 +221,7 @@ class StateStore(context: Context) {
             put("innerOpacity", cfg.innerOpacity)
             put("innerThickness", cfg.innerThickness.toDouble())
             put("innerAngle", cfg.innerAngle.toDouble())
+            put("innerFade", cfg.innerFade)
             put("innerColor", cfg.innerColor)
             put("depth", cfg.depth)
             put("weather", cfg.weather)

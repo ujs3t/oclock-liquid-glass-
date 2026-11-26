@@ -92,6 +92,8 @@ class EditorSheetView(
     private lateinit var inThVal: TextView
     private lateinit var inAngSeek: SeekBar
     private lateinit var inAngVal: TextView
+    private lateinit var inFadeSeek: SeekBar
+    private lateinit var inFadeVal: TextView
     private val innerSwatches = HashMap<String, View>()
 
     private lateinit var togWeather: TextView
@@ -530,6 +532,17 @@ class EditorSheetView(
         }
         body.addView(inAngSeek)
 
+        val (ifH, ifV) = secHeaderWithValue("نسبة التلاشي", "50%")
+        inFadeVal = ifV
+        body.addView(ifH)
+        inFadeSeek = makeSeekBar(0, 100) { v, fromUser ->
+            if (!fromUser || suppressSeek) return@makeSeekBar
+            cfg.innerFade = v
+            inFadeVal.text = "$v%"
+            callbacks.onInnerShadowChanged()
+        }
+        body.addView(inFadeSeek)
+
         val inColScroll = HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = false
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
@@ -743,6 +756,8 @@ class EditorSheetView(
         inThVal.text = "%.1f".format(cfg.innerThickness)
         inAngSeek.progress = cfg.innerAngle.roundToInt().coerceIn(0, 360)
         inAngVal.text = "${cfg.innerAngle.roundToInt()}°"
+        inFadeSeek.progress = cfg.innerFade.coerceIn(0, 100)
+        inFadeVal.text = "${cfg.innerFade}%"
 
         for ((hex, v) in innerSwatches) {
             val active = cfg.innerColor.equals(hex, ignoreCase = true)

@@ -66,6 +66,14 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(shadersKt.includes('CARD_AGSL'));
   assert.ok(shadersKt.includes('CLOCK_AGSL'));
   assert.ok(shadersKt.includes('msk.gb'));
+  assert.ok(shadersKt.includes('uInnerFade'));
+
+  const stateKt = readFileSync(ktDir + 'AppState.kt','utf8');
+  assert.ok(stateKt.includes('innerFade'));
+
+  const sheetKt = readFileSync(ktDir + 'EditorSheetView.kt','utf8');
+  assert.ok(sheetKt.includes('نسبة التلاشي'));
+  assert.ok(sheetKt.includes('inFadeSeek'));
 
   const glyphKt = readFileSync(ktDir + 'ClockGlyphRenderer.kt','utf8');
   assert.ok(glyphKt.includes('measureNumeralMetrics'));

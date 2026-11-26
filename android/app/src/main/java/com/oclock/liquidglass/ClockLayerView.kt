@@ -206,6 +206,7 @@ class ClockGlassView(
             setColorUniform(sh, "uInnerColor", innerCol)
             sh.setFloatUniform("uInnerThick", config.innerThickness)
             sh.setFloatUniform("uInnerOp", (config.innerOpacity / 100f).coerceIn(0f, 1f))
+            sh.setFloatUniform("uInnerFade", (config.innerFade / 100f).coerceIn(0f, 1f))
             val rad = Math.toRadians(config.innerAngle.toDouble())
             sh.setFloatUniform("uInnerDir", cos(rad).toFloat(), sin(rad).toFloat())
 
@@ -215,7 +216,7 @@ class ClockGlassView(
             perf.recordWork("clockShaderDraw", (SystemClock.elapsedRealtimeNanos() - t0) / 1_000_000.0)
         } else {
             val wallBmp = backdrop.wallBitmap ?: return
-            val key = "${art.maskKey}|${originX.roundToInt()}|${originY.roundToInt()}|${cols.clockTintTop}|${cols.clockTintBot}|${config.innerOpacity}|${config.innerThickness}|${config.innerAngle}|${config.innerColor}"
+            val key = "${art.maskKey}|${originX.roundToInt()}|${originY.roundToInt()}|${cols.clockTintTop}|${cols.clockTintBot}|${config.innerOpacity}|${config.innerThickness}|${config.innerAngle}|${config.innerFade}|${config.innerColor}"
             var out = cpuFallbackBmp?.takeIf { it.width == art.wPx && it.height == art.hPx }
             if (out == null || cpuFallbackKey != key) {
                 if (out == null) {
@@ -229,7 +230,7 @@ class ClockGlassView(
                     backdrop.wallLeft, backdrop.wallTop, backdrop.wallScaleX, backdrop.wallScaleY,
                     art.maxAbsCss * dens, art.ss,
                     cols.clockTintTop, cols.clockTintBot, cols.clockShadowOp, cols.clockShadowTopColor,
-                    innerCol, config.innerThickness, (config.innerOpacity / 100f).coerceIn(0f, 1f), config.innerAngle
+                    innerCol, config.innerThickness, (config.innerOpacity / 100f).coerceIn(0f, 1f), config.innerAngle, (config.innerFade / 100f).coerceIn(0f, 1f)
                 )
                 cpuFallbackKey = key
             }
