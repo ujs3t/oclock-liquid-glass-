@@ -33,6 +33,17 @@ jobs:
         run: |
           set -o pipefail
           gradle --no-daemon :app:assembleDebug :app:lintDebug 2>&1 | tee build-log.txt
+      - name: Verify APK signature, alignment and manifest
+        run: |
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          ls -lh "$APK"
+          unzip -tq "$APK"
+          BT_DIR=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
+          echo "Using build-tools: $BT_DIR"
+          "$BT_DIR/zipalign" -c -v 4 "$APK" | tail -n 10
+          "$BT_DIR/apksigner" verify --verbose --print-certs "$APK"
+          "$BT_DIR/aapt2" dump badging "$APK" | head -n 30
+          "$BT_DIR/aapt2" dump xmltree "$APK" --file AndroidManifest.xml
       - name: Surface build errors
         if: failure()
         working-directory: android
