@@ -177,9 +177,9 @@ class ClockGlassView(
         val dstH = height.toFloat().coerceAtLeast(1f)
         val dens = resources.displayMetrics.density
 
-        // Compute top-left in parent lock-screen coordinates
+        // Compute top-left in parent lock-screen coordinates (clockContainer.y already includes pullOffset)
         val originX = (parent as? View)?.x?.plus(x) ?: x
-        val originY = ((parent as? View)?.y?.plus(y) ?: y) + pullOffsetYPx
+        val originY = (parent as? View)?.y?.plus(y) ?: y
 
         if (Build.VERSION.SDK_INT >= 33 && clockShader != null && art.fieldShader != null && art.alphaShader != null) {
             val t0 = SystemClock.elapsedRealtimeNanos()

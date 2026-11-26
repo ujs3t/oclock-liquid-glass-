@@ -122,7 +122,7 @@ object LiquidGlassShaders {
             float2 uv = fragCoord / max(float2(1.0), uDstSize);
             float2 fp = uv * uFieldSize;
 
-            float alpha = uMask.eval(fp).a;
+            float alpha = uMask.eval(fp).r;
             if (alpha <= 0.002) return half4(0.0);
 
             float4 fld = uField.eval(fp);

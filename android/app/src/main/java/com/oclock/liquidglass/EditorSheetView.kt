@@ -818,6 +818,9 @@ class EditorSheetView(
     fun open() {
         if (isOpen) return
         isOpen = true
+        val lp = sheetCard.layoutParams as LayoutParams
+        lp.height = (resources.displayMetrics.heightPixels * 0.72f).roundToInt()
+        sheetCard.layoutParams = lp
         syncFromConfig()
         updatePerfUi(perf.snapshot())
         visibility = VISIBLE

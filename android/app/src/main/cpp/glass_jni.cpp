@@ -92,7 +92,7 @@ Java_com_oclock_liquidglass_NativeGlass_computeClockField(
     AndroidBitmapInfo aInfo{}, fInfo{};
     if (AndroidBitmap_getInfo(env, alphaBmp, &aInfo) != ANDROID_BITMAP_RESULT_SUCCESS) return -1.0;
     if (AndroidBitmap_getInfo(env, outFieldBmp, &fInfo) != ANDROID_BITMAP_RESULT_SUCCESS) return -1.0;
-    if (aInfo.format != ANDROID_BITMAP_FORMAT_A_8 || fInfo.format != ANDROID_BITMAP_FORMAT_RGBA_8888) return -1.0;
+    if (aInfo.format != ANDROID_BITMAP_FORMAT_RGBA_8888 || fInfo.format != ANDROID_BITMAP_FORMAT_RGBA_8888) return -1.0;
     if (aInfo.width != fInfo.width || aInfo.height != fInfo.height) return -1.0;
 
     const int w = int(aInfo.width), h = int(aInfo.height);
@@ -112,7 +112,10 @@ Java_com_oclock_liquidglass_NativeGlass_computeClockField(
         const auto* aBytes = static_cast<const uint8_t*>(aPtr);
         for (int y = 0; y < h; y++) {
             const uint8_t* srcRow = aBytes + size_t(y) * aInfo.stride;
-            std::copy(srcRow, srcRow + w, alpha.data() + size_t(y) * w);
+            uint8_t* dstRow = alpha.data() + size_t(y) * w;
+            for (int x = 0; x < w; x++) {
+                dstRow[x] = srcRow[size_t(x) * 4];
+            }
         }
 
         const uint64_t expected = static_cast<uint64_t>(version);
@@ -260,7 +263,7 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
         const uint8_t* fRp = fB + size_t(yp) * fI.stride;
 
         for (int x = 0; x < w; x++) {
-            uint8_t alphaByte = aRow[x];
+            uint8_t alphaByte = aRow[size_t(x) * 4];
             uint8_t* out = oRow + size_t(x) * 4;
             if (alphaByte == 0) {
                 out[0] = out[1] = out[2] = out[3] = 0;

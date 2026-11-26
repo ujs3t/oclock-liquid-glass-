@@ -445,7 +445,10 @@ class ClockGlyphRenderer(private val context: Context) {
             artifactCache[maskKey]?.let { return it }
         }
 
-        val alphaBmp = Bitmap.createBitmap(wPx, hPx, Bitmap.Config.ALPHA_8)
+        val alphaBmp = Bitmap.createBitmap(wPx, hPx, Bitmap.Config.ARGB_8888).apply {
+            setHasAlpha(false)
+            eraseColor(Color.BLACK)
+        }
         val c = Canvas(alphaBmp)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
             typeface = tf

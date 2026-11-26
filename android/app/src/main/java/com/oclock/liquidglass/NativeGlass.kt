@@ -29,7 +29,7 @@ object NativeGlass {
 
     /**
      * Ultra-fast direct Bitmap lock C++ field compute:
-     * Reads [alphaBmp] (ALPHA_8) and writes (R=dispX, G=dispY, B=interiorDepth*6, A=255)
+     * Reads [alphaBmp] (ARGB_8888 opaque R-channel mask) and writes (R=dispX, G=dispY, B=interiorDepth*6, A=255)
      * directly into [outFieldBmp] (ARGB_8888, hasAlpha=false) without PNG encode/decode or array copies.
      */
     @JvmStatic
