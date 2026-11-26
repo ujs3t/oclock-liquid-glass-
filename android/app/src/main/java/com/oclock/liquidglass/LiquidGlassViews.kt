@@ -1049,8 +1049,8 @@ class ShortcutCircleButton(
             activeAnim?.cancel()
             val target = if (value) 1f else 0f
             activeAnim = ValueAnimator.ofFloat(activeFrac, target).apply {
-                duration = 460L
-                interpolator = OvershootInterpolator(1.75f)
+                duration = 500L
+                interpolator = OvershootInterpolator(1.9f)
                 addUpdateListener { a ->
                     activeFrac = a.animatedValue as Float
                     invalidate()
@@ -1139,12 +1139,12 @@ class ShortcutCircleButton(
             val t = activeFrac.coerceIn(0f, 1f)
             val inkLum = 0.2126f * Color.red(uiInk) + 0.7152f * Color.green(uiInk) + 0.0722f * Color.blue(uiInk)
             val offCol = if (inkLum > 165f) {
-                Color.argb(148, 178, 188, 206)
+                Color.argb(128, 165, 174, 190)
             } else {
-                Color.argb(220, Color.red(uiInk), Color.green(uiInk), Color.blue(uiInk))
+                Color.argb(185, Color.red(uiInk), Color.green(uiInk), Color.blue(uiInk))
             }
             val iconCol = lerpArgb(offCol, Color.WHITE, t)
-            val iconScale = 1f + 0.09f * activeFrac
+            val iconScale = 1f + 0.11f * activeFrac
 
             canvas.save()
             canvas.scale(iconScale, iconScale, cx, cy)
@@ -1161,15 +1161,15 @@ class ShortcutCircleButton(
                 close()
             }
             if (t > 0.02f) {
-                glowPaint.color = Color.argb((44 * t).roundToInt(), 255, 255, 255)
-                glowPaint.strokeWidth = 4.6f * s
+                glowPaint.color = Color.argb((54 * t).roundToInt(), 255, 255, 255)
+                glowPaint.strokeWidth = 5.2f * s
                 canvas.drawPath(path, glowPaint)
 
-                glowPaint.color = Color.argb((78 * t).roundToInt(), 255, 255, 255)
-                glowPaint.strokeWidth = 2.8f * s
+                glowPaint.color = Color.argb((96 * t).roundToInt(), 255, 255, 255)
+                glowPaint.strokeWidth = 3.0f * s
                 canvas.drawPath(path, glowPaint)
 
-                iconPaint.color = Color.argb((195 * t).roundToInt(), 255, 255, 255)
+                iconPaint.color = Color.argb((235 * t).roundToInt(), 255, 255, 255)
                 canvas.drawPath(path, iconPaint)
             }
             strokePaint.color = iconCol
@@ -1177,7 +1177,7 @@ class ShortcutCircleButton(
             canvas.drawLine(cx - 4.2f * s, cy - 4.8f * s, cx + 4.2f * s, cy - 4.8f * s, strokePaint)
 
             // Power switch dot blends cleanly when flashlight icon lights white
-            iconPaint.color = lerpArgb(iconCol, Color.argb(190, 26, 30, 38), t)
+            iconPaint.color = lerpArgb(iconCol, Color.argb(210, 22, 26, 34), t)
             canvas.drawCircle(cx, cy + 1.6f * s, 1.35f * s, iconPaint)
             canvas.restore()
         } else {

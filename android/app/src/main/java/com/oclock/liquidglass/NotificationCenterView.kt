@@ -52,6 +52,7 @@ class NotificationCenterView(
     private val headerRow: LinearLayout
     private val headerTitle: TextView
     private val accessPill: TextView
+    private val showLessBtn: GlassShowLessPill
     private val clearBtn: GlassClearCircleButton
     private val scrollView: RubberScrollView
     private val listCol: LinearLayout
@@ -92,42 +93,61 @@ class NotificationCenterView(
         headerTitle = TextView(context).apply {
             text = "Notification Center"
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 21f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
+            isSingleLine = true
+            ellipsize = TextUtils.TruncateAt.END
             setShadowLayer(8f * dens, 0f, 1.5f * dens, Color.argb(86, 0, 0, 0))
-            layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+            layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = (6f * dens).roundToInt()
+            }
             setOnClickListener {
                 onHaptic("pop")
                 stackedCollapsed = !stackedCollapsed
+                showLessBtn.setCollapsed(stackedCollapsed)
                 applyStackPresentation(animated = true)
                 onStackModeToggled(stackedCollapsed)
             }
         }
 
         accessPill = TextView(context).apply {
-            text = "تفعيل الإشعارات"
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
+            text = "تفعيل إشعارات الهاتف الحقيقية"
+            setTextColor(Color.argb(232, 255, 255, 255))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-            setPadding((10f * dens).roundToInt(), (4f * dens).roundToInt(), (10f * dens).roundToInt(), (4f * dens).roundToInt())
+            gravity = Gravity.CENTER
+            setPadding((12f * dens).roundToInt(), (5f * dens).roundToInt(), (12f * dens).roundToInt(), (5f * dens).roundToInt())
             background = GradientDrawable().apply {
-                setColor(Color.argb(56, 255, 255, 255))
+                setColor(Color.argb(44, 255, 255, 255))
                 cornerRadius = 999f
-                setStroke((0.8f * dens).roundToInt(), Color.argb(90, 255, 255, 255))
+                setStroke((0.8f * dens).roundToInt(), Color.argb(72, 255, 255, 255))
             }
             layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
-                marginEnd = (8f * dens).roundToInt()
+                gravity = Gravity.START
+                bottomMargin = (7f * dens).roundToInt()
             }
             setOnClickListener { v ->
                 onHaptic("pop")
                 v.animate().cancel()
-                v.scaleX = 0.86f; v.scaleY = 0.86f
+                v.scaleX = 0.90f; v.scaleY = 0.90f
                 v.animate().scaleX(1f).scaleY(1f).setDuration(320L).setInterpolator(OvershootInterpolator(1.8f)).start()
                 onRequestAccess()
             }
         }
 
         val btnSz = (34f * dens).roundToInt()
+        showLessBtn = GlassShowLessPill(context, backdrop, perf, getRootShell) {
+            onHaptic("pop")
+            stackedCollapsed = !stackedCollapsed
+            showLessBtn.setCollapsed(stackedCollapsed)
+            applyStackPresentation(animated = true)
+            onStackModeToggled(stackedCollapsed)
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, btnSz).apply {
+                marginEnd = (7f * dens).roundToInt()
+            }
+        }
+
         clearBtn = GlassClearCircleButton(context, backdrop, perf, getRootShell) {
             onHaptic("pop")
             animateClearCascade()
@@ -136,7 +156,7 @@ class NotificationCenterView(
         }
 
         headerRow.addView(headerTitle)
-        headerRow.addView(accessPill)
+        headerRow.addView(showLessBtn)
         headerRow.addView(clearBtn)
 
         scrollView = RubberScrollView(context).apply {
@@ -161,6 +181,7 @@ class NotificationCenterView(
         scrollView.addView(listCol)
 
         containerCol.addView(headerRow)
+        containerCol.addView(accessPill)
         containerCol.addView(scrollView)
         addView(containerCol)
         refreshPermissionBadge()
@@ -175,6 +196,7 @@ class NotificationCenterView(
         uiDim = dim
         glassBg = gBg
         headerTitle.setTextColor(ink)
+        showLessBtn.applyTheme(ink, gBg)
         clearBtn.uiInk = ink
         clearBtn.glassBg = gBg
         clearBtn.invalidate()
@@ -211,6 +233,7 @@ class NotificationCenterView(
     }
 
     fun invalidateCards() {
+        showLessBtn.invalidate()
         clearBtn.invalidate()
         for (i in 0 until listCol.childCount) {
             listCol.getChildAt(i)?.invalidate()
@@ -219,6 +242,8 @@ class NotificationCenterView(
 
     fun setNotifications(items: List<LockNotification>, added: LockNotification?, removedId: String?) {
         refreshPermissionBadge()
+        showLessBtn.visibility = if (items.size > 1) VISIBLE else GONE
+        showLessBtn.setCollapsed(stackedCollapsed)
         if (added == null && removedId == null && visibility == VISIBLE &&
             items.size == currentItems.size && items.isNotEmpty() &&
             items.indices.all { items[it].id == currentItems[it].id && items[it].count == currentItems[it].count }
@@ -490,6 +515,95 @@ class NotificationCenterView(
         }
     }
 
+    @SuppressLint("ClickableViewAccessibility")
+    private class GlassShowLessPill(
+        context: Context,
+        backdrop: LiquidGlassShaders.BackdropState,
+        perf: PerfMonitor,
+        private val getRootShell: () -> View?,
+        private val onClick: () -> Unit
+    ) : LinearLayout(context) {
+        private val dens = resources.displayMetrics.density
+        private val glassHelper = LiquidGlassCardHelper(backdrop, perf, 17f, 14f, 10f, 1.44f, 0.24f)
+        private val chevron: TextView
+        private val text: TextView
+        var uiInk = Color.WHITE
+        var glassBg = Color.argb(20, 255, 255, 255)
+
+        init {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER
+            setWillNotDraw(false)
+            setPadding((11f * dens).roundToInt(), 0, (11f * dens).roundToInt(), 0)
+            chevron = TextView(context).apply {
+                this.text = "⌄"
+                setTextColor(uiInk)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+                    marginEnd = (5f * dens).roundToInt()
+                    topMargin = (-2f * dens).roundToInt()
+                }
+            }
+            text = TextView(context).apply {
+                this.text = "Show less"
+                setTextColor(uiInk)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            }
+            addView(chevron)
+            addView(text)
+            setOnTouchListener { _, ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        animate().cancel()
+                        animate().scaleX(0.88f).scaleY(0.88f).setDuration(90L).start()
+                        true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        animate().cancel()
+                        animate().scaleX(1f).scaleY(1f).setDuration(360L).setInterpolator(OvershootInterpolator(2.0f)).start()
+                        onClick()
+                        true
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        animate().cancel()
+                        animate().scaleX(1f).scaleY(1f).setDuration(240L).start()
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }
+
+        fun setCollapsed(collapsed: Boolean) {
+            text.text = if (collapsed) "Show more" else "Show less"
+            chevron.animate().rotation(if (collapsed) 180f else 0f).setDuration(300L).setInterpolator(OvershootInterpolator(1.6f)).start()
+        }
+
+        fun applyTheme(ink: Int, gBg: Int) {
+            uiInk = ink
+            glassBg = gBg
+            chevron.setTextColor(ink)
+            text.setTextColor(ink)
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val rootShell = getRootShell()
+            var ox = x
+            var oy = y
+            var p = parent as? View
+            while (p != null && p !== rootShell) {
+                ox += p.x - p.scrollX
+                oy += p.y - p.scrollY
+                p = p.parent as? View
+            }
+            glassHelper.draw(this, canvas, glassBg, ox, oy)
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
     private class GlassClearCircleButton(
         context: Context,
         backdrop: LiquidGlassShaders.BackdropState,

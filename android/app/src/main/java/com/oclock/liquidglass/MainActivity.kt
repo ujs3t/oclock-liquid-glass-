@@ -760,7 +760,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val clockBot = (clockContainer.y + clockContainer.height).takeIf { clockContainer.height > 0 }?.roundToInt()
             ?: (safeTopPx + (268f * dens).roundToInt())
         val npH = npCard.height.takeIf { it > 0 } ?: (148f * dens).roundToInt()
-        val headerH = (44f * dens).roundToInt()
+        val headerH = ((if (notifHub.hasNotificationAccess()) 44f else 76f) * dens).roundToInt()
 
         if (!showNotifs) {
             npBaseTranslationY = 0f
