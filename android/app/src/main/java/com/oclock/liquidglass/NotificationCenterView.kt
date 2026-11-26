@@ -3,7 +3,6 @@ package com.oclock.liquidglass
 import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
-import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -12,7 +11,6 @@ import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.os.Build
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
@@ -43,6 +41,7 @@ class NotificationCenterView(
     private val onCardTapped: (LockNotification) -> Unit,
     private val onRequestAccess: () -> Unit,
     private val onStackModeToggled: (Boolean) -> Unit,
+    private val onScrollExpandChanged: (Float) -> Unit,
     private val onDragMusicCoupling: (Float) -> Unit,
     private val onHaptic: (String) -> Unit
 ) : FrameLayout(context) {
@@ -56,20 +55,28 @@ class NotificationCenterView(
     private val clearBtn: GlassClearCircleButton
     private val scrollView: RubberScrollView
     private val listCol: LinearLayout
+    private val moreHintPill: GlassMoreHintPill
 
     private val cardViews = HashMap<String, NotificationCardRow>()
     private var currentItems: List<LockNotification> = emptyList()
     var stackedCollapsed = false
         private set
 
+    var expandFrac = 0f
+        private set
+    private var restingOffsetPx = 0f
+    private var restingVisibleListH = (200f * dens).roundToInt()
+    private var isLandscapeCompact = false
+    private var expandAnim: ValueAnimator? = null
+
     var uiInk = Color.WHITE
-    var uiDim = Color.argb(198, 255, 255, 255)
-    var glassBg = Color.argb(18, 255, 255, 255)
+    var uiDim = Color.argb(205, 255, 255, 255)
+    var glassBg = Color.argb(26, 18, 22, 30)
 
     init {
         layoutDirection = LAYOUT_DIRECTION_LTR
-        clipChildren = false
-        clipToPadding = false
+        clipChildren = true
+        clipToPadding = true
         visibility = GONE
         alpha = 0f
 
@@ -77,10 +84,10 @@ class NotificationCenterView(
             orientation = LinearLayout.VERTICAL
             clipChildren = false
             clipToPadding = false
-            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
         }
 
-        // Header Row: "Notification Center" + subtle permission pill + circular Liquid Glass "X"
+        // Header Row: "Notification Center" + Liquid Glass "Show less" + Circular "X"
         headerRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -97,30 +104,27 @@ class NotificationCenterView(
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
             isSingleLine = true
             ellipsize = TextUtils.TruncateAt.END
-            setShadowLayer(8f * dens, 0f, 1.5f * dens, Color.argb(86, 0, 0, 0))
+            setShadowLayer(8f * dens, 0f, 1.5f * dens, Color.argb(92, 0, 0, 0))
             layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
                 marginEnd = (6f * dens).roundToInt()
             }
             setOnClickListener {
                 onHaptic("pop")
-                stackedCollapsed = !stackedCollapsed
-                showLessBtn.setCollapsed(stackedCollapsed)
-                applyStackPresentation(animated = true)
-                onStackModeToggled(stackedCollapsed)
+                toggleStackCollapsed()
             }
         }
 
         accessPill = TextView(context).apply {
             text = "تفعيل إشعارات الهاتف الحقيقية"
-            setTextColor(Color.argb(232, 255, 255, 255))
+            setTextColor(Color.argb(236, 255, 255, 255))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
             gravity = Gravity.CENTER
             setPadding((12f * dens).roundToInt(), (5f * dens).roundToInt(), (12f * dens).roundToInt(), (5f * dens).roundToInt())
             background = GradientDrawable().apply {
-                setColor(Color.argb(44, 255, 255, 255))
+                setColor(Color.argb(56, 18, 22, 32))
                 cornerRadius = 999f
-                setStroke((0.8f * dens).roundToInt(), Color.argb(72, 255, 255, 255))
+                setStroke((0.85f * dens).roundToInt(), Color.argb(85, 255, 255, 255))
             }
             layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
                 gravity = Gravity.START
@@ -138,10 +142,7 @@ class NotificationCenterView(
         val btnSz = (34f * dens).roundToInt()
         showLessBtn = GlassShowLessPill(context, backdrop, perf, getRootShell) {
             onHaptic("pop")
-            stackedCollapsed = !stackedCollapsed
-            showLessBtn.setCollapsed(stackedCollapsed)
-            applyStackPresentation(animated = true)
-            onStackModeToggled(stackedCollapsed)
+            toggleStackCollapsed()
         }.apply {
             layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, btnSz).apply {
                 marginEnd = (7f * dens).roundToInt()
@@ -168,23 +169,131 @@ class NotificationCenterView(
             onPullOverscroll = { pullDy -> onDragMusicCoupling(pullDy) }
         }
         scrollView.setOnScrollChangeListener { _, _, _, _, _ ->
-            updateBottomPerspective()
+            updateCard3DAndPeek()
         }
 
         listCol = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             clipChildren = false
             clipToPadding = false
-            setPadding(0, (2f * dens).roundToInt(), 0, (6f * dens).roundToInt())
+            setPadding(0, (2f * dens).roundToInt(), 0, (12f * dens).roundToInt())
             layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
         }
         scrollView.addView(listCol)
+
+        moreHintPill = GlassMoreHintPill(context, backdrop, perf, getRootShell) {
+            onHaptic("pop")
+            if (stackedCollapsed) {
+                toggleStackCollapsed()
+            } else {
+                animateExpandTo(1f)
+            }
+        }.apply {
+            translationZ = 16f * dens
+            layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, (27f * dens).roundToInt(), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+                bottomMargin = (4f * dens).roundToInt()
+            }
+            visibility = GONE
+        }
 
         containerCol.addView(headerRow)
         containerCol.addView(accessPill)
         containerCol.addView(scrollView)
         addView(containerCol)
+        addView(moreHintPill)
         refreshPermissionBadge()
+    }
+
+    private fun toggleStackCollapsed() {
+        stackedCollapsed = !stackedCollapsed
+        showLessBtn.setCollapsed(stackedCollapsed)
+        if (stackedCollapsed) {
+            scrollView.smoothScrollTo(0, 0)
+            animateExpandTo(0f)
+        }
+        applyStackOr3DState(animated = true)
+        onStackModeToggled(stackedCollapsed)
+    }
+
+    fun configureLayoutBounds(
+        expandedTopPx: Int,
+        restingTopPx: Int,
+        fullHeightPx: Int,
+        landscapeCompact: Boolean
+    ) {
+        isLandscapeCompact = landscapeCompact
+        val prevRestingOffset = restingOffsetPx
+        restingOffsetPx = if (landscapeCompact) 0f else max(0f, (restingTopPx - expandedTopPx).toFloat())
+        val headerEst = headerHeightEstimatePx()
+        restingVisibleListH = max((90f * dens).roundToInt(), fullHeightPx - restingOffsetPx.roundToInt() - headerEst)
+        if (landscapeCompact) {
+            expandFrac = 0f
+            containerCol.translationY = 0f
+        } else {
+            containerCol.translationY = restingOffsetPx * (1f - expandFrac)
+        }
+        scrollView.setExpandCallbacks(
+            canExpand = { !landscapeCompact && !stackedCollapsed && restingOffsetPx > 14f * dens },
+            getExpand = { expandFrac },
+            setExpand = { f -> applyExpandProgress(f) },
+            onRelease = { f, vy -> settleExpandProgress(f, vy) }
+        )
+        post {
+            updateCard3DAndPeek()
+            updateMoreHintPill()
+        }
+    }
+
+    fun collapseScrollIfExpanded() {
+        if (expandFrac > 0.02f) {
+            scrollView.smoothScrollTo(0, 0)
+            animateExpandTo(0f)
+        }
+    }
+
+    private fun headerHeightEstimatePx(): Int {
+        val h = headerRow.height.takeIf { it > 0 } ?: (44f * dens).roundToInt()
+        val acc = if (accessPill.visibility == VISIBLE) {
+            accessPill.height.takeIf { it > 0 } ?: (32f * dens).roundToInt()
+        } else 0
+        return h + acc
+    }
+
+    private fun applyExpandProgress(frac: Float) {
+        val clamped = frac.coerceIn(0f, 1f)
+        if (abs(clamped - expandFrac) < 0.0005f) return
+        expandFrac = clamped
+        containerCol.translationY = restingOffsetPx * (1f - expandFrac)
+        onScrollExpandChanged(expandFrac)
+        updateCard3DAndPeek()
+        updateMoreHintPill()
+    }
+
+    private fun settleExpandProgress(curFrac: Float, vyPxPerSec: Float) {
+        val target = when {
+            vyPxPerSec < -340f * dens -> 1f
+            vyPxPerSec > 340f * dens -> 0f
+            curFrac >= 0.34f -> 1f
+            else -> 0f
+        }
+        animateExpandTo(target)
+    }
+
+    fun animateExpandTo(target: Float) {
+        expandAnim?.cancel()
+        val start = expandFrac
+        if (abs(start - target) < 0.01f) {
+            applyExpandProgress(target)
+            return
+        }
+        expandAnim = ValueAnimator.ofFloat(start, target).apply {
+            duration = 460L
+            interpolator = if (target > start) OvershootInterpolator(1.12f) else DecelerateInterpolator()
+            addUpdateListener { a ->
+                applyExpandProgress((a.animatedValue as Float).coerceIn(0f, 1f))
+            }
+            start()
+        }
     }
 
     fun refreshPermissionBadge() {
@@ -200,6 +309,7 @@ class NotificationCenterView(
         clearBtn.uiInk = ink
         clearBtn.glassBg = gBg
         clearBtn.invalidate()
+        moreHintPill.applyTheme(ink, gBg)
         for (i in 0 until listCol.childCount) {
             (listCol.getChildAt(i) as? NotificationCardRow)?.applyTheme(ink, dim, gBg)
         }
@@ -207,34 +317,21 @@ class NotificationCenterView(
     }
 
     fun nudgeFromMusic() {
-        if (visibility != VISIBLE || currentItems.isEmpty()) return
-        animate().cancel()
-        translationY = 5f * dens
-        animate()
-            .translationY(0f)
+        if (visibility != VISIBLE || currentItems.isEmpty() || expandFrac > 0.45f) return
+        containerCol.animate().cancel()
+        val baseTy = restingOffsetPx * (1f - expandFrac)
+        containerCol.translationY = baseTy + 5.5f * dens
+        containerCol.animate()
+            .translationY(baseTy)
             .setDuration(400L)
             .setInterpolator(OvershootInterpolator(1.9f))
             .start()
     }
 
-    fun setMaxListHeightPx(maxH: Int) {
-        val svLp = scrollView.layoutParams as LinearLayout.LayoutParams
-        val targetH = if (stackedCollapsed) {
-            min(maxH, (108f * dens).roundToInt())
-        } else {
-            maxH
-        }
-        if (svLp.height != targetH) {
-            svLp.height = max(0, targetH)
-            svLp.weight = 0f
-            scrollView.layoutParams = svLp
-            post { updateBottomPerspective() }
-        }
-    }
-
     fun invalidateCards() {
         showLessBtn.invalidate()
         clearBtn.invalidate()
+        moreHintPill.invalidate()
         for (i in 0 until listCol.childCount) {
             listCol.getChildAt(i)?.invalidate()
         }
@@ -244,6 +341,7 @@ class NotificationCenterView(
         refreshPermissionBadge()
         showLessBtn.visibility = if (items.size > 1) VISIBLE else GONE
         showLessBtn.setCollapsed(stackedCollapsed)
+
         if (added == null && removedId == null && visibility == VISIBLE &&
             items.size == currentItems.size && items.isNotEmpty() &&
             items.indices.all { items[it].id == currentItems[it].id && items[it].count == currentItems[it].count }
@@ -252,13 +350,19 @@ class NotificationCenterView(
             for (item in items) {
                 cardViews[item.id]?.bind(item, hub)
             }
+            updateMoreHintPill()
             return
         }
+
         val prevCount = currentItems.size
         currentItems = items
 
         if (items.isEmpty()) {
             stackedCollapsed = false
+            expandFrac = 0f
+            containerCol.translationY = 0f
+            onScrollExpandChanged(0f)
+            moreHintPill.visibility = GONE
             cardViews.clear()
             listCol.removeAllViews()
             if (visibility == VISIBLE) {
@@ -295,7 +399,6 @@ class NotificationCenterView(
                 .start()
         }
 
-        // Remove stale views cleanly (unless already animating out)
         val keepIds = HashSet<String>(items.size)
         items.forEach { keepIds.add(it.id) }
         val toRemove = cardViews.keys.filter { !keepIds.contains(it) }
@@ -307,7 +410,6 @@ class NotificationCenterView(
             }
         }
 
-        // Build or reorder active cards
         val existingById = HashMap<String, NotificationCardRow>(cardViews)
         listCol.removeAllViews()
         cardViews.clear()
@@ -321,7 +423,7 @@ class NotificationCenterView(
                     perf = perf,
                     getRootShell = getRootShell,
                     onSwipeProgress = { frac ->
-                        onDragMusicCoupling(-abs(frac) * 4f * dens)
+                        onDragMusicCoupling(-abs(frac) * 4.5f * dens)
                     },
                     onDismiss = { dismissed ->
                         onDismissNotification(dismissed)
@@ -336,39 +438,41 @@ class NotificationCenterView(
                 }
 
             cardViews[item.id] = row
+            row.translationZ = max(0, 32 - index) * 0.35f * dens
             listCol.addView(row)
 
             if (added != null && item.id == added.id) {
-                row.playEntrance(delayMs = 0L)
+                row.playEntrance3D(delayMs = 0L)
             } else if (added != null && index > 0) {
                 row.playShiftDown()
             } else if (prevCount == 0) {
-                row.playEntrance(delayMs = (index * 45L).coerceAtMost(200L))
+                row.playEntrance3D(delayMs = (index * 50L).coerceAtMost(200L))
             }
         }
 
+        scrollView.isScrollLocked = stackedCollapsed
         if (stackedCollapsed) {
-            applyStackPresentation(animated = added != null || removedId != null)
+            applyStackOr3DState(animated = added != null || removedId != null)
         } else {
-            scrollView.isScrollLocked = false
             for (i in 0 until listCol.childCount) {
                 val r = listCol.getChildAt(i) as? NotificationCardRow ?: continue
                 r.visibility = VISIBLE
-                if (removedId != null && !r.isDismissing) {
-                    r.animate().scaleX(1f).scaleY(1f).translationY(0f).alpha(1f)
-                        .setDuration(360L).setInterpolator(OvershootInterpolator(1.3f)).start()
-                }
+            }
+            post {
+                updateCard3DAndPeek()
+                updateMoreHintPill()
             }
         }
-        post { updateBottomPerspective() }
     }
 
-    private fun applyStackPresentation(animated: Boolean) {
+    private fun applyStackOr3DState(animated: Boolean) {
         val count = listCol.childCount
-        for (i in 0 until count) {
-            val row = listCol.getChildAt(i) as? NotificationCardRow ?: continue
-            if (row.isDismissing) continue
-            if (stackedCollapsed) {
+        scrollView.isScrollLocked = stackedCollapsed
+        if (stackedCollapsed) {
+            scrollView.scrollTo(0, 0)
+            for (i in 0 until count) {
+                val row = listCol.getChildAt(i) as? NotificationCardRow ?: continue
+                if (row.isDismissing) continue
                 val show = i < 3
                 row.visibility = if (show) VISIBLE else GONE
                 if (!show) continue
@@ -382,74 +486,151 @@ class NotificationCenterView(
                     1 -> -row.cardHeightEstimate() * 0.78f
                     else -> -row.cardHeightEstimate() * 1.56f
                 }
+                val targetRotX = when (i) {
+                    0 -> 0f
+                    1 -> -7f
+                    else -> -13f
+                }
                 val targetAlpha = when (i) {
                     0 -> 1f
-                    1 -> 0.78f
-                    else -> 0.50f
+                    1 -> 0.86f
+                    else -> 0.62f
                 }
                 if (animated) {
                     row.animate().cancel()
                     row.animate()
                         .scaleX(targetScale).scaleY(targetScale)
                         .translationY(targetTy)
+                        .rotationX(targetRotX)
                         .alpha(targetAlpha)
                         .setDuration(420L)
                         .setInterpolator(OvershootInterpolator(1.35f))
+                        .setUpdateListener { row.invalidate() }
                         .start()
                 } else {
                     row.scaleX = targetScale; row.scaleY = targetScale
                     row.translationY = targetTy
+                    row.rotationX = targetRotX
                     row.alpha = targetAlpha
-                }
-            } else {
-                row.visibility = VISIBLE
-                if (animated) {
-                    row.animate().cancel()
-                    row.animate()
-                        .scaleX(1f).scaleY(1f)
-                        .translationY(0f)
-                        .alpha(1f)
-                        .setDuration(420L)
-                        .setInterpolator(OvershootInterpolator(1.3f))
-                        .start()
-                } else {
-                    row.scaleX = 1f; row.scaleY = 1f
-                    row.translationY = 0f
-                    row.alpha = 1f
+                    row.invalidate()
                 }
             }
+        } else {
+            for (i in 0 until count) {
+                val row = listCol.getChildAt(i) as? NotificationCardRow ?: continue
+                if (row.isDismissing) continue
+                row.visibility = VISIBLE
+            }
+            if (animated) {
+                post { updateCard3DAndPeek() }
+            } else {
+                updateCard3DAndPeek()
+            }
         }
-        scrollView.isScrollLocked = stackedCollapsed
-        if (stackedCollapsed) scrollView.scrollTo(0, 0)
-        post { updateBottomPerspective() }
+        updateMoreHintPill()
     }
 
-    private fun updateBottomPerspective() {
+    private fun updateMoreHintPill() {
+        val extra = currentItems.size - 2
+        if (isLandscapeCompact || currentItems.size <= 2 || expandFrac > 0.35f) {
+            moreHintPill.visibility = GONE
+            return
+        }
+        moreHintPill.visibility = VISIBLE
+        moreHintPill.alpha = (1f - expandFrac * 2.8f).coerceIn(0f, 1f)
+        moreHintPill.setCount(if (stackedCollapsed) currentItems.size - 1 else extra, stackedCollapsed)
+        moreHintPill.invalidate()
+    }
+
+    private fun updateCard3DAndPeek() {
         if (stackedCollapsed) return
+        val count = listCol.childCount
+        if (count == 0) return
+
+        val svW = scrollView.width
         val svH = scrollView.height
-        if (svH <= 0) return
-        val scrollY = scrollView.scrollY
-        val edgeZone = 74f * dens
-        for (i in 0 until listCol.childCount) {
+        if (svW <= 0 || svH <= 0) return
+
+        val visH = max(
+            1f,
+            if (isLandscapeCompact) svH.toFloat()
+            else (height - containerCol.translationY - scrollView.top - (if (moreHintPill.visibility == VISIBLE) 24f * dens else 4f * dens))
+        )
+        val scrollY = scrollView.scrollY.toFloat()
+        val topZone = 62f * dens
+        val botZone = 74f * dens
+        val restBlend = (1f - expandFrac * 1.45f).coerceIn(0f, 1f)
+
+        for (i in 0 until count) {
             val row = listCol.getChildAt(i) as? NotificationCardRow ?: continue
-            if (row.isDismissing || row.isDragging) continue
+            if (row.isDismissing || row.isDragging || row.isEntranceRunning) continue
+
+            // Resting state (expandFrac -> 0): first 2 cards sit cleanly; card 3..n form a 3D stacked peek!
+            var restSc = 1f
+            var restTy = 0f
+            var restRx = 0f
+            var restAlpha = 1f
+            if (!isLandscapeCompact && restBlend > 0.01f && i >= 2) {
+                val depthIdx = (i - 2).coerceAtMost(3)
+                val targetSc = when (depthIdx) {
+                    0 -> 0.935f
+                    1 -> 0.875f
+                    else -> 0.82f
+                }
+                val hEst = row.cardHeightEstimate()
+                val targetTy = when (depthIdx) {
+                    0 -> -hEst * 0.52f
+                    1 -> -hEst * 1.24f
+                    else -> -hEst * 1.90f
+                }
+                val targetRx = when (depthIdx) {
+                    0 -> -9f
+                    1 -> -14f
+                    else -> -18f
+                }
+                val targetA = when (depthIdx) {
+                    0 -> 0.86f
+                    1 -> 0.56f
+                    else -> 0f
+                }
+                restSc = 1f + (targetSc - 1f) * restBlend
+                restTy = targetTy * restBlend
+                restRx = targetRx * restBlend
+                restAlpha = 1f + (targetA - 1f) * restBlend
+            }
+
+            // Live 3D scroll carousel perspective at top & bottom viewport edges
             val cardTop = row.top - scrollY
             val cardBot = row.bottom - scrollY
-            val overflow = cardBot - svH
-            if (overflow > -edgeZone && cardTop < svH) {
-                val frac = ((overflow + edgeZone) / (edgeZone + max(1, row.height))).coerceIn(0f, 1f)
-                val sc = 1f - 0.08f * frac
-                row.scaleX = sc
-                row.scaleY = sc
-                row.translationY = -frac * 8f * dens
-                row.alpha = (1f - 0.55f * frac).coerceIn(0.32f, 1f)
-            } else if (cardBot <= svH - edgeZone) {
-                if (row.scaleX != 1f || row.alpha != 1f || row.translationY != 0f) {
-                    row.scaleX = 1f
-                    row.scaleY = 1f
-                    row.translationY = 0f
-                    row.alpha = 1f
-                }
+            var scrSc = 1f
+            var scrRx = 0f
+            var scrAlpha = 1f
+
+            if (cardTop < topZone && cardBot > 0f && scrollY > 2f) {
+                val tf = ((topZone - cardTop) / max(1f, row.height + topZone)).coerceIn(0f, 1f)
+                scrSc = 1f - 0.08f * tf
+                scrRx = 14f * tf
+                scrAlpha = (1f - 0.65f * tf).coerceIn(0.25f, 1f)
+            } else if (expandFrac > 0.1f && cardBot > visH - botZone && cardTop < visH) {
+                val bf = ((cardBot - (visH - botZone)) / max(1f, row.height + botZone)).coerceIn(0f, 1f)
+                scrSc = 1f - 0.09f * bf
+                scrRx = -13f * bf
+                scrAlpha = (1f - 0.58f * bf).coerceIn(0.32f, 1f)
+            }
+
+            val finalSc = min(restSc, scrSc)
+            val finalRx = restRx + scrRx * (1f - restBlend * 0.5f)
+            val finalAlpha = min(restAlpha, scrAlpha)
+
+            row.pivotX = row.width * 0.5f
+            row.pivotY = row.height * 0.5f
+            row.scaleX = finalSc
+            row.scaleY = finalSc
+            row.translationY = restTy
+            row.rotationX = finalRx
+            row.alpha = finalAlpha
+            if (finalAlpha > 0.03f && cardBot >= -40f && cardTop <= visH + 80f) {
+                row.invalidate()
             }
         }
     }
@@ -470,28 +651,75 @@ class NotificationCenterView(
             val dir = if (idx % 2 == 0) 1f else -1f
             row.animate()
                 .translationX(dir * (width.coerceAtLeast(320) * 0.95f))
+                .rotationY(dir * 16f)
                 .rotation(dir * 7f)
                 .alpha(0f)
                 .scaleX(0.86f)
                 .scaleY(0.86f)
                 .setStartDelay((idx * 38L).coerceAtMost(180L))
-                .setDuration(230L)
+                .setDuration(240L)
                 .setInterpolator(DecelerateInterpolator())
+                .setUpdateListener { row.invalidate() }
                 .start()
         }
         postDelayed({
             onClearAll()
-        }, (min(rows.size, 5) * 38L + 200L))
+        }, (min(rows.size, 5) * 38L + 210L))
     }
 
     private class RubberScrollView(context: Context) : ScrollView(context) {
-        private var startY = 0f
+        private val dens = resources.displayMetrics.density
+        private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+        private var startRawX = 0f
+        private var startRawY = 0f
+        private var lastRawY = 0f
+        private var dragActive = false
+        private var vt: VelocityTracker? = null
         var isScrollLocked = false
         var onPullOverscroll: ((Float) -> Unit)? = null
 
+        private var canExpandFn: () -> Boolean = { false }
+        private var getExpandFn: () -> Float = { 0f }
+        private var setExpandFn: (Float) -> Unit = {}
+        private var onReleaseFn: (Float, Float) -> Unit = { _, _ -> }
+
+        fun setExpandCallbacks(
+            canExpand: () -> Boolean,
+            getExpand: () -> Float,
+            setExpand: (Float) -> Unit,
+            onRelease: (Float, Float) -> Unit
+        ) {
+            canExpandFn = canExpand
+            getExpandFn = getExpand
+            setExpandFn = setExpand
+            onReleaseFn = onRelease
+        }
+
         override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
             if (isScrollLocked) return false
-            if (ev.actionMasked == MotionEvent.ACTION_DOWN) startY = ev.rawY
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startRawX = ev.rawX
+                    startRawY = ev.rawY
+                    lastRawY = ev.rawY
+                    dragActive = false
+                    vt?.recycle()
+                    vt = VelocityTracker.obtain().apply { addMovement(ev) }
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    vt?.addMovement(ev)
+                    val dx = ev.rawX - startRawX
+                    val dy = ev.rawY - startRawY
+                    val curExp = getExpandFn()
+                    if (canExpandFn() && abs(dy) > touchSlop && abs(dy) > abs(dx) * 1.15f) {
+                        if ((dy < 0f && curExp < 0.999f) || (dy > 0f && scrollY <= 0 && curExp > 0.001f)) {
+                            dragActive = true
+                            lastRawY = ev.rawY
+                            return true
+                        }
+                    }
+                }
+            }
             return super.onInterceptTouchEvent(ev)
         }
 
@@ -499,19 +727,145 @@ class NotificationCenterView(
         override fun onTouchEvent(ev: MotionEvent): Boolean {
             if (isScrollLocked) return false
             when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startRawY = ev.rawY
+                    lastRawY = ev.rawY
+                    dragActive = false
+                    vt?.recycle()
+                    vt = VelocityTracker.obtain().apply { addMovement(ev) }
+                    return super.onTouchEvent(ev)
+                }
                 MotionEvent.ACTION_MOVE -> {
-                    if (scrollY == 0) {
-                        val dy = ev.rawY - startY
-                        if (dy > 0f) {
-                            onPullOverscroll?.invoke(min(18f, dy * 0.14f))
-                        }
+                    vt?.addMovement(ev)
+                    val dy = ev.rawY - lastRawY
+                    lastRawY = ev.rawY
+                    val curExp = getExpandFn()
+                    val canExp = canExpandFn()
+
+                    if (canExp && dy < 0f && curExp < 0.999f) {
+                        dragActive = true
+                        val next = (curExp + (-dy) / (155f * dens)).coerceIn(0f, 1f)
+                        setExpandFn(next)
+                        return true
+                    }
+                    if (canExp && dy > 0f && scrollY <= 0 && curExp > 0.001f) {
+                        dragActive = true
+                        val next = (curExp - dy / (155f * dens)).coerceIn(0f, 1f)
+                        setExpandFn(next)
+                        return true
+                    }
+                    if (scrollY <= 0 && curExp <= 0.001f && ev.rawY > startRawY) {
+                        onPullOverscroll?.invoke(min(18f * dens, (ev.rawY - startRawY) * 0.14f))
+                    }
+                    if (dragActive) {
+                        dragActive = false
+                        val fakeDown = MotionEvent.obtain(ev)
+                        fakeDown.action = MotionEvent.ACTION_DOWN
+                        super.onTouchEvent(fakeDown)
+                        fakeDown.recycle()
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    vt?.addMovement(ev)
+                    vt?.computeCurrentVelocity(1000)
+                    val vy = vt?.yVelocity ?: 0f
+                    vt?.recycle()
+                    vt = null
                     onPullOverscroll?.invoke(0f)
+                    val curExp = getExpandFn()
+                    if (canExpandFn() && (dragActive || (curExp > 0.01f && curExp < 0.99f))) {
+                        dragActive = false
+                        onReleaseFn(curExp, vy)
+                        return true
+                    }
+                    dragActive = false
                 }
             }
             return super.onTouchEvent(ev)
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private class GlassMoreHintPill(
+        context: Context,
+        backdrop: LiquidGlassShaders.BackdropState,
+        perf: PerfMonitor,
+        private val getRootShell: () -> View?,
+        private val onClick: () -> Unit
+    ) : LinearLayout(context) {
+        private val dens = resources.displayMetrics.density
+        private val glassHelper = LiquidGlassCardHelper(backdrop, perf, 14f, 12f, 9f, 1.44f, 0.24f)
+        private val label: TextView
+        var uiInk = Color.WHITE
+        var glassBg = Color.argb(30, 18, 22, 30)
+
+        init {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER
+            setWillNotDraw(false)
+            setPadding((12f * dens).roundToInt(), 0, (12f * dens).roundToInt(), 0)
+            label = TextView(context).apply {
+                setTextColor(uiInk)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                text = "↑ اسحب للأعلى لمزيد"
+            }
+            addView(label)
+            setOnTouchListener { _, ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        animate().cancel()
+                        animate().scaleX(0.90f).scaleY(0.90f).setDuration(90L).start()
+                        true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        animate().cancel()
+                        animate().scaleX(1f).scaleY(1f).setDuration(360L).setInterpolator(OvershootInterpolator(1.9f)).start()
+                        onClick()
+                        true
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        animate().cancel()
+                        animate().scaleX(1f).scaleY(1f).setDuration(220L).start()
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }
+
+        fun setCount(extra: Int, collapsed: Boolean) {
+            label.text = if (collapsed) {
+                "↑ +$extra إشعارات مطوية"
+            } else {
+                "↑ +$extra إشعارات أخرى • اسحب للأعلى"
+            }
+        }
+
+        fun applyTheme(ink: Int, gBg: Int) {
+            uiInk = ink
+            glassBg = gBg
+            label.setTextColor(ink)
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val rootShell = getRootShell()
+            var ox = x
+            var oy = y
+            var p = parent as? View
+            while (p != null && p !== rootShell) {
+                ox += p.x - p.scrollX
+                oy += p.y - p.scrollY
+                p = p.parent as? View
+            }
+            val smoked = Color.argb(
+                max(36, Color.alpha(glassBg)),
+                (Color.red(glassBg) * 0.45f).roundToInt(),
+                (Color.green(glassBg) * 0.45f).roundToInt(),
+                (Color.blue(glassBg) * 0.50f).roundToInt()
+            )
+            glassHelper.draw(this, canvas, smoked, ox, oy)
         }
     }
 
@@ -680,17 +1034,14 @@ class NotificationCenterView(
     ) : FrameLayout(context) {
 
         private val dens = resources.displayMetrics.density
-        private val glassHelper = LiquidGlassCardHelper(backdrop, perf, 24f, 16f, 11f, 1.44f, 0.22f)
-        private val fastPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        private val glassHelper = LiquidGlassCardHelper(backdrop, perf, 24f, 18f, 13f, 1.46f, 0.25f)
+        private val specularRim = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = 1.05f * dens
+            strokeWidth = 0.85f * dens
         }
         private val rectF = RectF()
         private var cachedW = 0
-        private var cachedH = 0
-        private var fastFillShader: LinearGradient? = null
-        private var fastRimShader: LinearGradient? = null
+        private var rimShader: LinearGradient? = null
 
         private val iconView: ImageView
         private val countBadge: TextView
@@ -700,8 +1051,8 @@ class NotificationCenterView(
 
         private var item: LockNotification? = null
         private var uiInk = Color.WHITE
-        private var uiDim = Color.argb(205, 255, 255, 255)
-        private var glassBg = Color.argb(18, 255, 255, 255)
+        private var uiDim = Color.argb(212, 255, 255, 255)
+        private var glassBg = Color.argb(26, 18, 22, 30)
 
         private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
         private var downRawX = 0f
@@ -710,12 +1061,15 @@ class NotificationCenterView(
         var isDragging = false
             private set
         var isDismissing = false
+        var isEntranceRunning = false
+            private set
 
         init {
             setWillNotDraw(false)
             layoutDirection = LAYOUT_DIRECTION_LTR
             clipChildren = false
             clipToPadding = false
+            cameraDistance = 12000f * dens
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
                 bottomMargin = (8f * dens).roundToInt()
             }
@@ -727,7 +1081,6 @@ class NotificationCenterView(
                 layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
             }
 
-            // App Icon + optional unread count badge (matches screenshot)
             val iconBox = FrameLayout(context).apply {
                 val boxSz = (44f * dens).roundToInt()
                 layoutParams = LinearLayout.LayoutParams(boxSz, boxSz).apply { marginEnd = (11f * dens).roundToInt() }
@@ -762,7 +1115,6 @@ class NotificationCenterView(
             iconBox.addView(iconView)
             iconBox.addView(countBadge)
 
-            // Title + Message column
             val meta = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
@@ -785,7 +1137,6 @@ class NotificationCenterView(
             meta.addView(titleText)
             meta.addView(bodyText)
 
-            // Timestamp
             timeText = TextView(context).apply {
                 setTextColor(Color.argb(185, 255, 255, 255))
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
@@ -824,27 +1175,35 @@ class NotificationCenterView(
             glassBg = gBg
             titleText.setTextColor(ink)
             bodyText.setTextColor(dim)
-            timeText.setTextColor(Color.argb(180, Color.red(ink), Color.green(ink), Color.blue(ink)))
+            timeText.setTextColor(Color.argb(185, Color.red(ink), Color.green(ink), Color.blue(ink)))
             cachedW = 0
             invalidate()
         }
 
         fun cardHeightEstimate(): Float = if (height > 0) height.toFloat() else (68f * dens)
 
-        fun playEntrance(delayMs: Long) {
+        fun playEntrance3D(delayMs: Long) {
+            isEntranceRunning = true
             animate().cancel()
             alpha = 0f
-            scaleX = 0.84f
-            scaleY = 0.84f
-            translationY = -20f * dens
+            scaleX = 0.80f
+            scaleY = 0.80f
+            rotationX = -22f
+            translationY = -18f * dens
             animate()
                 .alpha(1f)
                 .scaleX(1f)
                 .scaleY(1f)
+                .rotationX(0f)
                 .translationY(0f)
                 .setStartDelay(delayMs)
-                .setDuration(460L)
-                .setInterpolator(OvershootInterpolator(1.65f))
+                .setDuration(490L)
+                .setInterpolator(OvershootInterpolator(1.75f))
+                .setUpdateListener { invalidate() }
+                .withEndAction {
+                    isEntranceRunning = false
+                    invalidate()
+                }
                 .start()
         }
 
@@ -855,6 +1214,7 @@ class NotificationCenterView(
                 .translationY(0f)
                 .setDuration(420L)
                 .setInterpolator(OvershootInterpolator(1.25f))
+                .setUpdateListener { invalidate() }
                 .start()
         }
 
@@ -869,6 +1229,8 @@ class NotificationCenterView(
                     vt?.recycle()
                     vt = VelocityTracker.obtain().apply { addMovement(ev) }
                     animate().cancel()
+                    pivotX = width * 0.5f
+                    pivotY = height * 0.5f
                     animate().scaleX(0.972f).scaleY(0.962f).setDuration(110L).start()
                     return true
                 }
@@ -883,12 +1245,16 @@ class NotificationCenterView(
                     if (isDragging) {
                         val w = max(1f, width.toFloat())
                         val clampedDx = if (cur.isDismissible) dx else (dx * 0.22f)
+                        val dragFrac = (abs(clampedDx) / w).coerceIn(0f, 1.25f)
+                        // Stretch horizontally from trailing edge like stretchy Liquid Glass with 3D tilt!
+                        pivotX = if (clampedDx >= 0f) w * 0.15f else w * 0.85f
+                        pivotY = height * 0.5f
                         translationX = clampedDx
-                        rotation = (clampedDx / w * 6.5f).coerceIn(-6.5f, 6.5f)
-                        val dragFrac = abs(clampedDx) / w
-                        scaleX = 0.985f + min(0.025f, dragFrac * 0.03f)
-                        scaleY = 1f - min(0.05f, dragFrac * 0.07f)
-                        alpha = (1f - dragFrac * 0.72f).coerceIn(0.28f, 1f)
+                        rotationY = (clampedDx / w * 13f).coerceIn(-13f, 13f)
+                        rotation = (clampedDx / w * 4.5f).coerceIn(-4.5f, 4.5f)
+                        scaleX = 1f + min(0.14f, dragFrac * 0.22f)
+                        scaleY = 1f - min(0.06f, dragFrac * 0.09f)
+                        alpha = (1f - dragFrac * 0.62f).coerceIn(0.32f, 1f)
                         onSwipeProgress(dragFrac.coerceIn(0f, 1f))
                         invalidate()
                     } else if (abs(dy) > touchSlop) {
@@ -912,7 +1278,7 @@ class NotificationCenterView(
                             (abs(translationX) >= w * 0.30f || abs(vx) >= 850f * dens) &&
                             ev.actionMasked == MotionEvent.ACTION_UP
                         if (shouldDismiss) {
-                            dismissWithSpring(cur, dir = if (translationX >= 0f || vx > 0f) 1f else -1f)
+                            dismissWithSpring3D(cur, dir = if (translationX >= 0f || vx > 0f) 1f else -1f)
                         } else {
                             snapBackRubbery()
                         }
@@ -923,6 +1289,8 @@ class NotificationCenterView(
                         ) {
                             onHaptic("pop")
                             animate().cancel()
+                            pivotX = width * 0.5f
+                            pivotY = height * 0.5f
                             scaleX = 0.94f; scaleY = 0.94f
                             animate().scaleX(1f).scaleY(1f).setDuration(380L).setInterpolator(OvershootInterpolator(2.0f)).start()
                             onTap(cur)
@@ -940,28 +1308,36 @@ class NotificationCenterView(
             animate().cancel()
             animate()
                 .translationX(0f)
+                .rotationY(0f)
                 .rotation(0f)
                 .scaleX(1f)
                 .scaleY(1f)
                 .alpha(1f)
-                .setDuration(460L)
-                .setInterpolator(OvershootInterpolator(2.0f))
-                .withEndAction { invalidate() }
+                .setDuration(480L)
+                .setInterpolator(OvershootInterpolator(2.15f))
+                .setUpdateListener { invalidate() }
+                .withEndAction {
+                    pivotX = width * 0.5f
+                    invalidate()
+                }
                 .start()
         }
 
-        private fun dismissWithSpring(cur: LockNotification, dir: Float) {
+        private fun dismissWithSpring3D(cur: LockNotification, dir: Float) {
             isDismissing = true
             onHaptic("pop")
             val w = max(320f, width.toFloat())
             animate().cancel()
             animate()
-                .translationX(dir * w * 1.15f)
-                .rotation(dir * 9f)
+                .translationX(dir * w * 1.18f)
+                .rotationY(dir * 20f)
+                .rotation(dir * 7f)
+                .scaleX(1.14f)
+                .scaleY(0.84f)
                 .alpha(0f)
-                .scaleY(0.88f)
-                .setDuration(210L)
+                .setDuration(220L)
                 .setInterpolator(DecelerateInterpolator())
+                .setUpdateListener { invalidate() }
                 .start()
 
             val startH = max(1, height)
@@ -989,50 +1365,45 @@ class NotificationCenterView(
             val w = width.toFloat()
             val h = height.toFloat()
             if (w <= 1f || h <= 1f) return
-            val rad = 24f * dens
 
-            val useAgsl = Build.VERSION.SDK_INT >= 33 && !isDragging && abs(translationX) < 1.5f && scaleX > 0.96f && alpha > 0.92f
-            if (useAgsl) {
-                val rootShell = getRootShell()
-                var ox = x
-                var oy = y
-                var p = parent as? View
-                while (p != null && p !== rootShell) {
-                    ox += p.x - p.scrollX
-                    oy += p.y - p.scrollY
-                    p = p.parent as? View
-                }
-                glassHelper.draw(this, canvas, glassBg, ox, oy)
-            } else {
-                // Lightweight cached frosted Liquid Glass surface during swipe / API 26-32
-                if (cachedW != width || cachedH != height || fastFillShader == null) {
-                    cachedW = width
-                    cachedH = height
-                    fastFillShader = LinearGradient(
-                        0f, 0f, 0f, h,
-                        intArrayOf(Color.argb(88, 36, 40, 50), Color.argb(72, 18, 22, 30)),
-                        floatArrayOf(0f, 1f),
-                        Shader.TileMode.CLAMP
-                    )
-                    fastRimShader = LinearGradient(
-                        0f, 0f, w, h,
-                        intArrayOf(
-                            Color.argb(145, 255, 255, 255),
-                            Color.argb(38, 255, 255, 255),
-                            Color.argb(110, 255, 255, 255)
-                        ),
-                        floatArrayOf(0f, 0.5f, 1f),
-                        Shader.TileMode.CLAMP
-                    )
-                }
-                rectF.set(0.6f * dens, 0.6f * dens, w - 0.6f * dens, h - 0.6f * dens)
-                fastPaint.shader = fastFillShader
-                canvas.drawRoundRect(rectF, rad, rad, fastPaint)
-                fastPaint.shader = null
-                rimPaint.shader = fastRimShader
-                canvas.drawRoundRect(rectF, rad, rad, rimPaint)
-                rimPaint.shader = null
+            // Always render genuine Liquid Glass refraction + bezel on every state (scroll, 3D stack, swipe)
+            val rootShell = getRootShell()
+            var ox = x
+            var oy = y
+            var p = parent as? View
+            while (p != null && p !== rootShell) {
+                ox += p.x - p.scrollX
+                oy += p.y - p.scrollY
+                p = p.parent as? View
             }
+
+            val smokedTint = Color.argb(
+                max(42, Color.alpha(glassBg)),
+                (Color.red(glassBg) * 0.40f).roundToInt(),
+                (Color.green(glassBg) * 0.42f).roundToInt(),
+                (Color.blue(glassBg) * 0.48f).roundToInt()
+            )
+            glassHelper.draw(this, canvas, smokedTint, ox, oy)
+
+            // Crisp specular edge highlight so stacked 3D cards separate sharply
+            if (cachedW != width || rimShader == null) {
+                cachedW = width
+                rimShader = LinearGradient(
+                    0f, 0f, w, h,
+                    intArrayOf(
+                        Color.argb(122, 255, 255, 255),
+                        Color.argb(26, 255, 255, 255),
+                        Color.argb(88, 255, 255, 255)
+                    ),
+                    floatArrayOf(0f, 0.5f, 1f),
+                    Shader.TileMode.CLAMP
+                )
+            }
+            val rad = 24f * dens
+            rectF.set(0.55f * dens, 0.55f * dens, w - 0.55f * dens, h - 0.55f * dens)
+            specularRim.shader = rimShader
+            canvas.drawRoundRect(rectF, rad, rad, specularRim)
+            specularRim.shader = null
         }
     }
 }
