@@ -284,7 +284,7 @@ class NotificationCenterView(
             return
         }
         val speedBoost = (abs(vyPxPerSec) / (2800f * dens)).coerceIn(0f, 0.38f)
-        val dur = ((260L + (260f * dist).roundToInt()) * (1f - speedBoost)).roundToLong().coerceIn(220L, 500L)
+        val dur = ((260f + 260f * dist) * (1f - speedBoost)).roundToInt().toLong().coerceIn(220L, 500L)
         expandAnim = ValueAnimator.ofFloat(start, target).apply {
             duration = dur
             interpolator = iosEase
