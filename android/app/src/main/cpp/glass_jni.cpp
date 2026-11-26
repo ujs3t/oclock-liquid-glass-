@@ -84,7 +84,7 @@ Java_com_oclock_liquidglass_NativeGlass_compute(JNIEnv* env, jclass, jbyteArray 
 
 /* Direct Bitmap lock compute for Pure Native Android: zero byte-array copy,
    zero PNG compression.
-   Writes to outFieldBmp: (R=dispX, G=dispY, B=(depth+4)*7, A=255).
+   Writes to outFieldBmp: (R=dispX, G=dispY, B=(depth+1)*5, A=255).
    Also stores smooth double-precision SDF normal (nx, ny) into alphaBmp (G, B)
    while keeping crisp anti-aliased alpha in alphaBmp.R and A=255. */
 extern "C" JNIEXPORT jdouble JNICALL
@@ -131,19 +131,38 @@ Java_com_oclock_liquidglass_NativeGlass_computeClockField(
                 for (size_t i = 0; i < count; i++) {
                     double s = sdf[i] > 0.f ? double(sdf[i]) - 0.5 : -(double(inside[i]) - 0.5);
                     maxInside = std::max(maxInside, -s);
-                    // Subpixel contour correction on the 1px edge band removes binary EDT aliasing
-                    if (std::abs(s) <= 0.6) {
+                    // Subpixel contour correction on the edge band eliminates binary EDT staircasing
+                    if (std::abs(s) <= 0.65) {
                         s = (127.5 - double(alpha[i])) / 255.0;
                     }
                     sdf[i] = float(s);
                 }
                 std::vector<float>().swap(inside);
 
-                // 3 separable 5-tap Gaussian passes [1,4,6,4,1]/16 eliminate 4:1 diagonal staircase ripples
-                std::vector<float> smoothSdf = sdf;
+                // 1 gentle [1,2,1]/4 pass preserves exact zero-contour alignment on convex arches without inward shift
+                std::vector<float> depthSdf(count);
                 std::vector<float> tmpSdf(count);
                 bool cancelled = false;
-                for (int pass = 0; pass < 3 && !cancelled; pass++) {
+                for (int y = 0; y < h; y++) {
+                    const float* src = sdf.data() + size_t(y) * w;
+                    float* dst = tmpSdf.data() + size_t(y) * w;
+                    for (int x = 0; x < w; x++) {
+                        dst[x] = (src[std::max(0, x - 1)] + 2.f * src[x] + src[std::min(w - 1, x + 1)]) * 0.25f;
+                    }
+                }
+                for (int y = 0; y < h; y++) {
+                    const float* rm1 = tmpSdf.data() + size_t(std::max(0, y - 1)) * w;
+                    const float* r0  = tmpSdf.data() + size_t(y) * w;
+                    const float* rp1 = tmpSdf.data() + size_t(std::min(h - 1, y + 1)) * w;
+                    float* dst = depthSdf.data() + size_t(y) * w;
+                    for (int x = 0; x < w; x++) {
+                        dst[x] = (rm1[x] + 2.f * r0[x] + rp1[x]) * 0.25f;
+                    }
+                }
+
+                // 4 separable 5-tap Gaussian passes [1,4,6,4,1]/16 eliminate diagonal/curve normal ripples
+                std::vector<float> smoothSdf = std::move(sdf);
+                for (int pass = 0; pass < 4 && !cancelled; pass++) {
                     for (int y = 0; y < h; y++) {
                         if ((y & 63) == 0 && glass::isCancelled(&g_latest_version, expected)) {
                             cancelled = true;
@@ -209,12 +228,13 @@ Java_com_oclock_liquidglass_NativeGlass_computeClockField(
                         const float* sm = smoothSdf.data() + size_t(ym) * w;
                         const float* sc = smoothSdf.data() + size_t(y) * w;
                         const float* sp = smoothSdf.data() + size_t(yp) * w;
+                        const float* dc = depthSdf.data() + size_t(y) * w;
                         uint8_t* aRow = aBytes + size_t(y) * aInfo.stride;
                         uint8_t* outRow = fBytes + size_t(y) * fInfo.stride;
 
                         for (int x = 0; x < w; x++) {
                             const int xm = std::max(0, x - 1), xp = std::min(w - 1, x + 1);
-                            const double dd = sc[x];
+                            const double dd = dc[x];
                             const double gx = (double(sc[xp]) - sc[xm]) * 0.5;
                             const double gy = (double(sp[x]) - sm[x]) * 0.5;
                             const double len = std::hypot(gx, gy);
@@ -231,8 +251,8 @@ Java_com_oclock_liquidglass_NativeGlass_computeClockField(
 
                             uint8_t* d = outRow + size_t(x) * 4;
                             d[0] = 128; d[1] = 128;
-                            // Signed smooth depth: dd=+4px outside -> 0, dd=0 -> 28, dd=-32.4px -> 255
-                            d[2] = glass::byte((-dd + 4.0) * 7.0);
+                            // Exact unshifted depth: dd=+1px outside -> 0, dd=0 -> 5, dd=-50px -> 255
+                            d[2] = glass::byte((-dd + 1.0) * 5.0);
                             d[3] = 255;
                             if (dd > 0.0) continue;
                             if (flatCenter && dd <= -effBezel) continue;
@@ -292,8 +312,7 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
     const float shR = float((shadowTopColor >> 16) & 0xff), shG = float((shadowTopColor >> 8) & 0xff), shB = float(shadowTopColor & 0xff);
     const float inR = float((innerColor >> 16) & 0xff), inG = float((innerColor >> 8) & 0xff), inB = float(innerColor & 0xff);
     const float rad = innerAngleDeg * 3.14159265f / 180.f, ax = std::cos(rad), ay = std::sin(rad);
-    const float thickDev = std::max(0.75f, innerThick * ss * 0.5f);
-    const float fallLimit = std::max(1.2f, thickDev * 2.2f);
+    const float fallLimit = std::max(2.0f, innerThick * ss * 1.65f);
     const float scaleX = dstW / std::max(1.f, float(w)), scaleY = dstH / std::max(1.f, float(h));
 
     for (int y = 0; y < h; y++) {
@@ -302,9 +321,6 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
         uint8_t* oRow = oB + size_t(y) * oI.stride;
         const float v = float(y) / std::max(1, h - 1);
         const float tR = trR + (brR - trR) * v, tG = trG + (brG - trG) * v, tB = trB + (brB - trB) * v, tA = trA + (brA - trA) * v;
-        const int ym = std::max(0, y - 1), yp = std::min(h - 1, y + 1);
-        const uint8_t* fRm = fB + size_t(ym) * fI.stride;
-        const uint8_t* fRp = fB + size_t(yp) * fI.stride;
 
         for (int x = 0; x < w; x++) {
             uint8_t alphaByte = aRow[size_t(x) * 4];
@@ -338,17 +354,19 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
                 g = g * (1.f - shadowOp) + shG * shadowOp;
                 b = b * (1.f - shadowOp) + shB * shadowOp;
             }
-            // directional inner rim shadow from smooth precomputed SDF normal + depth
-            float depthPx = std::max(0.f, float(fd[2]) / 7.f - 4.f);
+            // Directional inner shadow layered cleanly ON TOP of any fill opacity (0%..100%)
+            float depthPx = std::max(0.f, float(fd[2]) / 5.f - 1.f);
             if (innerOp > 0.001f && innerThick > 0.01f && depthPx < fallLimit) {
                 float gx = (float(aRow[size_t(x) * 4 + 1]) - 128.f) / 127.f;
                 float gy = (float(aRow[size_t(x) * 4 + 2]) - 128.f) / 127.f;
                 float gl = std::hypot(gx, gy);
                 if (gl > 0.01f) {
-                    float ridgeFade = clamp01f(gl * 1.4f);
+                    float ridgeFade = clamp01f(gl * 1.35f);
                     float k = std::fabs((gx / gl) * ax + (gy / gl) * ay);
-                    float fall = std::pow(clamp01f(1.f - depthPx / fallLimit), 1.35f);
-                    float rimA = std::pow(k, 1.6f) * fall * ridgeFade * innerOp;
+                    float tDepth = clamp01f(depthPx / fallLimit);
+                    float fall = (1.f - tDepth) * (1.f - tDepth) * (1.f + 0.6f * tDepth);
+                    float dirTerm = 0.32f + 0.68f * std::pow(k, 1.35f);
+                    float rimA = clamp01f(dirTerm * fall * ridgeFade * innerOp);
                     r = r * (1.f - rimA) + inR * rimA;
                     g = g * (1.f - rimA) + inG * rimA;
                     b = b * (1.f - rimA) + inB * rimA;

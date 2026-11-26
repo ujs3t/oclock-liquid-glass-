@@ -149,20 +149,21 @@ object LiquidGlassShaders {
             // --clock-shadow-op subtle top ink glaze
             col = mix(col, uShadowTop.rgb, uShadowTop.a);
 
-            // Dynamic GPU directional inner rim shadow from smooth double-precision SDF normal + depth
-            float depthPx = max(0.0, fld.b * 255.0 / 7.0 - 4.0);
-            float thickDev = max(0.75, uInnerThick * uSS * 0.5);
-            float fallLimit = max(1.2, thickDev * 2.2);
+            // Dynamic GPU directional inner shadow layered cleanly ON TOP of any clock fill (0%..100% opacity)
+            float depthPx = max(0.0, fld.b * 255.0 / 5.0 - 1.0);
+            float fallLimit = max(2.0, uInnerThick * uSS * 1.65);
             if (uInnerOp > 0.001 && uInnerThick > 0.01 && depthPx < fallLimit) {
                 float2 nRaw = (msk.gb * 255.0 - 128.0) / 127.0;
                 float gl = length(nRaw);
                 if (gl > 0.01) {
-                    float ridgeFade = clamp(gl * 1.4, 0.0, 1.0);
+                    float ridgeFade = clamp(gl * 1.35, 0.0, 1.0);
                     float2 n = nRaw / gl;
                     float k = abs(dot(n, uInnerDir));
-                    float fall = pow(clamp(1.0 - depthPx / fallLimit, 0.0, 1.0), 1.35);
-                    float rimA = pow(max(0.0, k), 1.6) * fall * ridgeFade * uInnerOp;
-                    col = mix(col, uInnerColor.rgb, clamp(rimA, 0.0, 1.0));
+                    float tDepth = clamp(depthPx / fallLimit, 0.0, 1.0);
+                    float fall = (1.0 - tDepth) * (1.0 - tDepth) * (1.0 + 0.6 * tDepth);
+                    float dirTerm = mix(0.32, 1.0, pow(max(0.0, k), 1.35));
+                    float rimA = clamp(dirTerm * fall * ridgeFade * uInnerOp, 0.0, 1.0);
+                    col = mix(col, uInnerColor.rgb, rimA);
                 }
             }
 

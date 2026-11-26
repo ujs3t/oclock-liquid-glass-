@@ -82,7 +82,13 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   const jniCpp = readFileSync('android/app/src/main/cpp/glass_jni.cpp','utf8');
   assert.ok(jniCpp.includes('AndroidBitmap_lockPixels'));
   assert.ok(jniCpp.includes('computeClockField'));
+  assert.ok(jniCpp.includes('depthSdf'));
   assert.ok(jniCpp.includes('smoothSdf'));
+
+  const viewsKt = readFileSync(ktDir + 'LiquidGlassViews.kt','utf8');
+  assert.ok(viewsKt.includes('trackInitialized'));
+  assert.ok(viewsKt.includes('playingInitialized'));
+  assert.ok(!viewsKt.includes('artView.scaleX = 0.84f'));
 
   const aiKt = readFileSync(ktDir + 'AIDepthManager.kt','utf8');
   assert.ok(aiKt.includes('SubjectSegmentation'));

@@ -17,6 +17,7 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 data class NumeralMetrics(val capRatio: Float, val refMidRel: Float)
 
@@ -79,9 +80,9 @@ class ClockGlyphRenderer(private val context: Context) {
             return size > 8
         }
     }
-    private val artifactCache = object : LinkedHashMap<String, ClockArtifact>(6, 0.75f, true) {
+    private val artifactCache = object : LinkedHashMap<String, ClockArtifact>(4, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ClockArtifact>?): Boolean {
-            return size > 4
+            return size > 3
         }
     }
 
@@ -167,7 +168,7 @@ class ClockGlyphRenderer(private val context: Context) {
             glyphCache[key]?.let { return it }
         }
 
-        val vSub = if (sy > 1.25f) 2 else 1
+        val vSub = if (sy > 1.75f) 3 else if (sy > 1.2f) 2 else 1
         val srcPx = fontPx * ss
         val sw = ceil(srcPx * sx * 1.25f).toInt() + 16
         val sh = ceil(srcPx * vSub * 1.55f).toInt() + 16
@@ -285,7 +286,10 @@ class ClockGlyphRenderer(private val context: Context) {
         val norm = targetG / max(1e-6, cum[g])
         for (r in 1..g) cum[r] *= norm
 
-        val outBytes = ByteArray(w * targetG)
+        val padOut = 1
+        val outW = w + padOut * 2
+        val outH = targetG + padOut * 2
+        val outBytes = ByteArray(outW * outH)
         var rCur = 0
         for (dy in 0 until targetG) {
             val target = dy + 0.5
@@ -298,7 +302,7 @@ class ClockGlyphRenderer(private val context: Context) {
             val w0 = 1f - fy
             val y0 = yMin + f0
             val y1 = min(yMax, y0 + 1)
-            val rowOut = dy * w
+            val rowOut = (dy + padOut) * outW + padOut
             val row0 = y0 * sw
             val row1 = y1 * sw
             for (x in 0 until w) {
@@ -308,15 +312,15 @@ class ClockGlyphRenderer(private val context: Context) {
             }
         }
 
-        val outBmp = Bitmap.createBitmap(w, targetG, Bitmap.Config.ALPHA_8)
+        val outBmp = Bitmap.createBitmap(outW, outH, Bitmap.Config.ALPHA_8)
         outBmp.copyPixelsFromBuffer(ByteBuffer.wrap(outBytes))
 
         val refMidYSrc = sh * 0.5f
         val digitCenterYSrc = (yMin + yMax + 1) * 0.5f
         val res = StretchedGlyph(
             alphaBmp = outBmp,
-            w = w,
-            h = targetG,
+            w = outW,
+            h = outH,
             xCenterOffset = ((xMin + xMax + 1) * 0.5f) - sw * 0.5f,
             yCenterRel = ((digitCenterYSrc - refMidYSrc) / vSub) * sy
         )
@@ -404,7 +408,7 @@ class ClockGlyphRenderer(private val context: Context) {
     ): ClockArtifact? {
         var size = cfg.size
         val maxW = max(80f, hostWDp - 12f)
-        var ss = min(3f, max(2f, round(density)))
+        var ss = min(3.5f, max(2.5f, density * 1.15f))
 
         val (capRatio, refMidRel) = measureNumeralMetrics(cfg.font)
         val tf = getTypeface(cfg.font)
@@ -436,8 +440,13 @@ class ClockGlyphRenderer(private val context: Context) {
         val wDp = ceil(max(40f, maxLineW * cfg.sx) + pad * 2f)
         val hDp = ceil(max(40f, lines.size * capH * cfg.sy) + pad * 2f)
 
+        val rawArea = max(1f, wDp * hDp)
+        val maxArea = 1_900_000f
+        if (rawArea * ss * ss > maxArea) {
+            ss = max(1.5f, floor(sqrt(maxArea / rawArea) * 10f) / 10f)
+        }
         val longSide = max(wDp, hDp)
-        if (longSide * ss > 1080f) ss = max(1f, floor((1080f / longSide) * 10f) / 10f)
+        if (longSide * ss > 1760f) ss = max(1.5f, floor((1760f / longSide) * 10f) / 10f)
 
         val wPx = max(4, (wDp * ss).roundToInt())
         val hPx = max(4, (hDp * ss).roundToInt())
@@ -516,7 +525,7 @@ class ClockGlyphRenderer(private val context: Context) {
                         val gl = charCenterPx - g.w * 0.5f + g.xCenterOffset
                         val gt = lineCenterPx - g.h * 0.5f + g.yCenterRel
                         c.drawBitmap(g.alphaBmp, gl, gt, paint)
-                        includeInk(gl, gt, gl + g.w, gt + g.h)
+                        includeInk(gl + 1f, gt + 1f, gl + g.w - 1f, gt + g.h - 1f)
                         continue
                     }
                 }

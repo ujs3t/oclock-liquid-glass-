@@ -604,6 +604,8 @@ class NowPlayingCardView(
     private var customArtBmp: Bitmap? = null
     private var currentTrack: TrackInfo = AppConstants.QUEUE[0]
     private var playingState = false
+    private var trackInitialized = false
+    private var playingInitialized = false
     private var starred = false
     var uiInk = Color.WHITE
     var uiDim = Color.argb(189, 255, 255, 255)
@@ -821,6 +823,8 @@ class NowPlayingCardView(
     }
 
     fun setTrack(track: TrackInfo, customArt: Bitmap?) {
+        if (trackInitialized && track == currentTrack && customArtBmp === customArt) return
+        trackInitialized = true
         currentTrack = track
         customArtBmp = customArt
         titleView.text = track.title
@@ -842,25 +846,20 @@ class NowPlayingCardView(
             c.drawRect(0f, 0f, s.toFloat(), s.toFloat(), p)
             artView.setImageBitmap(bmp)
         }
-        // Subtle bounce swap animation
-        artView.scaleX = 0.84f; artView.scaleY = 0.84f
-        artView.animate()
-            .scaleX(if (playingState) 1f else 0.88f)
-            .scaleY(if (playingState) 1f else 0.88f)
-            .setDuration(460L)
-            .setInterpolator(OvershootInterpolator(1.4f))
-            .start()
+        artView.animate().cancel()
+        artView.scaleX = 1f
+        artView.scaleY = 1f
+        artView.alpha = 1f
     }
 
     fun setPlaying(playing: Boolean) {
+        if (playingInitialized && playing == playingState) return
+        playingInitialized = true
         playingState = playing
-        artView.animate()
-            .scaleX(if (playing) 1f else 0.88f)
-            .scaleY(if (playing) 1f else 0.88f)
-            .alpha(if (playing) 1f else 0.9f)
-            .setDuration(420L)
-            .setInterpolator(OvershootInterpolator(1.2f))
-            .start()
+        artView.animate().cancel()
+        artView.scaleX = 1f
+        artView.scaleY = 1f
+        artView.alpha = 1f
         if (playing) {
             if (!eqAnimator.isStarted) eqAnimator.start()
         } else {
