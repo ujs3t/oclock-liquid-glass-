@@ -780,6 +780,16 @@ body:not(.np-paused) .np-wave rect:nth-child(4){animation:eqBar .70s .24s ease-i
 }
 .w-chip.ai.busy{opacity:.72;pointer-events:none}
 #ai-depth-status{display:block;font-size:11px;color:rgba(255,255,255,.68);margin:2px 4px 4px}
+.perf-card{
+  background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);
+  border-radius:16px;padding:10px 12px;margin:2px 0 6px;
+}
+.perf-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-bottom:8px}
+.perf-stat{background:rgba(0,0,0,.22);border-radius:10px;padding:6px 8px;display:flex;flex-direction:column;gap:2px}
+.perf-stat span{font-size:10px;color:rgba(255,255,255,.62);font-weight:600}
+.perf-stat b{font-size:12.5px;color:#fff;font-weight:700;font-variant-numeric:tabular-nums;direction:ltr;text-align:right}
+.perf-actions{display:flex;gap:8px;flex-wrap:wrap}
+#perf-note{display:block;margin-top:6px;font-size:10.5px;color:rgba(255,255,255,.62);line-height:1.45}
 /* wallpapers */
 .w-row{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding:2px 2px 4px}
 .w-row::-webkit-scrollbar{display:none}
@@ -846,10 +856,6 @@ body:not(.np-paused) .np-wave rect:nth-child(4){animation:eqBar .70s .24s ease-i
 /* During a resize gesture the expensive SVG displacement filter is swapped for a
    flat tint. The digits are mask-driven so this still looks like the clock, but
    the compositor has nothing costly to recompute — the drag stays at 60fps. */
-body.swapping #clock-glass{
-  backdrop-filter:none !important;
-  -webkit-backdrop-filter:none !important;
-}
 body.resizing #clock-glass{
   backdrop-filter:none !important;
   -webkit-backdrop-filter:none !important;
@@ -1102,6 +1108,21 @@ body.editing #bar{opacity:.35}
     <div class="c-row" id="in-colors"></div>
     <div class="edit-label">خيارات</div>
     <div class="t-row" id="toggles"></div>
+    <div class="edit-label">مراقب الأداء المستمر (FPS · الذاكرة · الاستهلاك)</div>
+    <div class="perf-card" id="perf-card">
+      <div class="perf-grid" aria-live="polite">
+        <div class="perf-stat"><span>معدل الإطارات (FPS)</span><b id="perf-fps">--</b></div>
+        <div class="perf-stat"><span>تأخير الإطارات / Jank</span><b id="perf-jank">--</b></div>
+        <div class="perf-stat"><span>ذاكرة JS / المخبأ</span><b id="perf-jsmem">--</b></div>
+        <div class="perf-stat"><span>ذاكرة النظام (PSS / RAM)</span><b id="perf-sysmem">--</b></div>
+      </div>
+      <div class="perf-actions">
+        <button type="button" class="t-btn on" id="perf-download">تحميل تقرير الأداء (.json)</button>
+        <button type="button" class="t-btn" id="perf-share">مشاركة / حفظ باسم</button>
+        <button type="button" class="t-btn" id="perf-reset">تصفير</button>
+      </div>
+      <small id="perf-note">يسجّل الأداء والذاكرة تلقائياً من فتح التطبيق وحتى الخروج منه.</small>
+    </div>
   </div>
 </div>
 
@@ -1224,6 +1245,360 @@ function save(immediate) {
 
 const $ = (id) => document.getElementById(id);
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+/* ============================================================================
+   0. CONTINUOUS PERFORMANCE & MEMORY PROFILER
+   Runs with ultra-low overhead from boot until exit; exports downloadable JSON.
+   ========================================================================= */
+const PerfMonitor = (() => {
+  const startedAt = new Date().toISOString();
+  const bootT0 = performance.now();
+  let lastFrameTs = 0;
+  let rafId = 0;
+  let memTimer = 0;
+  let uiTimer = 0;
+  let cacheStatsFn = null;
+  let observer = null;
+
+  const metrics = {
+    frames: 0,
+    droppedFrames: 0,
+    jankFrames: 0,
+    maxFrameGapMs: 0,
+    fpsSamples: [],
+    longTasks: [],
+    longTaskCount: 0,
+    longTaskMaxMs: 0,
+    subsystems: {},
+    timeline: [],
+    jsPeakMB: 0,
+    nativePeakPssMB: 0,
+    latestNative: null
+  };
+
+  let winStart = performance.now();
+  let winFrames = 0;
+  let currentFps = 0;
+
+  function sampleStep(now) {
+    rafId = 0;
+    if (document.hidden) { lastFrameTs = 0; return; }
+    if (lastFrameTs > 0) {
+      const dt = now - lastFrameTs;
+      metrics.frames++;
+      winFrames++;
+      if (dt > 24 && dt < 2000) metrics.droppedFrames++;
+      if (dt >= 50 && dt < 2000) metrics.jankFrames++;
+      if (dt < 2000 && dt > metrics.maxFrameGapMs) metrics.maxFrameGapMs = Math.round(dt * 10) / 10;
+      const winDt = now - winStart;
+      if (winDt >= 1000) {
+        currentFps = Math.round((winFrames * 1000) / winDt);
+        metrics.fpsSamples.push(currentFps);
+        if (metrics.fpsSamples.length > 360) metrics.fpsSamples.shift();
+        winStart = now;
+        winFrames = 0;
+      }
+    } else {
+      winStart = now;
+      winFrames = 0;
+    }
+    lastFrameTs = now;
+    rafId = requestAnimationFrame(sampleStep);
+  }
+
+  function startRaf() {
+    if (!rafId && !document.hidden) {
+      lastFrameTs = 0;
+      rafId = requestAnimationFrame(sampleStep);
+    }
+  }
+  function stopRaf() {
+    if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+    lastFrameTs = 0;
+  }
+
+  function record(kind, ms, extra) {
+    const d = Math.max(0, Math.round(ms * 100) / 100);
+    let s = metrics.subsystems[kind];
+    if (!s) {
+      s = { count: 0, totalMs: 0, maxMs: 0, lastMs: 0, hits: 0, misses: 0, lastExtra: null };
+      metrics.subsystems[kind] = s;
+    }
+    s.count++;
+    s.totalMs = Math.round((s.totalMs + d) * 100) / 100;
+    s.lastMs = d;
+    if (d > s.maxMs) s.maxMs = d;
+    if (extra && extra.hit === true) s.hits++;
+    if (extra && extra.hit === false) s.misses++;
+    if (extra) s.lastExtra = extra;
+  }
+
+  function readMemSnapshot() {
+    const pm = performance.memory;
+    const jsUsedMB = pm ? Math.round((pm.usedJSHeapSize / 1048576) * 100) / 100 : null;
+    const jsTotalMB = pm ? Math.round((pm.totalJSHeapSize / 1048576) * 100) / 100 : null;
+    const jsLimitMB = pm ? Math.round((pm.jsHeapSizeLimit / 1048576) * 100) / 100 : null;
+    if (jsUsedMB != null && jsUsedMB > metrics.jsPeakMB) metrics.jsPeakMB = jsUsedMB;
+
+    let nativeStats = null;
+    try {
+      const raw = window.AndroidHost?.getPerfStats?.();
+      if (raw) {
+        nativeStats = JSON.parse(raw);
+        metrics.latestNative = nativeStats;
+        if (nativeStats.totalPssMB > metrics.nativePeakPssMB) metrics.nativePeakPssMB = nativeStats.totalPssMB;
+      }
+    } catch (_) {}
+
+    const entry = {
+      tSec: Math.round((performance.now() - bootT0) / 100) / 10,
+      fps: currentFps,
+      jsUsedMB,
+      nativePssMB: nativeStats ? nativeStats.totalPssMB : null,
+      availRamMB: nativeStats ? nativeStats.availRamMB : null
+    };
+    metrics.timeline.push(entry);
+    if (metrics.timeline.length > 180) metrics.timeline.shift();
+    return { jsUsedMB, jsTotalMB, jsLimitMB, nativeStats };
+  }
+
+  function getSummary() {
+    const samples = metrics.fpsSamples.slice().sort((a, b) => a - b);
+    const avgFps = samples.length ? Math.round(samples.reduce((a, b) => a + b, 0) / samples.length) : currentFps;
+    const minFps = samples.length ? samples[0] : currentFps;
+    const lowIdx = samples.length ? Math.max(0, Math.floor(samples.length * 0.05)) : 0;
+    const fps5PctLow = samples.length ? samples[lowIdx] : currentFps;
+    const snap = readMemSnapshot();
+    const caches = cacheStatsFn ? cacheStatsFn() : {};
+    return {
+      appVersion: '1.3.0',
+      startedAt,
+      capturedAt: new Date().toISOString(),
+      elapsedSec: Math.round((performance.now() - bootT0) / 100) / 10,
+      engine: caches.engine || (window.NativeGlassMath?.available ? 'Android-C++/JNI' : 'Web-Worker'),
+      viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1 },
+      fps: {
+        current: currentFps,
+        avg: avgFps,
+        min: minFps,
+        low5Pct: fps5PctLow,
+        totalFrames: metrics.frames,
+        droppedOver24ms: metrics.droppedFrames,
+        jankOver50ms: metrics.jankFrames,
+        maxFrameGapMs: metrics.maxFrameGapMs
+      },
+      longTasks: {
+        count: metrics.longTaskCount,
+        maxMs: metrics.longTaskMaxMs,
+        recent: metrics.longTasks.slice(-15)
+      },
+      memory: {
+        jsUsedMB: snap.jsUsedMB,
+        jsPeakMB: metrics.jsPeakMB || snap.jsUsedMB,
+        jsTotalMB: snap.jsTotalMB,
+        jsLimitMB: snap.jsLimitMB,
+        native: snap.nativeStats || metrics.latestNative,
+        nativePeakPssMB: metrics.nativePeakPssMB,
+        caches
+      },
+      subsystems: metrics.subsystems
+    };
+  }
+
+  function computeTopConsumers(summary) {
+    const out = [];
+    const nat = summary.memory.native;
+    if (nat) {
+      out.push({
+        area: 'Android WebView + Graphics + Native PSS',
+        value: `${nat.totalPssMB} MB (Peak ${summary.memory.nativePeakPssMB || nat.totalPssMB} MB)`,
+        detail: `Native=${nat.nativePssMB}MB, Dalvik=${nat.dalvikPssMB}MB, Other/GPU=${nat.otherPssMB}MB, NativeGlassCache=${nat.nativeGlassCacheKB}KB`
+      });
+    }
+    if (summary.memory.jsUsedMB != null) {
+      out.push({
+        area: 'JavaScript Heap (DOM + Canvas + Bitmaps)',
+        value: `${summary.memory.jsUsedMB} MB (Peak ${summary.memory.jsPeakMB} MB)`,
+        detail: `Caches: mask=${summary.memory.caches?.mask || 0}, glass=${summary.memory.caches?.glass || 0}, inner=${summary.memory.caches?.inner || 0}, glyph=${summary.memory.caches?.glyph || 0}`
+      });
+    }
+    const subOrder = Object.entries(summary.subsystems)
+      .map(([name, s]) => ({
+        name,
+        totalMs: s.totalMs,
+        avgMs: s.count ? Math.round((s.totalMs / s.count) * 100) / 100 : 0,
+        maxMs: s.maxMs,
+        count: s.count,
+        hits: s.hits,
+        misses: s.misses
+      }))
+      .sort((a, b) => b.totalMs - a.totalMs);
+    for (const s of subOrder.slice(0, 6)) {
+      out.push({
+        area: `CPU Subsystem: ${s.name}`,
+        value: `Total ${s.totalMs}ms · Max ${s.maxMs}ms`,
+        detail: `Runs=${s.count}, Avg=${s.avgMs}ms` + (s.hits + s.misses > 0 ? `, CacheHits=${s.hits}/${s.hits + s.misses}` : '')
+      });
+    }
+    if (summary.longTasks.count > 0) {
+      out.push({
+        area: 'Main-Thread Long Tasks (>=50ms)',
+        value: `${summary.longTasks.count} stalls (Max ${summary.longTasks.maxMs}ms)`,
+        detail: 'Check timeline & subsystems for frame spikes'
+      });
+    }
+    return out;
+  }
+
+  function buildReport() {
+    const summary = getSummary();
+    return {
+      schema: 'oclock.liquidglass.perf.v1',
+      summary,
+      topConsumers: computeTopConsumers(summary),
+      timeline: metrics.timeline
+    };
+  }
+
+  function updateUI() {
+    if (!document.body.classList.contains('editing')) return;
+    const fpsEl = $('perf-fps'), jankEl = $('perf-jank'), jsEl = $('perf-jsmem'), sysEl = $('perf-sysmem'), noteEl = $('perf-note');
+    if (!fpsEl) return;
+    const s = getSummary();
+    fpsEl.textContent = s.fps.current ? `${s.fps.current} fps (avg ${s.fps.avg})` : `${s.fps.avg || '--'} fps`;
+    jankEl.textContent = `${s.fps.jankOver50ms} jank · ${s.fps.maxFrameGapMs}ms`;
+    const c = s.memory.caches || {};
+    jsEl.textContent = s.memory.jsUsedMB != null ? `${s.memory.jsUsedMB} MB · C${(c.mask||0)+(c.glass||0)+(c.inner||0)}` : `Cache ${(c.mask||0)+(c.glass||0)+(c.inner||0)}`;
+    const n = s.memory.native;
+    sysEl.textContent = n ? `${n.totalPssMB} MB / ${n.availRamMB} MB free` : `${s.engine}`;
+    if (noteEl) {
+      const top = computeTopConsumers(s)[0];
+      noteEl.textContent = top
+        ? `المحرك: ${s.engine} · أعلى مستهلك: ${top.area} (${top.value})`
+        : `المحرك: ${s.engine} · التسجيل مستمر حتى الخروج`;
+    }
+  }
+
+  function downloadReport() {
+    const report = buildReport();
+    const json = JSON.stringify(report, null, 2);
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const name = `oclock-perf-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`;
+
+    if (window.AndroidHost?.savePerfReport) {
+      try {
+        const res = window.AndroidHost.savePerfReport(name, json, false);
+        if (res && res.startsWith('DOWNLOADS:')) {
+          toast(`تم حفظ التقرير في التنزيلات: ${res.slice(10)}`);
+          return { ok: true, method: 'android-downloads', filename: res.slice(10), bytes: json.length };
+        }
+        if (res && res.startsWith('PICKER:')) {
+          toast('اختر مكان حفظ ملف الأداء');
+          return { ok: true, method: 'android-picker', filename: name, bytes: json.length };
+        }
+      } catch (_) {}
+    }
+
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    toast(`تم تنزيل ملف الأداء: ${name}`);
+    return { ok: true, method: 'browser-blob', filename: name, bytes: json.length };
+  }
+
+  function shareReport() {
+    const report = buildReport();
+    const json = JSON.stringify(report, null, 2);
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const name = `oclock-perf-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`;
+    if (window.AndroidHost?.sharePerfReport) {
+      try {
+        if (window.AndroidHost.sharePerfReport(name, json)) return;
+      } catch (_) {}
+    }
+    if (navigator.share) {
+      try {
+        const file = new File([json], name, { type: 'application/json' });
+        if (!navigator.canShare || navigator.canShare({ files: [file] })) {
+          navigator.share({ files: [file], title: 'OClock Liquid Glass Performance' }).catch(() => {});
+          return;
+        }
+      } catch (_) {}
+    }
+    downloadReport();
+  }
+
+  function flushOnExit() {
+    try {
+      const json = JSON.stringify(buildReport());
+      if (window.AndroidHost?.savePerfReport) {
+        window.AndroidHost.savePerfReport('OClock-Perf-Latest.json', json, true);
+      }
+      try { localStorage.setItem('oclock_last_perf_summary_v1', JSON.stringify(getSummary())); } catch (_) {}
+    } catch (_) {}
+  }
+
+  function reset() {
+    metrics.frames = 0; metrics.droppedFrames = 0; metrics.jankFrames = 0;
+    metrics.maxFrameGapMs = 0; metrics.fpsSamples = [];
+    metrics.longTasks = []; metrics.longTaskCount = 0; metrics.longTaskMaxMs = 0;
+    metrics.subsystems = {}; metrics.timeline = [];
+    metrics.jsPeakMB = 0; metrics.nativePeakPssMB = 0;
+    winStart = performance.now(); winFrames = 0;
+    updateUI();
+    toast('تم تصفير عدادات الأداء');
+  }
+
+  function init() {
+    if ('PerformanceObserver' in window) {
+      try {
+        observer = new PerformanceObserver((list) => {
+          for (const e of list.getEntries()) {
+            metrics.longTaskCount++;
+            const dur = Math.round(e.duration * 10) / 10;
+            if (dur > metrics.longTaskMaxMs) metrics.longTaskMaxMs = dur;
+            metrics.longTasks.push({
+              tSec: Math.round((performance.now() - bootT0) / 100) / 10,
+              durationMs: dur,
+              name: e.name || 'self'
+            });
+            if (metrics.longTasks.length > 40) metrics.longTasks.shift();
+          }
+        });
+        observer.observe({ entryTypes: ['longtask'] });
+      } catch (_) {}
+    }
+    startRaf();
+    memTimer = setInterval(() => { if (!document.hidden) readMemSnapshot(); }, 2000);
+    uiTimer = setInterval(updateUI, 1000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { stopRaf(); flushOnExit(); }
+      else { startRaf(); }
+    });
+  }
+
+  init();
+
+  return {
+    record,
+    setCacheStatsFn: (fn) => { cacheStatsFn = fn; },
+    getSummary,
+    buildReport,
+    downloadReport,
+    shareReport,
+    flushOnExit,
+    updateUI,
+    reset
+  };
+})();
 
 /* ============================================================================
    1. LIQUID GLASS RECTANGLE ENGINE — verbatim from the skill file
@@ -1365,6 +1740,7 @@ function applyLiquidGlass(el, opts){
 
     const key = [wCss,hCss,radiusCss,ss,o.surface,o.ior,o.thickness,o.bezel,o.shadow.thickness,o.shadow.angle,o.shadow.intensity].join('|');
     if (key === rasterKey) return;
+    const t0 = performance.now();
     const surfaceFn = SURFACES[o.surface] || SURFACES.convexSquircle;
     const bezelRaster = o.bezel*ss, thickRaster = o.thickness*ss;
     const radial = buildProfile({ bezelWidth:bezelRaster, thickness:thickRaster, ior:o.ior, surfaceFn });
@@ -1427,6 +1803,7 @@ function applyLiquidGlass(el, opts){
     );
     shadowEl.style.backgroundImage = `url(${shadowCv.toDataURL('image/png')})`;
     rasterKey = key;
+    PerfMonitor.record('cardsGlass', performance.now() - t0, { wCss, hCss, ss });
   }
 
   rebuild();
@@ -1712,14 +2089,27 @@ const Clock = (() => {
   let pos = { x: 0, y: typeof state.clockY === 'number' ? Math.max(-20, Math.min(80, state.clockY)) : 0 };
   let activeDispUrl = '';
   let activeInnerUrl = '';
+  let applySeq = 0;
 
-  const MAX_CACHE = 6;
+  const MAX_CACHE = 4;
   const innerCache = new Map();
   const maskCache = new Map();
   const glassCache = new Map();
   const glyphCache = new Map();
   const capRatioCache = new Map();
-  const MAX_GLYPH_CACHE = 28;
+  const MAX_GLYPH_CACHE = 24;
+  let probeCtx = null;
+  function getProbeCtx() {
+    if (!probeCtx) probeCtx = document.createElement('canvas').getContext('2d');
+    return probeCtx;
+  }
+  PerfMonitor.setCacheStatsFn(() => ({
+    mask: maskCache.size,
+    glass: glassCache.size,
+    inner: innerCache.size,
+    glyph: glyphCache.size,
+    engine: window.NativeGlassMath?.available ? 'Android-C++/JNI' : 'Web-Worker'
+  }));
 
   function lruGet(map, key) {
     if (!map.has(key)) return null;
@@ -1867,11 +2257,29 @@ const Clock = (() => {
   }
 
   let innerShownKey = '';
+  let activeTargetInnerKey = '';
   let innerWaiters = [];
+  let innerDispatchTs = 0;
 
   function isCachedInnerUrl(url) {
     for (const v of innerCache.values()) if (v === url) return true;
     return false;
+  }
+
+  function preloadImg(url) {
+    if (!url) return Promise.resolve();
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = () => { if (!settled) { settled = true; resolve(); } };
+      const timer = setTimeout(done, 180);
+      const im = new Image();
+      im.onload = () => {
+        if (im.decode) im.decode().catch(() => {}).finally(() => { clearTimeout(timer); done(); });
+        else { clearTimeout(timer); done(); }
+      };
+      im.onerror = () => { clearTimeout(timer); done(); };
+      im.src = url;
+    });
   }
 
   function setInnerImage(url, key) {
@@ -1882,23 +2290,32 @@ const Clock = (() => {
     if (prev && prev !== activeInnerUrl && !isCachedInnerUrl(prev)) {
       scheduleRevoke(prev, (u) => u === activeInnerUrl || isCachedInnerUrl(u));
     }
+    notifyInnerWaiters(key, url);
+  }
+
+  function notifyInnerWaiters(key, url) {
     if (!key) return;
     const ready = innerWaiters.filter((w) => w.key === key);
     innerWaiters = innerWaiters.filter((w) => w.key !== key);
-    ready.forEach((w) => w.once());
+    ready.forEach((w) => w.once(url || ''));
   }
 
-  /* Fade the clock back in only when the matching shadow map is in place, so a
-     font/colour switch can never show a rim that belongs to the old glyphs. */
-  function whenInnerReady(key, cb) {
-    if (innerShownKey === key) { cb(); return; }
-    const w = { key, once: () => { if (w.done) return; w.done = true; cb(); } };
-    innerWaiters.push(w);
-    setTimeout(w.once, 520);        // hard cap: the clock must never stay blank
+  function waitInnerCached(key) {
+    const hit = lruGet(innerCache, key);
+    if (hit) return Promise.resolve(hit);
+    if (innerShownKey === key) return Promise.resolve(activeInnerUrl);
+    return new Promise((resolve) => {
+      const w = { key, once: (url) => { if (w.done) return; w.done = true; resolve(url || lruGet(innerCache, key) || ''); } };
+      innerWaiters.push(w);
+      setTimeout(() => w.once(''), 380);
+    });
   }
 
   function onInnerResult(d) {
     innerBusy = false;
+    if (innerDispatchTs > 0 && !d.isPreview) {
+      PerfMonitor.record('clockInnerRim', performance.now() - innerDispatchTs);
+    }
     flushInnerQueue();
     if (d.jobId !== innerJob && queuedInner) return; // a newer slider position won
     const url = URL.createObjectURL(d.blob);
@@ -1912,7 +2329,10 @@ const Clock = (() => {
       return;
     }
     lruSet(innerCache, d.key, url, (old) => scheduleRevoke(old, (u) => u === activeInnerUrl || isCachedInnerUrl(u)));
-    setInnerImage(url, d.key);
+    notifyInnerWaiters(d.key, url);
+    if (!activeTargetInnerKey || activeTargetInnerKey === d.key) {
+      setInnerImage(url, d.key);
+    }
   }
 
   /* Called live by the sliders: no refraction rebuild, no bitmap rebuild. */
@@ -1921,23 +2341,23 @@ const Clock = (() => {
     const cfg = CONFIG.glass.inner;
     const w = lastMaskCanvas.width, h = lastMaskCanvas.height;
     innerEl.style.opacity = String(Math.max(0, Math.min(1, cfg.intensity)));
-    if (!(cfg.thickness > 0) || !(cfg.intensity > 0)) { setInnerImage(''); return; }
+    if (!(cfg.thickness > 0) || !(cfg.intensity > 0)) { activeTargetInnerKey = ''; setInnerImage(''); return; }
     const key = [w, h, lastSS, lastMaskKey, cfg.thickness, cfg.angle, cfg.color].join('|');
+    activeTargetInnerKey = key;
     if (key === innerShownKey) return;                     // already on screen
     const cached = lruGet(innerCache, key);
     if (cached) { setInnerImage(cached, key); return; }
     postInner(key, w, h, !!preview);
   }
 
-  /* Paint (or repaint) the map for a specific key — used by the fade path so a
-     new font can never fade in wearing the previous glyphs' rim. */
+  /* Ensure the rim is queued/computed for `key` without disturbing current DOM. */
   function refreshInnerFor(key, alpha, w, h, ss, maskKey) {
     if (!alpha || !key) return;
     if (key === innerShownKey) return;
     const cached = lruGet(innerCache, key);
-    if (cached) { setInnerImage(cached, key); return; }
+    if (cached) { notifyInnerWaiters(key, cached); return; }
     if (ensureInnerWorker()) postInnerFor(key, alpha, w, h, ss);
-    else paintInnerNow(alpha, w, h, ss, maskKey);          // no Worker at all: do it now
+    else paintInnerNow(alpha, w, h, ss, maskKey);
   }
 
   let innerPosted = '';
@@ -1960,6 +2380,7 @@ const Clock = (() => {
       return;
     }
     innerBusy = true;
+    innerDispatchTs = performance.now();
     const jobId = ++innerJob;
     const alphaBuf = job.alpha.slice().buffer;
     wk.postMessage({
@@ -2240,7 +2661,7 @@ const Clock = (() => {
   function drawOpticalClock(ctx, lines, wCss, hCss, size, ss, c, capH, refMidRel) {
     const fontStr = fontStack();
     const weight = state.font === 'SF' ? 600 : c.weight;
-    const probe = document.createElement('canvas').getContext('2d');
+    const probe = getProbeCtx();
     probe.font = `${weight} ${size}px ${fontStr}`;
     if ('letterSpacing' in probe) probe.letterSpacing = '0px';
 
@@ -2295,6 +2716,7 @@ const Clock = (() => {
   }
 
   function renderBitmap(lines) {
+    const t0 = performance.now();
     const c = CONFIG.clock;
     const host = $('screen');
     const hostW = host.clientWidth || 390;
@@ -2309,7 +2731,7 @@ const Clock = (() => {
     const weight = state.font === 'SF' ? 600 : c.weight;
     const { capRatio, refMidRel } = measureNumeralMetrics(fontStr, weight);
 
-    const probe = document.createElement('canvas').getContext('2d');
+    const probe = getProbeCtx();
     probe.font = `${weight} ${size}px ${fontStr}`;
     if ('letterSpacing' in probe) probe.letterSpacing = '0px';
 
@@ -2353,11 +2775,13 @@ const Clock = (() => {
     const w = Math.max(4, Math.round(wCss * ss));
     const h = Math.max(4, Math.round(hCss * ss));
 
-    const maskKey = [size.toFixed(2), w, h, state.font, c.sx, c.sy, c.tracking, lines.join('|')].join('|');
+    const minuteKey = lines.join('|');
+    const maskKey = [size.toFixed(2), w, h, state.font, c.sx, c.sy, c.tracking, minuteKey].join('|');
     const cachedMask = lruGet(maskCache, maskKey);
     if (cachedMask) {
       const innerKey = [w,h,ss,maskKey,CONFIG.glass.inner.thickness,CONFIG.glass.inner.angle,CONFIG.glass.inner.color].join('|');
-      return Object.assign({}, cachedMask, { innerKey, innerUrl: lruGet(innerCache, innerKey) || '' });
+      PerfMonitor.record('clockBitmap', performance.now() - t0, { hit: true, w, h });
+      return Object.assign({}, cachedMask, { minuteKey, innerKey, innerUrl: lruGet(innerCache, innerKey) || '' });
     }
 
 
@@ -2372,13 +2796,14 @@ const Clock = (() => {
 
     /* The inner map is a per-pixel pass + a PNG encode. It must never run
        inside a click handler, so it is produced asynchronously (worker) and
-       the clock only fades back in once it is ready. */
+       committed atomically once ready. */
     const innerKey = [w, h, ss, maskKey, CONFIG.glass.inner.thickness,
                       CONFIG.glass.inner.angle, CONFIG.glass.inner.color].join('|');
     const innerUrl = lruGet(innerCache, innerKey) || '';
 
     const built = {
       alpha, w, h, ss, wCss, hCss,
+      minuteKey,
       alphaKey: maskKey,
       innerUrl, innerKey,
       maskCanvas: cv,
@@ -2390,6 +2815,7 @@ const Clock = (() => {
       pad: pad * 2
     };
     lruSet(maskCache, maskKey, built);
+    PerfMonitor.record('clockBitmap', performance.now() - t0, { hit: false, w, h, ss });
     return built;
   }
 
@@ -2401,12 +2827,19 @@ const Clock = (() => {
     return cv.toDataURL('image/png');
   }
 
+  let refractionT0 = 0;
+
   function onWorkerResult(e) {
     if (e.data.kind === 'inner') { onInnerResult(e.data); return; }
     const { jobId, w, h, maxAbsCss, dispBuf, dispBlob, dispUrl } = e.data;
     const meta = pendingMeta.get(jobId);
     pendingMeta.delete(jobId);
     if (!meta || jobId !== jobSeq) return;
+    if (refractionT0 > 0) {
+      PerfMonitor.record('clockRefraction', performance.now() - refractionT0, {
+        hit: false, engine: dispUrl ? 'NativeC++' : 'WebWorker', w, h
+      });
+    }
     const disp = dispUrl || (dispBlob ? URL.createObjectURL(dispBlob) : bufToUrl(dispBuf, w, h));
     const cacheKey = [meta.w, meta.h, meta.ss, meta.alphaKey,
       CONFIG.glass.surface, CONFIG.glass.ior,
@@ -2424,9 +2857,10 @@ const Clock = (() => {
   let lastSS = 2;
 
   function apply(meta, dispUrl, _shadUrl, maxAbsCss) {
-    activeDispUrl = dispUrl || '';
+    const mySeq = ++applySeq;
+    const tickT0 = meta.isTick ? performance.now() : 0;
     lastMetrics = {
-      textW: meta.textW, textH: meta.textH, pad: meta.pad,
+      textW: meta.textW, textH: meta.textH, pad: meta.pad, size: meta.size,
       baseW: meta.textW / Math.max(0.05, CONFIG.clock.sx),
       baseH: meta.textH / Math.max(0.05, CONFIG.clock.sy)
     };
@@ -2453,7 +2887,16 @@ const Clock = (() => {
       }
     };
     const paint = () => {
+      if (applySeq !== mySeq) return;
+      activeDispUrl = dispUrl || '';
+      activeTargetInnerKey = meta.innerKey;
       const mask = `url(${meta.maskUrl})`;
+      glassEl.style.transition = '';
+      glowEl.style.transition = '';
+      innerEl.style.transition = '';
+      glassEl.style.opacity = '1';
+      glowEl.style.opacity = '1';
+
       setBox(glassEl, meta.wCss, meta.hCss);
       setMask(glassEl, mask, meta.alphaKey);
       setBox(shadowEl, meta.wCss, meta.hCss);
@@ -2540,66 +2983,36 @@ const Clock = (() => {
       lastCommittedSize = CONFIG.clock.size;
       lastCommittedSy = CONFIG.clock.sy;
       glowEl.dataset.painted = String(meta.minuteKey || '');
+      if (tickT0 > 0) {
+        PerfMonitor.record('clockTickSwap', performance.now() - tickT0, { minute: meta.minuteKey });
+      }
     };
 
-    if (meta.isTick) {
-      // cross-fade: minute ticks, format changes, font/colour/size edits…
-      // (a live resize sets meta.hardCut so the handles stay glued to the digits)
-      const dur = meta.hardCut ? 1 : 170;
-      /* the clock is about to be invisible for a moment: while it is, the
-         expensive refraction filter is switched off so the browser does not
-         have to re-rasterise it twice for one change */
-      clearTimeout(swapGuard);
-      if (!meta.hardCut) {
-        document.body.classList.add('swapping');
-        // safety: the glass must never stay on the cheap tint
-        swapGuard = setTimeout(() => document.body.classList.remove('swapping'), 1400);
-      }
-      glassEl.style.transition = `opacity ${dur}ms ease`;
-      glowEl.style.transition = `opacity ${dur}ms ease`;
-      innerEl.style.transition = `opacity ${dur}ms ease`;
-      glassEl.style.opacity = '0';
-      glowEl.style.opacity = '0';
-      innerEl.style.opacity = '0';
-      const expect = meta.minuteKey;
-      const innerKeyNeeded = meta.innerKey;
-      setTimeout(() => {
-        /* Paint while the clock is INVISIBLE, then let the browser finish the
-           expensive backdrop-filter raster before anything fades back in — so
-           the re-raster jank lands on a blank frame instead of on the animation. */
-        paint();
-        const fadeInNow = () => {
-          // filter back on first, so the fade-in already shows the real glass
-          clearTimeout(swapGuard);
-          document.body.classList.remove('swapping');
-          glassEl.style.opacity = '1';
-          glowEl.style.opacity = '1';
-          innerEl.style.opacity = String(Math.max(0, Math.min(1, CONFIG.glass.inner.intensity)));
-          setTimeout(() => {
-            glassEl.style.transition = '';
-            glowEl.style.transition = '';
-            innerEl.style.transition = '';
-          }, dur + 60);
-        };
-        const fadeIn = () => {
-          if (innerKeyNeeded && innerShownKey !== innerKeyNeeded &&
-              CONFIG.glass.inner.thickness > 0 && CONFIG.glass.inner.intensity > 0) {
-            whenInnerReady(innerKeyNeeded, fadeInNow);   // capped, never stalls
-          } else fadeInNow();
-        };
-        /* two frames: the first commits the new geometry, the second rasterises
-           it while the clock is still invisible */
-        requestAnimationFrame(() => requestAnimationFrame(fadeIn));
-        // safety net: if a fresher frame never arrived, make sure we are opaque
-        setTimeout(() => {
-          if (glowEl.dataset.painted !== expect) return;
-          glassEl.style.opacity = '1';
-          glowEl.style.opacity = '1';
-        }, 420);
-      }, meta.hardCut ? 0 : 110);
-    } else {
+    if (meta.hardCut) {
       requestAnimationFrame(paint);
+      return;
     }
+
+    // Keep the previous minute 100% solid & opaque while the next minute's
+    // mask, refraction displacement map, and inner rim PNG finish decoding,
+    // then commit atomically in a single frame with zero blank flash.
+    clearTimeout(swapGuard);
+    document.body.classList.remove('swapping');
+    const needInner = CONFIG.glass.inner.thickness > 0 && CONFIG.glass.inner.intensity > 0;
+    if (needInner && innerShownKey !== meta.innerKey) {
+      refreshInnerFor(meta.innerKey, meta.alpha, meta.w, meta.h, meta.ss, meta.alphaKey);
+    }
+    const innerPromise = (needInner && innerShownKey !== meta.innerKey)
+      ? waitInnerCached(meta.innerKey).then((u) => preloadImg(u))
+      : Promise.resolve();
+    Promise.all([
+      preloadImg(meta.maskUrl),
+      canGlass ? preloadImg(dispUrl) : Promise.resolve(),
+      innerPromise
+    ]).then(() => {
+      if (applySeq !== mySeq) return;
+      requestAnimationFrame(paint);
+    });
   }
 
   function build(force) {
@@ -2637,16 +3050,17 @@ const Clock = (() => {
     if (cachedGlass && cachedGlass.disp) {
       // reuse: no worker round-trip, no SDF, no EDT, no PNG encode
       pendingMeta.delete(jobId);
+      PerfMonitor.record('clockRefraction', 0, { hit: true, engine: 'Cache' });
       apply(meta, cachedGlass.disp, '', cachedGlass.maxAbs);
       return;
     }
 
-    /* start the rim for these new glyphs immediately: it is what the
-       cross-fade waits for, and the worker needs a head start */
+    /* start the rim for these new glyphs immediately so it finishes in parallel */
     if (CONFIG.glass.inner.thickness > 0 && !lruGet(innerCache, meta.innerKey)) {
       postInnerFor(meta.innerKey, meta.alpha, meta.w, meta.h, meta.ss);
     }
 
+    refractionT0 = performance.now();
     if (window.NativeGlassMath?.available) {
       NativeGlassMath.compute(jobId, meta, params)
         .then(data => onWorkerResult({ data }))
@@ -3451,15 +3865,19 @@ const AIDepth = (() => {
     const srcUrl = Wallpapers.urlFor(state.wall);
     if (!srcUrl) return;
     busy = true;
+    const t0 = performance.now();
     setStatus('جاري تحليل الخلفية بالذكاء الاصطناعي…');
     try {
       let cutoutUrl = '';
+      let source = 'mlkit';
       try {
         cutoutUrl = await runNative(srcUrl);
       } catch (nativeErr) {
         if (nativeErr?.code === 'NO_SUBJECT') throw nativeErr;
+        source = 'rmbg-1.4';
         cutoutUrl = await runWebCloudAI(srcUrl);
       }
+      PerfMonitor.record('aiDepth', performance.now() - t0, { source, ok: true });
       state.subject = cutoutUrl;
       state.subjectWallKey = currentWallKey();
       state.depth = true;
@@ -3470,6 +3888,7 @@ const AIDepth = (() => {
       toast('الساعة الآن خلف الشخصية تلقائياً');
       vib(12, 'pop');
     } catch (e) {
+      PerfMonitor.record('aiDepth', performance.now() - t0, { ok: false, code: e?.code || 'ERR' });
       const msg = e?.code === 'NO_SUBJECT'
         ? 'لم يتم العثور على شخصية أو عنصر بارز في هذه الخلفية'
         : 'تعذّر عزل الشخصية — تأكد من الاتصال أول مرة أو جرّب صورة أوضح';
@@ -3513,8 +3932,9 @@ const Media = (() => {
   const audio = new Audio();
   let hasFile = false;
   let audioBlobUrl = '';
-  let raf = 0;
+  let tickTimer = 0;
   let demoStart = 0;
+  let lastDrawnP = -1;
 
   function fmt(t) {
     t = Math.max(0, Math.floor(t));
@@ -3545,13 +3965,16 @@ const Media = (() => {
     const w = trackEl ? trackEl.clientWidth : 300;
     if (w > 0) thumbEl.style.setProperty('--bar-w', w + 'px');
   }
-  function renderProgress() {
+  function renderProgress(force) {
     const dur = state.np.duration || 1;
     const pos = Math.min(dur, position());
     const p = clamp01(pos / dur);
-    $('np-fill').style.transform = `scaleX(${p.toFixed(4)})`;
-    thumbEl.style.setProperty('--p', p.toFixed(4));
     const e = fmt(pos), r = '-' + fmt(dur - pos);
+    if (force || Math.abs(p - lastDrawnP) >= 0.0012) {
+      lastDrawnP = p;
+      $('np-fill').style.transform = `scaleX(${p.toFixed(4)})`;
+      thumbEl.style.setProperty('--p', p.toFixed(4));
+    }
     if (e !== lastElapsed) { $('np-elapsed').textContent = e; lastElapsed = e; }
     if (r !== lastRemain) { $('np-remain').textContent = r; lastRemain = r; }
   }
@@ -3563,17 +3986,26 @@ const Media = (() => {
     $('np-play').classList.toggle('playing', !!state.playing);
     document.body.classList.toggle('np-paused', !state.playing);
     measureTitle();
-    renderProgress();
+    renderProgress(true);
   }
 
   function tick() {
-    if (!hasFile && state.playing && position() >= (state.np.duration || 1)) {
+    if (document.hidden || !state.playing) return;
+    if (!hasFile && position() >= (state.np.duration || 1)) {
       nextTrack();
       return;
     }
-    renderProgress();
-    if (state.playing) raf = requestAnimationFrame(tick);
-    else raf = 0;
+    if (!state.npOn || document.body.classList.contains('editing')) return;
+    renderProgress(false);
+  }
+
+  function startTicking() {
+    if (!tickTimer && state.playing) {
+      tickTimer = setInterval(tick, 140);
+    }
+  }
+  function stopTicking() {
+    if (tickTimer) { clearInterval(tickTimer); tickTimer = 0; }
   }
 
   function play() {
@@ -3582,7 +4014,7 @@ const Media = (() => {
     else demoStart = performance.now();
     save();
     render();
-    if (!raf) raf = requestAnimationFrame(tick);
+    startTicking();
     Island.pulse(state.np.title, '#30d158', 2000);
     if ('mediaSession' in navigator) {
       navigator.mediaSession.metadata = new MediaMetadata({ title: state.np.title, artist: state.np.artist });
@@ -3594,7 +4026,7 @@ const Media = (() => {
     else state.np.elapsed = Math.min(state.np.duration, position());
     save();
     render();
-    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    stopTicking();
   }
   function toggle() { state.playing ? pause() : play(); }
 
@@ -3659,7 +4091,7 @@ const Media = (() => {
     if (hasFile) audio.currentTime = t;
     state.np.elapsed = t;
     demoStart = performance.now();
-    renderProgress();
+    renderProgress(true);
     save();
   }
 
@@ -4297,11 +4729,18 @@ const Editor = (() => {
       });
       opEl.addEventListener('change', () => save());
     }
+    const perfDl = $('perf-download');
+    if (perfDl) perfDl.addEventListener('click', () => { PerfMonitor.downloadReport(); vib(8, 'pop'); });
+    const perfSh = $('perf-share');
+    if (perfSh) perfSh.addEventListener('click', () => { PerfMonitor.shareReport(); vib(8, 'pop'); });
+    const perfRst = $('perf-reset');
+    if (perfRst) perfRst.addEventListener('click', () => { PerfMonitor.reset(); vib(6, 'tick'); });
   }
 
   function open() {
     sheet.classList.add('open');
     document.body.classList.add('editing');
+    PerfMonitor.updateUI();
     vib(8, 'pop');
   }
   function close() {
@@ -4550,10 +4989,12 @@ window.Shortcuts = Shortcuts;
 window.Editor = Editor;
 window.Media = Media;
 window.AIDepth = AIDepth;
-window.appPause = () => save(true);
+window.PerfMonitor = PerfMonitor;
+window.appPause = () => { save(true); PerfMonitor.flushOnExit(); };
 
 /* Boot: load bundled fonts before caching initial glyph masks. */
 async function boot() {
+  const bootStart = performance.now();
   await Promise.all([
     document.fonts.load('400 128px "Bebas Neue"'),
     document.fonts.load('400 128px "Oswald"'),
@@ -4627,12 +5068,15 @@ async function boot() {
     if (!document.hidden) {
       Clock.schedule(false);
       renderTopline();
+      Media.render();
       scheduleMinuteTick();
     } else {
       save(true);
+      PerfMonitor.flushOnExit();
     }
   });
-  window.addEventListener('pagehide', () => save(true));
+  window.addEventListener('pagehide', () => { save(true); PerfMonitor.flushOnExit(); });
+  PerfMonitor.record('boot', performance.now() - bootStart);
 }
 
 boot();

@@ -2,7 +2,10 @@ package com.oclock.liquidglass;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.content.BroadcastReceiver;
+import android.content.ContentResolver;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -19,6 +22,8 @@ import android.net.Uri;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Debug;
+import android.os.Environment;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
@@ -53,7 +58,9 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.OutputStream;
 import java.nio.FloatBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -67,8 +74,10 @@ public class MainActivity extends Activity {
     private NativeGlass nativeGlass;
     private SubjectSegmenter subjectSegmenter;
     private final ExecutorService segmentExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService perfWriteExecutor = Executors.newSingleThreadExecutor();
     private final Map<String, byte[]> subjectResults = new ConcurrentHashMap<>();
     private ValueCallback<Uri[]> files;
+    private volatile byte[] pendingPerfBytes;
     private PermissionRequest camera;
     private volatile boolean awaitingExternalActivity;
     private volatile boolean pageReady;
@@ -629,6 +638,151 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void segmentSubject(String requestId, String dataUrl) {
             startSubjectSegmentation(requestId, dataUrl);
         }
+        @JavascriptInterface public String getPerfStats() {
+            return buildPerfStatsJson();
+        }
+        @JavascriptInterface public String savePerfReport(String filename, String content, boolean silent) {
+            return handleSavePerfReport(filename, content, silent);
+        }
+        @JavascriptInterface public boolean exportPerfFilePicker(String filename, String content) {
+            return launchPerfCreateDocument(filename, content);
+        }
+        @JavascriptInterface public boolean sharePerfReport(String filename, String content) {
+            return handleSharePerfReport(filename, content);
+        }
+    }
+
+    private String buildPerfStatsJson() {
+        JSONObject obj = new JSONObject();
+        try {
+            Debug.MemoryInfo mi = new Debug.MemoryInfo();
+            Debug.getMemoryInfo(mi);
+            obj.put("totalPssMB", Math.round(mi.getTotalPss() / 10.24) / 100.0);
+            obj.put("nativePssMB", Math.round(mi.nativePss / 10.24) / 100.0);
+            obj.put("dalvikPssMB", Math.round(mi.dalvikPss / 10.24) / 100.0);
+            obj.put("otherPssMB", Math.round(mi.otherPss / 10.24) / 100.0);
+            obj.put("nativeHeapMB", Math.round(Debug.getNativeHeapAllocatedSize() / 10485.76) / 100.0);
+            Runtime rt = Runtime.getRuntime();
+            obj.put("javaUsedMB", Math.round((rt.totalMemory() - rt.freeMemory()) / 10485.76) / 100.0);
+            obj.put("javaMaxMB", Math.round(rt.maxMemory() / 10485.76) / 100.0);
+            obj.put("cpuCores", rt.availableProcessors());
+            obj.put("sdk", Build.VERSION.SDK_INT);
+            obj.put("device", Build.MANUFACTURER + " " + Build.MODEL);
+            obj.put("nativeGlassCacheKB", nativeGlass != null ? Math.round(nativeGlass.getCacheBytes() / 1024.0) : 0);
+            ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            if (am != null) {
+                ActivityManager.MemoryInfo ami = new ActivityManager.MemoryInfo();
+                am.getMemoryInfo(ami);
+                obj.put("availRamMB", Math.round(ami.availMem / 1048576.0));
+                obj.put("totalRamMB", Math.round(ami.totalMem / 1048576.0));
+                obj.put("lowMemory", ami.lowMemory);
+            }
+        } catch (Throwable ignored) {}
+        return obj.toString();
+    }
+
+    private String handleSavePerfReport(String filename, String content, boolean silent) {
+        if (content == null || content.isEmpty()) return "ERROR:empty";
+        String safe = (filename == null || filename.isEmpty() ? "OClock-Perf.json" : filename)
+            .replaceAll("[^A-Za-z0-9._-]", "_");
+        if (!safe.endsWith(".json")) safe += ".json";
+        final String finalName = safe;
+        final byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+        if (Build.VERSION.SDK_INT >= 29) {
+            if (silent) {
+                perfWriteExecutor.execute(() -> {
+                    try { Api29Downloads.save(getApplicationContext(), finalName, bytes, true); }
+                    catch (Throwable ignored) {}
+                });
+                return "QUEUED:" + finalName;
+            }
+            try {
+                Uri saved = Api29Downloads.save(getApplicationContext(), finalName, bytes, false);
+                if (saved != null) return "DOWNLOADS:" + finalName;
+            } catch (Throwable ignored) {}
+        }
+        if (!silent && launchPerfCreateDocument(finalName, content)) {
+            return "PICKER:" + finalName;
+        }
+        return "UNAVAILABLE";
+    }
+
+    private boolean handleSharePerfReport(String filename, String content) {
+        if (content == null || content.isEmpty()) return false;
+        String safe = (filename == null || filename.isEmpty() ? "OClock-Perf.json" : filename)
+            .replaceAll("[^A-Za-z0-9._-]", "_");
+        if (!safe.endsWith(".json")) safe += ".json";
+        if (Build.VERSION.SDK_INT >= 29) {
+            try {
+                Uri uri = Api29Downloads.save(getApplicationContext(), safe, content.getBytes(StandardCharsets.UTF_8), false);
+                if (uri != null) {
+                    awaitingExternalActivity = true;
+                    Intent send = new Intent(Intent.ACTION_SEND);
+                    send.setType("application/json");
+                    send.putExtra(Intent.EXTRA_STREAM, uri);
+                    send.putExtra(Intent.EXTRA_SUBJECT, safe);
+                    send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivityForResult(Intent.createChooser(send, "مشاركة ملف تقرير الأداء"), 31);
+                    return true;
+                }
+            } catch (Throwable ignored) {
+                awaitingExternalActivity = false;
+            }
+        }
+        return launchPerfCreateDocument(safe, content);
+    }
+
+    private boolean launchPerfCreateDocument(String filename, String content) {
+        if (content == null || content.isEmpty()) return false;
+        String safe = (filename == null || filename.isEmpty() ? "OClock-Perf.json" : filename)
+            .replaceAll("[^A-Za-z0-9._-]", "_");
+        if (!safe.endsWith(".json")) safe += ".json";
+        pendingPerfBytes = content.getBytes(StandardCharsets.UTF_8);
+        awaitingExternalActivity = true;
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/json");
+        intent.putExtra(Intent.EXTRA_TITLE, safe);
+        try {
+            startActivityForResult(intent, 30);
+            return true;
+        } catch (android.content.ActivityNotFoundException e) {
+            awaitingExternalActivity = false;
+            pendingPerfBytes = null;
+            return false;
+        }
+    }
+
+    private static final class Api29Downloads {
+        @android.annotation.SuppressLint("NewApi")
+        static Uri save(Context ctx, String displayName, byte[] bytes, boolean replace) throws Exception {
+            ContentResolver cr = ctx.getContentResolver();
+            if (replace) {
+                try {
+                    cr.delete(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                        MediaStore.MediaColumns.DISPLAY_NAME + "=?", new String[]{ displayName });
+                } catch (Throwable ignored) {}
+            }
+            ContentValues cv = new ContentValues();
+            cv.put(MediaStore.MediaColumns.DISPLAY_NAME, displayName);
+            cv.put(MediaStore.MediaColumns.MIME_TYPE, "application/json");
+            cv.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+            cv.put(MediaStore.MediaColumns.IS_PENDING, 1);
+            Uri uri = cr.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+            if (uri == null) return null;
+            try (OutputStream os = cr.openOutputStream(uri)) {
+                if (os == null) throw new IllegalStateException("openOutputStream null");
+                os.write(bytes);
+                os.flush();
+            } catch (Throwable t) {
+                try { cr.delete(uri, null, null); } catch (Throwable ignored) {}
+                throw t;
+            }
+            ContentValues done = new ContentValues();
+            done.put(MediaStore.MediaColumns.IS_PENDING, 0);
+            cr.update(uri, done, null, null);
+            return uri;
+        }
     }
 
     private void handleBack() {
@@ -676,6 +830,24 @@ public class MainActivity extends Activity {
                 files.onReceiveValue(uris);
                 files = null;
             }
+        } else if (code == 30) {
+            awaitingExternalActivity = false;
+            byte[] bytes = pendingPerfBytes;
+            pendingPerfBytes = null;
+            if (result == RESULT_OK && data != null && data.getData() != null && bytes != null) {
+                Uri outUri = data.getData();
+                perfWriteExecutor.execute(() -> {
+                    try (OutputStream os = getContentResolver().openOutputStream(outUri)) {
+                        if (os != null) {
+                            os.write(bytes);
+                            os.flush();
+                            if (web != null) web.post(() -> web.evaluateJavascript("window.toast && window.toast('تم حفظ ملف تقرير الأداء')", null));
+                        }
+                    } catch (Throwable ignored) {}
+                });
+            }
+        } else if (code == 31) {
+            awaitingExternalActivity = false;
         }
     }
 
@@ -739,6 +911,7 @@ public class MainActivity extends Activity {
             subjectSegmenter = null;
         }
         segmentExecutor.shutdownNow();
+        perfWriteExecutor.shutdown();
         subjectResults.clear();
         if (nativeGlass != null) nativeGlass.close();
         if (web != null) web.destroy();

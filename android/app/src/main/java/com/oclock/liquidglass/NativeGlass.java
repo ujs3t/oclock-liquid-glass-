@@ -150,6 +150,10 @@ final class NativeGlass implements AutoCloseable {
         return response;
     }
 
+    synchronized int getCacheBytes() {
+        return imageBytes;
+    }
+
     @Override public void close() {
         closed = true;
         generation.incrementAndGet();

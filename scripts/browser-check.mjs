@@ -1,24 +1,27 @@
 import { chromium as playwright } from '@playwright/test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 const browser = await playwright.launch({headless:true});
 try {
   for (const [width,height,reducedMotion] of [[360,640,'no-preference'],[412,915,'no-preference'],[320,568,'reduce'],[800,360,'no-preference']]) {
-    const page=await browser.newPage({viewport:{width,height},isMobile:true,hasTouch:true,reducedMotion});
+    const page=await browser.newPage({viewport:{width,height},isMobile:true,hasTouch:true,reducedMotion,acceptDownloads:true});
     const errors=[]; page.on('pageerror',e=>errors.push(e.message));
     await page.route('https://api.open-meteo.com/**',route=>route.abort());
     await page.addInitScript(() => {
       Object.defineProperty(navigator,'deviceMemory',{get:()=>2});
       Object.defineProperty(navigator,'hardwareConcurrency',{get:()=>2});
       const RealDate = Date;
+      let offsetMs = 0;
       const baseFake = new RealDate(2026, 10, 25, 18, 16, 5, 0).getTime();
       const basePerf = performance.now();
       class FixedDate extends RealDate {
         constructor(...a) {
-          super(...(a.length ? a : [baseFake + (performance.now() - basePerf)]));
+          super(...(a.length ? a : [baseFake + offsetMs + (performance.now() - basePerf)]));
         }
-        static now() { return baseFake + (performance.now() - basePerf); }
+        static now() { return baseFake + offsetMs + (performance.now() - basePerf); }
       }
       window.Date = FixedDate;
+      window.__advanceClockMs = (ms) => { offsetMs += ms; };
     });
     await page.goto('http://localhost:5173');
     await page.waitForFunction(() => document.getElementById('clock-inner').style.backgroundImage.startsWith('url('), null, {timeout:20000});
@@ -67,6 +70,43 @@ try {
     await page.evaluate(()=>Clock.schedule(true));
     await page.waitForTimeout(600);
     assert.equal(await page.locator('#clock-inner').evaluate(el=>el.style.backgroundImage),before.rim,'unchanged rim is reused');
+    const tickCheck = await page.evaluate(async () => {
+      const glass = document.getElementById('clock-glass');
+      const glow = document.getElementById('clock-glow');
+      const beforeKey = glow.dataset.painted;
+      let minGlassOp = 1, minGlowOp = 1, sawEmptyMask = false, sawSwapping = false;
+      let active = true;
+      const sample = () => {
+        if (!active) return;
+        const gOp = parseFloat(getComputedStyle(glass).opacity || '1');
+        const glOp = parseFloat(getComputedStyle(glow).opacity || '1');
+        if (gOp < minGlassOp) minGlassOp = gOp;
+        if (glOp < minGlowOp) minGlowOp = glOp;
+        const m = glass.style.webkitMaskImage || glass.style.maskImage || '';
+        if (!m || m === 'none') sawEmptyMask = true;
+        if (document.body.classList.contains('swapping')) sawSwapping = true;
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+      window.__advanceClockMs(60 * 1000);
+      Clock.schedule(false);
+      await new Promise((res) => {
+        const deadline = performance.now() + 3000;
+        const wait = () => {
+          if (glow.dataset.painted !== beforeKey || performance.now() > deadline) { res(); return; }
+          setTimeout(wait, 25);
+        };
+        wait();
+      });
+      await new Promise((r) => setTimeout(r, 120));
+      active = false;
+      return { beforeKey, afterKey: glow.dataset.painted, minGlassOp, minGlowOp, sawEmptyMask, sawSwapping };
+    });
+    assert.equal(tickCheck.beforeKey, '18:16', 'initial minute is 18:16');
+    assert.equal(tickCheck.afterKey, '18:17', 'minute advances cleanly to 18:17');
+    assert.ok(tickCheck.minGlassOp >= 0.99 && tickCheck.minGlowOp >= 0.99, 'minute tick must never fade or hide clock digits');
+    assert.equal(tickCheck.sawEmptyMask, false, 'minute tick must never drop glyph mask');
+    assert.equal(tickCheck.sawSwapping, false, 'minute tick must never disable backdrop refraction');
     await page.setViewportSize({width:height,height:width});
     await page.waitForTimeout(1100);
     assert.deepEqual(await page.evaluate(()=>({sx:CONFIG.clock.sx,sy:CONFIG.clock.sy})),{sx:before.sx,sy:before.sy},'rotation preserves glyph proportions');
@@ -137,6 +177,17 @@ try {
     const enlarged=await page.locator('#clock-glass').boundingBox();
     assert.ok(enlarged.width<=before.screen+1,'enlarged clock stays in bounds');
     if (width===412) assert.ok(enlarged.width>before.width || enlarged.height>before.quality.textH,'size control really enlarges the clock');
+    const [dl] = await Promise.all([
+      page.waitForEvent('download'),
+      page.locator('#perf-download').click()
+    ]);
+    assert.match(dl.suggestedFilename(), /^oclock-perf-.*\.json$/);
+    const dlPath = await dl.path();
+    const perfJson = JSON.parse(readFileSync(dlPath, 'utf8'));
+    assert.equal(perfJson.schema, 'oclock.liquidglass.perf.v1');
+    assert.ok(perfJson.summary.fps.totalFrames > 0, 'PerfMonitor records continuous frames');
+    assert.ok(perfJson.summary.subsystems.clockTickSwap?.count >= 1, 'PerfMonitor records minute tick swap timing');
+    assert.ok(Array.isArray(perfJson.topConsumers) && perfJson.topConsumers.length > 0, 'PerfMonitor ranks top consumers');
     assert.equal(await page.evaluate(()=>window.appBack()),true);
     assert.equal(await page.evaluate(()=>window.appBack()),false);
     await page.locator('#sh-left').click();
