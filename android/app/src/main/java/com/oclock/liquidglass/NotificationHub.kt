@@ -236,8 +236,10 @@ class NotificationHub(private val context: Context) : OClockNotificationListener
         items.clear()
         items.add(LockNotification("sample_1", "com.snapchat.android", "Snapchat", "Snapchat", "2 إشعارات جديدة", now - 60_000L, 2, 0xFFFFFC00.toInt(), false, true))
         items.add(LockNotification("sample_2", "com.twitter.android", "X", "X", "إشعار جديد • متابعة النشاط", now - 17 * 60_000L, 1, 0xFFFFFFFF.toInt(), false, true))
-        items.add(LockNotification("sample_3", "com.android.dialer", "الهاتف", "الهاتف", "34 إشعارات ومكالمات", now - 3 * 3_600_000L, 34, 0xFF30D158.toInt(), false, true))
-        items.add(LockNotification("sample_4", "com.whatsapp", "WhatsApp", "WhatsApp • عمر", "التصميم الزجاجي يبدو رائعاً جداً!", now - 3 * 3_600_000L - 120_000L, 5, 0xFF25D366.toInt(), false, true))
+        items.add(LockNotification("sample_3", "com.whatsapp", "WhatsApp", "WhatsApp • عمر", "التصميم الزجاجي يبدو رائعاً جداً!", now - 42 * 60_000L, 5, 0xFF25D366.toInt(), false, true))
+        items.add(LockNotification("sample_4", "org.telegram.messenger", "Telegram", "Telegram", "تم إرسال صورة في القناة", now - 2 * 3_600_000L, 4, 0xFF38BDF8.toInt(), false, true))
+        items.add(LockNotification("sample_5", "com.android.dialer", "الهاتف", "الهاتف", "34 إشعارات ومكالمات", now - 3 * 3_600_000L, 34, 0xFF30D158.toInt(), false, true))
+        items.add(LockNotification("sample_6", "com.instagram.android", "Instagram", "Instagram", "أعجب بمنشورك وعلّق عليه", now - 5 * 3_600_000L, 2, 0xFFE1306C.toInt(), false, true))
         listener?.onNotificationsUpdated(getItems(), null, null)
     }
 
