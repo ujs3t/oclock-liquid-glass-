@@ -47,6 +47,19 @@ data class TrackInfo(
     val albumName: String = ""
 )
 
+data class LockNotification(
+    val id: String,
+    val packageName: String,
+    val appName: String,
+    val title: String,
+    val text: String,
+    val timestampMs: Long,
+    val count: Int = 1,
+    val accentColor: Int = 0xFF38BDF8.toInt(),
+    val isSystem: Boolean = false,
+    val isDismissible: Boolean = true
+)
+
 data class LockConfig(
     var wall: String = "angel",
     var hasCustomWall: Boolean = false,
@@ -69,6 +82,7 @@ data class LockConfig(
     var depth: Boolean = true,
     var weather: Boolean = true,
     var music: Boolean = true,
+    var notifications: Boolean = true,
     var dnd: Boolean = false
 ) {
     fun clamp() {
@@ -198,6 +212,7 @@ class StateStore(context: Context) {
             cfg.depth = j.optBoolean("depth", cfg.depth)
             cfg.weather = j.optBoolean("weather", cfg.weather)
             cfg.music = j.optBoolean("music", cfg.music)
+            cfg.notifications = j.optBoolean("notifications", cfg.notifications)
             cfg.dnd = j.optBoolean("dnd", cfg.dnd)
             cfg.clamp()
             cfg
@@ -230,6 +245,7 @@ class StateStore(context: Context) {
             put("depth", cfg.depth)
             put("weather", cfg.weather)
             put("music", cfg.music)
+            put("notifications", cfg.notifications)
             put("dnd", cfg.dnd)
         }
         prefs.edit().putString("config", j.toString()).apply()

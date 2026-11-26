@@ -116,6 +116,18 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(libKt.includes('مكتبة موسيقى الجهاز'));
   assert.ok(libKt.includes('OvershootInterpolator'));
 
+  const manifestXml = readFileSync('android/app/src/main/AndroidManifest.xml','utf8');
+  assert.ok(manifestXml.includes('BIND_NOTIFICATION_LISTENER_SERVICE'));
+  assert.ok(manifestXml.includes('OClockNotificationListenerService'));
+  const hubKt = readFileSync(ktDir + 'NotificationHub.kt','utf8');
+  assert.ok(hubKt.includes('NotificationListenerService'));
+  assert.ok(hubKt.includes('cancelById'));
+  const notifKt = readFileSync(ktDir + 'NotificationCenterView.kt','utf8');
+  assert.ok(notifKt.includes('dismissWithSpring'));
+  assert.ok(notifKt.includes('snapBackRubbery'));
+  assert.ok(notifKt.includes('nudgeFromMusic'));
+  assert.ok(notifKt.includes('LiquidGlassCardHelper'));
+
   const aiKt = readFileSync(ktDir + 'AIDepthManager.kt','utf8');
   assert.ok(aiKt.includes('SubjectSegmentation'));
 

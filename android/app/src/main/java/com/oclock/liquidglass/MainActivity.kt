@@ -104,6 +104,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private lateinit var subjectView: ImageView
     private lateinit var resizeOverlay: ClockResizeOverlayView
     private lateinit var npCard: NowPlayingCardView
+    private lateinit var notificationCenter: NotificationCenterView
     private lateinit var toplineRow: LinearLayout
     private lateinit var dateText: TextView
     private lateinit var wxText: TextView
@@ -121,6 +122,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private lateinit var toastView: TextView
 
     private lateinit var media: MediaController
+    private lateinit var notifHub: NotificationHub
     private var currentWallBmp: Bitmap? = null
     private var customWallBmp: Bitmap? = null
     private var customSubjectBmp: Bitmap? = null
@@ -129,6 +131,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
     private var safeTopPx = 0
     private var safeBottomPx = 0
+    private var npBaseTranslationY = 0f
     private var pullY = 0f
     private var pullAnimator: ValueAnimator? = null
     private var flashOn = false
@@ -193,6 +196,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         glyphRenderer = ClockGlyphRenderer(this)
         adaptive = AdaptiveTheme()
         aiDepth = AIDepthManager(this)
+        notifHub = NotificationHub(this)
 
         media = MediaController(this) { track, art, playing, pos, dur ->
             if (::npCard.isInitialized) {
@@ -212,6 +216,24 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
         buildUi()
         setContentView(rootFrame)
+
+        notifHub.setListener(object : NotificationHub.Listener {
+            override fun onNotificationsUpdated(items: List<LockNotification>, added: LockNotification?, removedId: String?) {
+                if (!::notificationCenter.isInitialized) return
+                notificationCenter.setNotifications(items, added, removedId)
+                updateMusicAndNotificationsLayout(animated = true)
+                if (added != null) {
+                    val icon = notifHub.getAppIcon(added.packageName, (18f * resources.displayMetrics.density).roundToInt())
+                    island.pulse("${added.appName}: ${added.text}", added.accentColor, 1850L, iconBmp = icon)
+                    if (cfg.music && npCard.visibility == View.VISIBLE) {
+                        npCard.animate().scaleX(0.974f).scaleY(0.974f).setDuration(110L).withEndAction {
+                            npCard.animate().scaleX(1f).scaleY(1f).setDuration(380L).setInterpolator(OvershootInterpolator(1.9f)).start()
+                        }.start()
+                    }
+                }
+            }
+        })
+        notificationCenter.setNotifications(notifHub.getItems(), null, null)
 
         if (Build.VERSION.SDK_INT >= 33) {
             backCallback = OnBackInvokedCallback { handleBackNavigation() }
@@ -290,6 +312,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             if (resizeOverlay.isOpen) {
                 resizeOverlay.post { resizeOverlay.layoutAroundClock() }
             }
+            updateMusicAndNotificationsLayout(animated = false)
             refreshAllGlass()
         }
         attachClockLongPressAndPull(clockView)
@@ -347,12 +370,21 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         // 5. Now Playing Glass Card (z = 4)
         npCard = NowPlayingCardView(
             this, backdrop, perf,
-            onPrev = { haptic("pop"); media.prev() },
+            onPrev = {
+                haptic("pop")
+                media.prev()
+                if (::notificationCenter.isInitialized) notificationCenter.nudgeFromMusic()
+            },
             onPlayToggle = {
                 haptic("pop")
                 media.togglePlay()
+                if (::notificationCenter.isInitialized) notificationCenter.nudgeFromMusic()
             },
-            onNext = { haptic("pop"); media.next() },
+            onNext = {
+                haptic("pop")
+                media.next()
+                if (::notificationCenter.isInitialized) notificationCenter.nudgeFromMusic()
+            },
             onScrub = { ratio -> media.seekRatio(ratio) },
             onFavorite = {
                 haptic("pop")
@@ -377,6 +409,43 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             }
         }
         phoneShell.addView(npCard)
+
+        // 5b. Liquid Glass Notification Center (z = 4)
+        notificationCenter = NotificationCenterView(
+            this,
+            notifHub,
+            backdrop,
+            perf,
+            getRootShell = { phoneShell },
+            onDismissNotification = { item ->
+                notifHub.dismiss(item.id)
+            },
+            onClearAll = {
+                notifHub.clearAll()
+                island.pulse("تم مسح الإشعارات", 0xFF38BDF8.toInt(), 1300L)
+            },
+            onCardTapped = { item ->
+                if (!notifHub.openNotification(item)) {
+                    island.pulse("${item.appName}: ${item.text}", item.accentColor, 1800L)
+                }
+            },
+            onRequestAccess = {
+                notifHub.openNotificationSettings()
+                showToast("فعّل إشعارات OClock زجاج من القائمة")
+            },
+            onStackModeToggled = {
+                updateMusicAndNotificationsLayout(animated = true)
+            },
+            onDragMusicCoupling = { dyPx ->
+                if (cfg.music && npCard.visibility == View.VISIBLE) {
+                    npCard.translationY = npBaseTranslationY + pullY * 0.6f + dyPx
+                }
+            },
+            onHaptic = { k -> haptic(k) }
+        ).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+        }
+        phoneShell.addView(notificationCenter)
 
         // 6. Topline (Date + Weather) (z = 5)
         toplineRow = LinearLayout(this).apply {
@@ -639,9 +708,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
         val npLp = npCard.layoutParams as FrameLayout.LayoutParams
         if (isShortLandscape) {
-            npLp.width = min((356f * dens).roundToInt(), (resources.displayMetrics.widthPixels * 0.56f).roundToInt())
+            npLp.width = min((330f * dens).roundToInt(), (resources.displayMetrics.widthPixels * 0.45f).roundToInt())
             npLp.gravity = Gravity.BOTTOM or Gravity.LEFT
-            npLp.bottomMargin = safeBottomPx + (24f * dens).roundToInt()
+            npLp.bottomMargin = safeBottomPx + (20f * dens).roundToInt()
         } else {
             val availW = max(1, phoneShell.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels)
             npLp.width = min((400f * dens).roundToInt(), availW - (28f * dens).roundToInt())
@@ -654,7 +723,104 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         (homeBar.layoutParams as FrameLayout.LayoutParams).bottomMargin = safeBottomPx + (7f * dens).roundToInt()
         (toastView.layoutParams as FrameLayout.LayoutParams).topMargin = safeTopPx + (52f * dens).roundToInt()
         musicLibraryOverlay.applySafeInsets(safeTopPx, safeBottomPx)
+        updateMusicAndNotificationsLayout(animated = false)
         phoneShell.requestLayout()
+    }
+
+    private fun updateMusicAndNotificationsLayout(animated: Boolean) {
+        if (!::notificationCenter.isInitialized || !::npCard.isInitialized) return
+        val dens = resources.displayMetrics.density
+        val isShortLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE &&
+                (resources.displayMetrics.heightPixels / dens) < 560f
+        val shellW = phoneShell.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
+        val shellH = phoneShell.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels
+
+        val items = notifHub.getItems()
+        val showNotifs = cfg.notifications && items.isNotEmpty()
+        val ncLp = notificationCenter.layoutParams as FrameLayout.LayoutParams
+
+        if (isShortLandscape) {
+            npBaseTranslationY = 0f
+            npCard.animate().cancel()
+            npCard.translationY = pullY * 0.6f
+            ncLp.width = min((340f * dens).roundToInt(), (shellW * 0.46f).roundToInt())
+            ncLp.gravity = Gravity.BOTTOM or Gravity.RIGHT
+            ncLp.topMargin = 0
+            ncLp.rightMargin = (14f * dens).roundToInt()
+            ncLp.leftMargin = 0
+            ncLp.bottomMargin = safeBottomPx + (18f * dens).roundToInt()
+            notificationCenter.layoutParams = ncLp
+            notificationCenter.setMaxListHeightPx(max((90f * dens).roundToInt(), shellH - safeTopPx - safeBottomPx - (100f * dens).roundToInt()))
+            return
+        }
+
+        val cardW = min((400f * dens).roundToInt(), max(220, shellW - (28f * dens).roundToInt()))
+        val shortcutsReserve = safeBottomPx + (90f * dens).roundToInt()
+        val npBaseBottom = safeBottomPx + (122f * dens).roundToInt()
+        val clockBot = (clockContainer.y + clockContainer.height).takeIf { clockContainer.height > 0 }?.roundToInt()
+            ?: (safeTopPx + (268f * dens).roundToInt())
+        val npH = npCard.height.takeIf { it > 0 } ?: (148f * dens).roundToInt()
+        val headerH = (44f * dens).roundToInt()
+
+        if (!showNotifs) {
+            npBaseTranslationY = 0f
+            if (animated) {
+                npCard.animate().cancel()
+                npCard.animate()
+                    .translationY(pullY * 0.6f)
+                    .setDuration(460L)
+                    .setInterpolator(OvershootInterpolator(1.25f))
+                    .start()
+            } else {
+                npCard.translationY = pullY * 0.6f
+            }
+            return
+        }
+
+        val desiredListH = if (notificationCenter.stackedCollapsed) {
+            (108f * dens).roundToInt()
+        } else {
+            min((270f * dens).roundToInt(), (items.size * 72f * dens).roundToInt())
+        }
+        val desiredTotalNotifH = headerH + desiredListH
+
+        val targetNpBottom = if (cfg.music) {
+            val maxNpBottom = max(npBaseBottom, shellH - clockBot - npH - (12f * dens).roundToInt())
+            val idealNpBottom = shortcutsReserve + desiredTotalNotifH + (12f * dens).roundToInt()
+            min(maxNpBottom, max(npBaseBottom, idealNpBottom))
+        } else {
+            npBaseBottom
+        }
+
+        val liftPx = (targetNpBottom - npBaseBottom).toFloat()
+        npBaseTranslationY = -liftPx
+
+        if (animated) {
+            npCard.animate().cancel()
+            npCard.animate()
+                .translationY(npBaseTranslationY + pullY * 0.6f)
+                .setDuration(460L)
+                .setInterpolator(OvershootInterpolator(1.22f))
+                .start()
+        } else {
+            npCard.translationY = npBaseTranslationY + pullY * 0.6f
+        }
+
+        val notifTop = if (cfg.music) {
+            (shellH - targetNpBottom) + (10f * dens).roundToInt()
+        } else {
+            max(clockBot + (14f * dens).roundToInt(), shellH - shortcutsReserve - desiredTotalNotifH)
+        }
+        val availNotifH = max((98f * dens).roundToInt(), (shellH - shortcutsReserve) - notifTop)
+
+        ncLp.width = cardW
+        ncLp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        ncLp.leftMargin = 0
+        ncLp.rightMargin = 0
+        ncLp.bottomMargin = 0
+        ncLp.topMargin = notifTop
+        notificationCenter.layoutParams = ncLp
+        notificationCenter.setMaxListHeightPx(max((54f * dens).roundToInt(), availNotifH - headerH))
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -796,7 +962,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         clockContainer.translationY = yPx
         clockView.pullOffsetYPx = yPx
         toplineRow.translationY = yPx
-        npCard.translationY = yPx * 0.6f
+        npCard.translationY = npBaseTranslationY + yPx * 0.6f
+        if (::notificationCenter.isInitialized) notificationCenter.translationY = yPx * 0.52f
         bottomRow.translationY = yPx * 0.4f
 
         backdrop.updateZoomOnly(phoneShell.width, phoneShell.height, zoom)
@@ -852,6 +1019,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         (homeBar.background as? GradientDrawable)?.setColor(cols.uiInk)
         statusBar.applyTheme(cols.uiInk, cfg.dnd)
         npCard.applyTheme(cols.uiInk, cols.uiDim, cols.glassBg)
+        if (::notificationCenter.isInitialized) notificationCenter.applyTheme(cols.uiInk, cols.uiDim, cols.glassBg)
         dndPill.applyTheme(cols.uiInk, cols.glassBg)
         shLeft.uiInk = cols.uiInk; shLeft.glassBg = cols.glassBg; shLeft.invalidate()
         shRight.uiInk = cols.uiInk; shRight.glassBg = cols.glassBg; shRight.invalidate()
@@ -864,6 +1032,14 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private fun applyToggles() {
         wxText.visibility = if (cfg.weather) View.VISIBLE else View.GONE
         npCard.visibility = if (cfg.music) View.VISIBLE else View.GONE
+        if (::notificationCenter.isInitialized) {
+            if (!cfg.notifications) {
+                notificationCenter.visibility = View.GONE
+            } else {
+                notificationCenter.setNotifications(notifHub.getItems(), null, null)
+            }
+            updateMusicAndNotificationsLayout(animated = true)
+        }
         dndPill.visibility = if (cfg.dnd) View.VISIBLE else View.GONE
         subjectView.visibility = if (cfg.depth && customSubjectBmp != null) View.VISIBLE else View.GONE
         statusBar.applyTheme(currentColors?.uiInk ?: Color.WHITE, cfg.dnd)
@@ -872,6 +1048,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private fun refreshAllGlass() {
         clockView.invalidate()
         npCard.invalidate()
+        if (::notificationCenter.isInitialized) notificationCenter.invalidateCards()
         dndPill.invalidate()
         shLeft.invalidate()
         shRight.invalidate()
@@ -882,7 +1059,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val hostW = (phoneShell.width / dens).coerceAtLeast(320f)
         val hostH = (phoneShell.height / dens).coerceAtLeast(480f)
         val topSafe = ((toplineRow.y + toplineRow.height) / dens) + 10f
-        val obstacleTop = if (cfg.music && npCard.y > 0f) npCard.y / dens else if (bottomRow.y > 0f) bottomRow.y / dens else (hostH - 180f)
+        val obstacleTop = if (cfg.music && npCard.top > 0) npCard.top / dens else if (bottomRow.y > 0f) bottomRow.y / dens else (hostH - 180f)
         val maxW = max(140f, hostW - 16f - 36f)
         val maxH = max(96f, min(obstacleTop - topSafe - 12f, hostH * 0.78f))
         return maxW to maxH
@@ -891,7 +1068,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private fun scheduleClockRender(force: Boolean) {
         val dens = resources.displayMetrics.density
         val hostW = (phoneShell.width / dens).takeIf { it > 100f } ?: (resources.displayMetrics.widthPixels / dens)
-        val obstacleTop = if (cfg.music && npCard.y > 0f) npCard.y else (phoneShell.height - (180f * dens))
+        val obstacleTop = if (cfg.music && npCard.top > 0) npCard.top.toFloat() else (phoneShell.height - (180f * dens))
         val layerTop = clockContainer.y
         val availH = ((obstacleTop - layerTop) / dens).coerceIn(96f, (resources.displayMetrics.heightPixels / dens) * 0.78f)
         clockView.scheduleRender(cfg, hostW, availH, force)
@@ -1266,6 +1443,28 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         haptic("tick")
     }
 
+    override fun onToggleNotifications() {
+        cfg.notifications = !cfg.notifications
+        store.save(cfg)
+        applyToggles()
+        haptic("tick")
+    }
+
+    override fun onTestNotification() {
+        haptic("pop")
+        if (!cfg.notifications) {
+            cfg.notifications = true
+            store.save(cfg)
+        }
+        notifHub.addSampleNotification()
+    }
+
+    override fun onOpenNotificationAccess() {
+        haptic("pop")
+        notifHub.openNotificationSettings()
+        showToast("فعّل صلاحية إشعارات OClock زجاج")
+    }
+
     override fun onToggleDepth() {
         cfg.depth = !cfg.depth
         store.save(cfg)
@@ -1341,6 +1540,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         if (musicLibraryOverlay.isOpen) {
             musicLibraryOverlay.onPermissionResult(media.hasAudioPermission())
         }
+        notifHub.refreshFromSystem()
+        if (::notificationCenter.isInitialized) notificationCenter.refreshPermissionBadge()
         updateDateLabel()
         scheduleClockRender(force = false)
         scheduleMinuteTicker()
@@ -1370,6 +1571,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         cameraOverlay.close()
         clockView.shutdown()
         media.shutdown()
+        notifHub.shutdown()
         aiDepth.shutdown()
         perf.shutdown()
         bgExecutor.shutdownNow()
