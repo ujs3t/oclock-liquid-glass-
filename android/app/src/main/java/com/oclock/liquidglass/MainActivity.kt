@@ -805,7 +805,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             npCard.isFocusable = true
             if (cfg.music) {
                 val npNaturalTop = shellH - npBaseBottom - npH
-                val overlap = clockNaturalBot - (npNaturalTop - (12f * dens).roundToInt())
+                val overlap = (clockNaturalBot - (npNaturalTop - (12f * dens).roundToInt())).toFloat()
                 if (overlap > 0f) {
                     targetClockRest = -min(overlap, maxUpLift)
                 }
