@@ -10,6 +10,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.SystemClock
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
@@ -50,7 +51,7 @@ class NotificationCenterView(
     private val dens = resources.displayMetrics.density
     private val containerCol: LinearLayout
     private val headerRow: LinearLayout
-    private val headerTitle: TextView
+    private val headerSpacer: View
     private val accessPill: TextView
     private val clearBtn: GlassClearCircleButton
     private val scrollView: RubberScrollView
@@ -60,6 +61,12 @@ class NotificationCenterView(
 
     private val cardViews = HashMap<String, NotificationCardRow>()
     private var currentItems: List<LockNotification> = emptyList()
+    private val targetItems = ArrayList<LockNotification>()
+    private var lastBurstRevealMs = 0L
+    private val burstDelayMs = 185L
+    private var burstPending = false
+    private val burstRunnable = Runnable { processNextBurstReveal() }
+    var onDisplayedCountChanged: (() -> Unit)? = null
 
     var expandFrac = 0f
         private set
@@ -100,27 +107,42 @@ class NotificationCenterView(
             layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
         }
 
-        // Header Row: "Notification Center" + Circular "X" clear button
+        // Compact Header Row: Optional Permission Pill + Flexible Swipe Spacer + Circular "X" clear button
         headerRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             clipChildren = false
             clipToPadding = false
-            setPadding((4f * dens).roundToInt(), 0, (4f * dens).roundToInt(), (5f * dens).roundToInt())
+            setPadding((2f * dens).roundToInt(), 0, (2f * dens).roundToInt(), (5f * dens).roundToInt())
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
         }
 
-        headerTitle = TextView(context).apply {
-            text = "Notification Center"
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
-            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
-            isSingleLine = true
-            ellipsize = TextUtils.TruncateAt.END
-            setShadowLayer(8f * dens, 0f, 1.5f * dens, Color.argb(92, 0, 0, 0))
-            layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginEnd = (6f * dens).roundToInt()
+        accessPill = TextView(context).apply {
+            text = "تفعيل إشعارات الهاتف الحقيقية"
+            setTextColor(Color.argb(236, 255, 255, 255))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setPadding((11f * dens).roundToInt(), (4f * dens).roundToInt(), (11f * dens).roundToInt(), (4f * dens).roundToInt())
+            background = GradientDrawable().apply {
+                setColor(Color.argb(56, 18, 22, 32))
+                cornerRadius = 999f
+                setStroke((0.85f * dens).roundToInt(), Color.argb(85, 255, 255, 255))
             }
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+                marginEnd = (8f * dens).roundToInt()
+            }
+            setOnClickListener { v ->
+                onHaptic("pop")
+                v.animate().cancel()
+                v.scaleX = 0.90f; v.scaleY = 0.90f
+                v.animate().scaleX(1f).scaleY(1f).setDuration(320L).setInterpolator(OvershootInterpolator(1.8f)).start()
+                onRequestAccess()
+            }
+        }
+
+        headerSpacer = View(context).apply {
+            layoutParams = LinearLayout.LayoutParams(0, (34f * dens).roundToInt(), 1f)
             var hDownX = 0f
             var hDownY = 0f
             var hLastY = 0f
@@ -184,12 +206,6 @@ class NotificationCenterView(
                         val netDy = ev.rawY - hDownY
                         if (canExp && (hDragging || (-vy > 110f * dens && -netDy > 6f * dens) || (vy > 110f * dens && netDy > 6f * dens))) {
                             settleExpandProgress(hStartExp, expandFrac, netDy, vy)
-                        } else if (ev.actionMasked == MotionEvent.ACTION_UP &&
-                            abs(ev.rawX - hDownX) < hSlop && abs(netDy) < hSlop &&
-                            currentItems.size > 1 && restingOffsetPx > 14f * dens
-                        ) {
-                            onHaptic("pop")
-                            if (expandFrac > 0.45f) collapseScrollIfExpanded() else animateExpandTo(1f)
                         } else if (canExp && expandFrac > 0.002f && expandFrac < 0.995f) {
                             settleExpandProgress(hStartExp, expandFrac, netDy, vy)
                         }
@@ -201,31 +217,6 @@ class NotificationCenterView(
             }
         }
 
-        accessPill = TextView(context).apply {
-            text = "تفعيل إشعارات الهاتف الحقيقية"
-            setTextColor(Color.argb(236, 255, 255, 255))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-            gravity = Gravity.CENTER
-            setPadding((11f * dens).roundToInt(), (3.5f * dens).roundToInt(), (11f * dens).roundToInt(), (3.5f * dens).roundToInt())
-            background = GradientDrawable().apply {
-                setColor(Color.argb(56, 18, 22, 32))
-                cornerRadius = 999f
-                setStroke((0.85f * dens).roundToInt(), Color.argb(85, 255, 255, 255))
-            }
-            layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
-                gravity = Gravity.START
-                bottomMargin = (5f * dens).roundToInt()
-            }
-            setOnClickListener { v ->
-                onHaptic("pop")
-                v.animate().cancel()
-                v.scaleX = 0.90f; v.scaleY = 0.90f
-                v.animate().scaleX(1f).scaleY(1f).setDuration(320L).setInterpolator(OvershootInterpolator(1.8f)).start()
-                onRequestAccess()
-            }
-        }
-
         val btnSz = (34f * dens).roundToInt()
         clearBtn = GlassClearCircleButton(context, backdrop, perf, getRootShell) {
             onHaptic("pop")
@@ -234,7 +225,8 @@ class NotificationCenterView(
             layoutParams = LinearLayout.LayoutParams(btnSz, btnSz)
         }
 
-        headerRow.addView(headerTitle)
+        headerRow.addView(accessPill)
+        headerRow.addView(headerSpacer)
         headerRow.addView(clearBtn)
 
         scrollView = RubberScrollView(context).apply {
@@ -289,13 +281,14 @@ class NotificationCenterView(
         }
 
         containerCol.addView(headerRow)
-        containerCol.addView(accessPill)
         containerCol.addView(scrollView)
         addView(containerCol)
         addView(moreHintPill)
         addView(dismissLayer)
         refreshPermissionBadge()
     }
+
+    fun displayedCount(): Int = currentItems.size
 
     fun configureLayoutBounds(
         expandedTopPx: Int,
@@ -345,11 +338,7 @@ class NotificationCenterView(
     }
 
     private fun headerHeightEstimatePx(): Int {
-        val h = headerRow.height.takeIf { it > 0 } ?: (44f * dens).roundToInt()
-        val acc = if (accessPill.visibility == VISIBLE) {
-            accessPill.height.takeIf { it > 0 } ?: (32f * dens).roundToInt()
-        } else 0
-        return h + acc
+        return headerRow.height.takeIf { it > 0 } ?: (40f * dens).roundToInt()
     }
 
     private fun applyExpandProgress(frac: Float) {
@@ -416,7 +405,6 @@ class NotificationCenterView(
         uiInk = ink
         uiDim = dim
         glassBg = gBg
-        headerTitle.setTextColor(ink)
         clearBtn.uiInk = ink
         clearBtn.glassBg = gBg
         clearBtn.invalidate()
@@ -620,23 +608,12 @@ class NotificationCenterView(
 
     fun setNotifications(items: List<LockNotification>, added: LockNotification?, removedId: String?) {
         refreshPermissionBadge()
-
-        if (added == null && removedId == null && visibility == VISIBLE &&
-            items.size == currentItems.size && items.isNotEmpty() &&
-            items.indices.all { items[it].id == currentItems[it].id && items[it].count == currentItems[it].count }
-        ) {
-            currentItems = items
-            for (item in items) {
-                cardViews[item.id]?.bind(item, hub)
-            }
-            updateMoreHintPill()
-            return
-        }
-
-        val prevCount = currentItems.size
-        currentItems = items
+        targetItems.clear()
+        targetItems.addAll(items)
 
         if (items.isEmpty()) {
+            removeCallbacks(burstRunnable)
+            burstPending = false
             expandFrac = 0f
             swipePeekAnim?.cancel()
             deckPromoteAnim?.cancel()
@@ -649,22 +626,24 @@ class NotificationCenterView(
             expandGapStartIdx = Int.MAX_VALUE
             onScrollExpandChanged(0f)
             moreHintPill.visibility = GONE
+            currentItems = emptyList()
             cardViews.clear()
             listCol.removeAllViews()
             if (visibility == VISIBLE) {
                 hidingOnEmpty = true
+                val baseTy = restingOffsetPx * (1f - expandFrac)
                 containerCol.animate().cancel()
                 containerCol.animate()
                     .alpha(0f)
-                    .translationY(16f * dens)
+                    .translationY(baseTy + 18f * dens)
                     .scaleX(0.95f)
                     .scaleY(0.95f)
-                    .setDuration(260L)
+                    .setDuration(240L)
                     .setInterpolator(iosEase)
                     .withEndAction {
                         hidingOnEmpty = false
                         if (currentItems.isEmpty()) {
-                            containerCol.translationY = 0f
+                            containerCol.translationY = restingOffsetPx * (1f - expandFrac)
                             containerCol.scaleX = 1f
                             containerCol.scaleY = 1f
                             containerCol.alpha = 1f
@@ -676,6 +655,107 @@ class NotificationCenterView(
             return
         }
 
+        // Remove dismissed/missing rows immediately from displayed set
+        val nextIdSet = items.mapTo(HashSet()) { it.id }
+        val filteredDisplayed = ArrayList<LockNotification>(items.size)
+        for (item in items) {
+            if (currentItems.any { it.id == item.id } && item.id != removedId) {
+                filteredDisplayed.add(item)
+            }
+        }
+        if (removedId != null) {
+            cardViews.remove(removedId)?.let { row ->
+                if (!row.isDismissing) listCol.removeView(row)
+            }
+        }
+        for (id in cardViews.keys.toList()) {
+            if (id !in nextIdSet) {
+                cardViews.remove(id)?.let { row ->
+                    if (!row.isDismissing) listCol.removeView(row)
+                }
+            }
+        }
+
+        val pendingNew = items.filter { item -> filteredDisplayed.none { it.id == item.id } }
+
+        // Initial seed / unhidden restore with multiple existing cards -> show together with gentle slot-staggered reveal
+        if (added == null && filteredDisplayed.isEmpty() && pendingNew.size > 1) {
+            removeCallbacks(burstRunnable)
+            burstPending = false
+            lastBurstRevealMs = SystemClock.uptimeMillis()
+            commitDisplayedList(items, animateAddedId = null, seedEntrance = true)
+            return
+        }
+
+        if (pendingNew.isNotEmpty()) {
+            val now = SystemClock.uptimeMillis()
+            val elapsed = now - lastBurstRevealMs
+            if (filteredDisplayed.isEmpty() || elapsed >= burstDelayMs) {
+                removeCallbacks(burstRunnable)
+                burstPending = false
+                val nextReveal = if (pendingNew.size > 1) pendingNew.last() else pendingNew.first()
+                val revealIds = filteredDisplayed.mapTo(HashSet()) { it.id }.apply { add(nextReveal.id) }
+                val nextDisplay = items.filter { it.id in revealIds }
+                lastBurstRevealMs = now
+                commitDisplayedList(nextDisplay, animateAddedId = nextReveal.id, seedEntrance = false)
+                if (pendingNew.size > 1) {
+                    burstPending = true
+                    postDelayed(burstRunnable, burstDelayMs)
+                }
+            } else {
+                // Rebind already-visible rows while waiting cleanly for the next one-after-another entrance slot
+                commitDisplayedList(filteredDisplayed, animateAddedId = null, seedEntrance = false)
+                if (!burstPending) {
+                    burstPending = true
+                    val waitMs = (burstDelayMs - elapsed).coerceIn(45L, burstDelayMs)
+                    postDelayed(burstRunnable, waitMs)
+                }
+            }
+            return
+        }
+
+        commitDisplayedList(items, animateAddedId = null, seedEntrance = false)
+    }
+
+    private fun processNextBurstReveal() {
+        burstPending = false
+        if (targetItems.isEmpty()) return
+        val existingIds = currentItems.mapTo(HashSet()) { it.id }
+        val pendingNew = targetItems.filter { it.id !in existingIds }
+        if (pendingNew.isEmpty()) return
+
+        val nextReveal = if (pendingNew.size > 1) pendingNew.last() else pendingNew.first()
+        val revealIds = HashSet(existingIds).apply { add(nextReveal.id) }
+        val nextDisplay = targetItems.filter { it.id in revealIds }
+        lastBurstRevealMs = SystemClock.uptimeMillis()
+        commitDisplayedList(nextDisplay, animateAddedId = nextReveal.id, seedEntrance = false)
+        onDisplayedCountChanged?.invoke()
+        if (pendingNew.size > 1) {
+            burstPending = true
+            postDelayed(burstRunnable, burstDelayMs)
+        }
+    }
+
+    private fun commitDisplayedList(
+        displayItems: List<LockNotification>,
+        animateAddedId: String?,
+        seedEntrance: Boolean
+    ) {
+        if (animateAddedId == null && !seedEntrance && visibility == VISIBLE && !hidingOnEmpty &&
+            displayItems.size == currentItems.size && displayItems.isNotEmpty() &&
+            displayItems.indices.all { displayItems[it].id == currentItems[it].id && displayItems[it].count == currentItems[it].count }
+        ) {
+            currentItems = displayItems
+            for (item in displayItems) {
+                cardViews[item.id]?.bind(item, hub)
+            }
+            updateMoreHintPill()
+            return
+        }
+
+        val prevCount = currentItems.size
+        currentItems = displayItems
+
         if (visibility != VISIBLE || prevCount == 0 || hidingOnEmpty) {
             hidingOnEmpty = false
             visibility = VISIBLE
@@ -686,7 +766,7 @@ class NotificationCenterView(
             containerCol.translationY = restingOffsetPx * (1f - expandFrac)
             animate().cancel()
             alpha = 0f
-            translationY = 20f * dens
+            translationY = 26f * dens
             scaleX = 0.94f
             scaleY = 0.94f
             animate()
@@ -694,21 +774,58 @@ class NotificationCenterView(
                 .translationY(0f)
                 .scaleX(1f)
                 .scaleY(1f)
-                .setDuration(460L)
-                .setInterpolator(OvershootInterpolator(1.3f))
+                .setDuration(420L)
+                .setInterpolator(OvershootInterpolator(1.22f))
                 .withEndAction(null)
                 .start()
         }
 
-        if (removedId != null) {
-            cardViews.remove(removedId)?.let { row ->
-                if (!row.isDismissing) {
-                    listCol.removeView(row)
+        val addedIndex = if (animateAddedId != null) displayItems.indexOfFirst { it.id == animateAddedId } else -1
+        if (animateAddedId != null && prevCount > 0 && addedIndex == 0 && !isLandscapeCompact) {
+            if (expandFrac < 0.35f) {
+                deckPromoteAnim?.cancel()
+                val startShift = (-1f + min(0f, deckShift)).coerceAtLeast(-2.0f)
+                deckShift = startShift
+                deckPromoteAnim = ValueAnimator.ofFloat(startShift, 0f).apply {
+                    duration = 380L
+                    interpolator = iosEase
+                    addUpdateListener { a ->
+                        deckShift = a.animatedValue as Float
+                        updateCard3DAndPeek()
+                    }
+                    addListener(object : AnimatorListenerAdapter() {
+                        override fun onAnimationEnd(animation: Animator) {
+                            deckShift = 0f
+                            updateCard3DAndPeek()
+                        }
+                    })
+                    start()
+                }
+            } else {
+                expandGapAnim?.cancel()
+                val firstExistingH = ((listCol.getChildAt(0) as? NotificationCardRow)?.cardHeightEstimate() ?: (68f * dens)) + 8f * dens
+                expandGapStartIdx = 1
+                expandGapShift = -firstExistingH
+                expandGapAnim = ValueAnimator.ofFloat(-firstExistingH, 0f).apply {
+                    duration = 360L
+                    interpolator = iosEase
+                    addUpdateListener { a ->
+                        expandGapShift = a.animatedValue as Float
+                        updateCard3DAndPeek()
+                    }
+                    addListener(object : AnimatorListenerAdapter() {
+                        override fun onAnimationEnd(animation: Animator) {
+                            expandGapShift = 0f
+                            expandGapStartIdx = Int.MAX_VALUE
+                            updateCard3DAndPeek()
+                        }
+                    })
+                    start()
                 }
             }
         }
 
-        val nextIds = items.map { it.id }.toSet()
+        val nextIds = displayItems.mapTo(HashSet()) { it.id }
         for (id in cardViews.keys.toList()) {
             if (id !in nextIds) {
                 cardViews.remove(id)?.let { row ->
@@ -721,7 +838,7 @@ class NotificationCenterView(
         listCol.removeAllViews()
         cardViews.clear()
 
-        for ((index, item) in items.withIndex()) {
+        for ((index, item) in displayItems.withIndex()) {
             val row = existingById[item.id]?.also { it.bind(item, hub) }
                 ?: NotificationCardRow(
                     context = context,
@@ -744,6 +861,9 @@ class NotificationCenterView(
                     onPressCancelled = {
                         post { updateCard3DAndPeek() }
                     },
+                    onEntranceFrame = {
+                        updateCard3DAndPeek()
+                    },
                     onHaptic = onHaptic
                 ).apply {
                     bind(item, hub)
@@ -751,19 +871,17 @@ class NotificationCenterView(
                 }
 
             row.visibility = VISIBLE
-            row.translationZ = max(0, 36 - index) * 0.45f * dens
             cardViews[item.id] = row
             listCol.addView(row)
 
-            if (added != null && item.id == added.id) {
+            if (animateAddedId != null && item.id == animateAddedId) {
                 row.playEntrance3D(delayMs = 0L)
-            } else if (added != null && index > 0) {
-                row.playShiftDown()
-            } else if (prevCount == 0 && index < 3) {
-                row.playEntrance3D(delayMs = (index * 48L).coerceAtMost(144L))
+            } else if ((seedEntrance || prevCount == 0) && index < 3) {
+                row.playEntrance3D(delayMs = (index * 85L).coerceAtMost(170L))
             }
         }
 
+        updateCard3DAndPeek()
         post {
             updateCard3DAndPeek()
             updateMoreHintPill()
@@ -849,9 +967,9 @@ class NotificationCenterView(
 
         for (i in 0 until count) {
             val row = listCol.getChildAt(i) as? NotificationCardRow ?: continue
-            if (row.isDismissing || row.isDragging || row.isEntranceRunning) continue
+            if (row.isDismissing || row.isDragging) continue
 
-            // Continuous C1 slot evaluation: handles rest stacking, live swipe-peek advance, smooth promotion, and unfolding!
+            // Continuous C1 slot evaluation: handles rest stacking, live swipe-peek advance, smooth promotion/demotion, and unfolding!
             var restSc = 1f
             var restTy = 0f
             var restRx = 0f
@@ -862,7 +980,11 @@ class NotificationCenterView(
             if (!isLandscapeCompact) {
                 val swipeBoost = if (activeSwipeIndex in 0 until i && expandFrac < 0.35f) swipePeekAdvance else 0f
                 val effSlot = if (expandFrac < 0.35f) {
-                    val base = i.toFloat() + deckShift - swipeBoost
+                    val shifted = when {
+                        deckShift < -0.001f -> if (i == 0) 0f else max(0f, i.toFloat() + deckShift)
+                        else -> i.toFloat() + deckShift
+                    }
+                    val base = shifted - swipeBoost
                     if (activeSwipeIndex >= 0 && i > activeSwipeIndex) max(activeSwipeIndex.toFloat(), base) else base
                 } else {
                     i.toFloat()
@@ -910,7 +1032,7 @@ class NotificationCenterView(
                     restZ = 18f * dens
                 }
 
-                if (expandFrac >= 0.35f && expandGapShift > 0.5f && i >= expandGapStartIdx) {
+                if (expandFrac >= 0.35f && abs(expandGapShift) > 0.5f && i >= expandGapStartIdx) {
                     restTy += expandGapShift
                 }
             }
@@ -946,10 +1068,20 @@ class NotificationCenterView(
                 }
             }
 
-            val finalSc = min(restSc, scrSc)
-            val finalRx = restRx + scrRx
-            val finalTy = restTy + scrTy
-            val finalAlpha = min(restAlpha, scrAlpha).coerceIn(0f, 1f)
+            // Composite sequential entrance fraction directly inside slot transform so arriving cards never fight deck slots!
+            val ef = row.enterFrac
+            val efClamped = ef.coerceIn(0f, 1f)
+            val enterSc = 0.88f + 0.12f * ef
+            val enterTy = -(14f * dens) * (1f - ef)
+            val enterRx = -10f * (1f - ef)
+            val enterFadeT = (efClamped / 0.52f).coerceIn(0f, 1f)
+            val enterAlpha = enterFadeT * enterFadeT * (3f - 2f * enterFadeT)
+
+            val finalSc = min(restSc, scrSc) * enterSc
+            val finalRx = restRx + scrRx + enterRx
+            val finalTy = restTy + scrTy + enterTy
+            val finalAlpha = (min(restAlpha, scrAlpha) * enterAlpha).coerceIn(0f, 1f)
+            val finalZ = if (ef < 0.995f && i == 0) 36f * dens else restZ
 
             row.cameraDistance = 12500f * dens
             row.pivotX = row.width * 0.5f
@@ -957,7 +1089,7 @@ class NotificationCenterView(
             row.scaleX = finalSc
             row.scaleY = finalSc
             row.translationY = finalTy
-            row.translationZ = restZ
+            row.translationZ = finalZ
             row.rotationX = finalRx
             row.alpha = finalAlpha
             if (finalAlpha > 0.02f && cardBot >= -80f && cardTop <= visH + 120f) {
@@ -967,11 +1099,16 @@ class NotificationCenterView(
     }
 
     private fun animateClearCascade() {
+        if (hidingOnEmpty) return
         val count = listCol.childCount
         if (count == 0) {
             onClearAll()
             return
         }
+        moreHintPill.animate().alpha(0f).setDuration(140L).withEndAction {
+            moreHintPill.visibility = GONE
+            moreHintPill.alpha = 1f
+        }.start()
         val rows = ArrayList<NotificationCardRow>(count)
         for (i in 0 until count) {
             (listCol.getChildAt(i) as? NotificationCardRow)?.let { rows.add(it) }
@@ -987,15 +1124,15 @@ class NotificationCenterView(
                 .alpha(0f)
                 .scaleX(0.84f)
                 .scaleY(0.84f)
-                .setStartDelay((idx * 34L).coerceAtMost(150L))
-                .setDuration(250L)
+                .setStartDelay((idx * 28L).coerceAtMost(112L))
+                .setDuration(220L)
                 .setInterpolator(iosEase)
                 .setUpdateListener { row.invalidate() }
                 .start()
         }
         postDelayed({
             onClearAll()
-        }, (min(rows.size, 5) * 34L + 220L))
+        }, (min(rows.size, 3) * 28L + 150L))
     }
 
     private class RubberScrollView(context: Context) : ScrollView(context) {
@@ -1476,6 +1613,7 @@ class NotificationCenterView(
         private val onDismiss: (NotificationCardRow, LockNotification, Float, Float) -> Unit,
         private val onTap: (LockNotification) -> Unit,
         private val onPressCancelled: () -> Unit,
+        private val onEntranceFrame: () -> Unit,
         private val onHaptic: (String) -> Unit
     ) : FrameLayout(context) {
 
@@ -1500,10 +1638,11 @@ class NotificationCenterView(
         private var basePressSc = 1f
         private var basePressAlpha = 1f
         private var vt: VelocityTracker? = null
+        private var enterAnim: ValueAnimator? = null
         var isDragging = false
             private set
         var isDismissing = false
-        var isEntranceRunning = false
+        var enterFrac = 1f
             private set
 
         init {
@@ -1626,39 +1765,27 @@ class NotificationCenterView(
         fun cardHeightEstimate(): Float = if (height > 0) height.toFloat() else (68f * dens)
 
         fun playEntrance3D(delayMs: Long) {
-            isEntranceRunning = true
-            animate().cancel()
-            alpha = 0f
-            scaleX = 0.84f
-            scaleY = 0.84f
-            rotationX = -18f
-            translationY = -14f * dens
-            animate()
-                .alpha(1f)
-                .scaleX(1f)
-                .scaleY(1f)
-                .rotationX(0f)
-                .translationY(0f)
-                .setStartDelay(delayMs)
-                .setDuration(460L)
-                .setInterpolator(OvershootInterpolator(1.55f))
-                .setUpdateListener { invalidate() }
-                .withEndAction {
-                    isEntranceRunning = false
+            enterAnim?.cancel()
+            enterFrac = 0f
+            onEntranceFrame()
+            enterAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+                startDelay = delayMs
+                duration = 420L
+                interpolator = OvershootInterpolator(1.22f)
+                addUpdateListener { a ->
+                    enterFrac = a.animatedValue as Float
+                    onEntranceFrame()
                     invalidate()
                 }
-                .start()
-        }
-
-        fun playShiftDown() {
-            animate().cancel()
-            translationY = -36f * dens
-            animate()
-                .translationY(0f)
-                .setDuration(400L)
-                .setInterpolator(dismissEase)
-                .setUpdateListener { invalidate() }
-                .start()
+                addListener(object : AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: Animator) {
+                        enterFrac = 1f
+                        onEntranceFrame()
+                        invalidate()
+                    }
+                })
+                start()
+            }
         }
 
         override fun onTouchEvent(ev: MotionEvent): Boolean {
@@ -1666,6 +1793,8 @@ class NotificationCenterView(
             val cur = item ?: return false
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    enterAnim?.cancel()
+                    enterFrac = 1f
                     downRawX = ev.rawX
                     downRawY = ev.rawY
                     isDragging = false

@@ -148,6 +148,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private var springVelNp = 0f
     private var springVelNc = 0f
     private var springRunning = false
+    private var hadNotifsInLayout = false
     private var springLastNs = 0L
     private var hasInitialLayout = false
 
@@ -176,24 +177,34 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             npBaseTranslationY += springVelNp * dt
 
             val curNc = if (::notificationCenter.isInitialized) notificationCenter.restingOffsetPx else 0f
-            val fM = (springTargetNc - curNc) * stiffness - springVelNc * damping
-            springVelNc += fM * dt
-            val nextNc = max(0f, curNc + springVelNc * dt)
-            if (::notificationCenter.isInitialized) notificationCenter.setAnimatedRestingOffset(nextNc)
+            val nextNc = if (hadNotifsInLayout) {
+                val fM = (springTargetNc - curNc) * stiffness - springVelNc * damping
+                springVelNc += fM * dt
+                max(0f, curNc + springVelNc * dt)
+            } else {
+                springVelNc = 0f
+                curNc
+            }
+            if (hadNotifsInLayout && ::notificationCenter.isInitialized) {
+                notificationCenter.setAnimatedRestingOffset(nextNc)
+            }
 
             applyDepthAndLayerTransforms()
             if (::resizeOverlay.isInitialized && resizeOverlay.isOpen) resizeOverlay.layoutAroundClock()
 
+            val ncSettled = !hadNotifsInLayout || (abs(springTargetNc - nextNc) < 0.35f && abs(springVelNc) < 2f)
             val settled = abs(springTargetClock - clockRestOffset) < 0.35f && abs(springVelClock) < 2f &&
                     abs(springTargetClockFit - clockFitScale) < 0.003f && abs(springVelClockFit) < 0.02f &&
                     abs(springTargetNp - npBaseTranslationY) < 0.35f && abs(springVelNp) < 2f &&
-                    abs(springTargetNc - nextNc) < 0.35f && abs(springVelNc) < 2f
+                    ncSettled
 
             if (settled) {
                 clockRestOffset = springTargetClock
                 clockFitScale = springTargetClockFit
                 npBaseTranslationY = springTargetNp
-                if (::notificationCenter.isInitialized) notificationCenter.setAnimatedRestingOffset(springTargetNc)
+                if (hadNotifsInLayout && ::notificationCenter.isInitialized) {
+                    notificationCenter.setAnimatedRestingOffset(springTargetNc)
+                }
                 springVelClock = 0f
                 springVelClockFit = 0f
                 springVelNp = 0f
@@ -293,8 +304,14 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         notifHub.setListener(object : NotificationHub.Listener {
             override fun onNotificationsUpdated(items: List<LockNotification>, added: LockNotification?, removedId: String?) {
                 if (!::notificationCenter.isInitialized) return
-                notificationCenter.setNotifications(items, added, removedId)
-                updateMusicAndNotificationsLayout(animated = true)
+                val appearingFromEmpty = cfg.notifications && items.isNotEmpty() && !hadNotifsInLayout
+                if (appearingFromEmpty) {
+                    updateMusicAndNotificationsLayout(animated = true)
+                    notificationCenter.setNotifications(items, added, removedId)
+                } else {
+                    notificationCenter.setNotifications(items, added, removedId)
+                    updateMusicAndNotificationsLayout(animated = true)
+                }
                 if (added != null) {
                     val icon = notifHub.getAppIcon(added.packageName, (18f * resources.displayMetrics.density).roundToInt())
                     island.pulse("${added.appName}: ${added.text}", added.accentColor, 1850L, iconBmp = icon)
@@ -530,6 +547,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             onHaptic = { k -> haptic(k) }
         ).apply {
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+            onDisplayedCountChanged = {
+                updateMusicAndNotificationsLayout(animated = true)
+            }
         }
         phoneShell.addView(notificationCenter)
 
@@ -801,7 +821,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             val availW = max(1, phoneShell.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels)
             npLp.width = min((416f * dens).roundToInt(), max(220, availW - (16f * dens).roundToInt()))
             npLp.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            npLp.bottomMargin = safeBottomPx + (110f * dens).roundToInt()
+            npLp.bottomMargin = safeBottomPx + (94f * dens).roundToInt()
         }
         npCard.layoutParams = npLp
 
@@ -824,9 +844,14 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
         val items = notifHub.getItems()
         val showNotifs = cfg.notifications && items.isNotEmpty()
+        val isAppearingFromEmpty = showNotifs && !hadNotifsInLayout
+        val visibleNotifCount = if (showNotifs) {
+            max(1, notificationCenter.displayedCount().takeIf { it > 0 } ?: items.size)
+        } else 0
         val ncLp = notificationCenter.layoutParams as FrameLayout.LayoutParams
 
         if (isShortLandscape) {
+            hadNotifsInLayout = showNotifs
             springRunning = false
             Choreographer.getInstance().removeFrameCallback(layoutSpringCallback)
             clockRestOffset = 0f
@@ -863,9 +888,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val shortcutsReserve = safeBottomPx + (84f * dens).roundToInt()
         val shortcutsTop = shellH - shortcutsReserve
         val expandedTop = safeTopPx + (54f * dens).roundToInt()
-        val npBaseBottom = safeBottomPx + (110f * dens).roundToInt()
+        val npBaseBottom = safeBottomPx + (94f * dens).roundToInt()
         val npH = npCard.height.takeIf { it > 0 } ?: (110f * dens).roundToInt()
-        val headerH = ((if (notifHub.hasNotificationAccess()) 40f else 66f) * dens).roundToInt()
+        val headerH = (40f * dens).roundToInt()
         val clockGap = (10f * dens).roundToInt()
         val cardGap = (8f * dens).roundToInt()
 
@@ -890,7 +915,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             notifExpandFrac = 0f
             npCard.isClickable = true
             npCard.isFocusable = true
-            targetNcResting = 0f
+            // Keep existing restingOffsetPx steady while NotificationCenter fades out & hides cleanly
+            targetNcResting = notificationCenter.restingOffsetPx
             if (cfg.music) {
                 val npNaturalTop = shellH - npBaseBottom - npH
                 val overlap = clockNaturalInkBot - (npNaturalTop - clockGap)
@@ -905,8 +931,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             }
         } else {
             val desiredListH = when {
-                items.size <= 1 -> (78f * dens).roundToInt()
-                items.size == 2 -> (96f * dens).roundToInt()
+                visibleNotifCount <= 1 -> (78f * dens).roundToInt()
+                visibleNotifCount == 2 -> (96f * dens).roundToInt()
                 else -> (106f * dens).roundToInt()
             }
             val desiredTotalNotifH = headerH + desiredListH
@@ -967,10 +993,11 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 restingTopPx = restingTop,
                 fullHeightPx = fullH,
                 landscapeCompact = false,
-                preserveCurrentOffset = animated
+                preserveCurrentOffset = animated && !isAppearingFromEmpty
             )
         }
 
+        hadNotifsInLayout = showNotifs
         springTargetClock = targetClockRest
         springTargetClockFit = targetClockFit
         springTargetNp = targetNpTy
@@ -981,7 +1008,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             abs(springTargetNp - npBaseTranslationY) > 0.5f ||
             abs(springTargetClock - clockRestOffset) > 0.5f ||
             abs(springTargetClockFit - clockFitScale) > 0.004f ||
-            (showNotifs && abs(springTargetNc - curNc) > 0.5f)
+            (showNotifs && !isAppearingFromEmpty && abs(springTargetNc - curNc) > 0.5f)
         )
 
         if (needsAnim) {
@@ -1272,10 +1299,13 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 notificationCenter.visibility = View.GONE
                 npCard.isClickable = true
                 npCard.isFocusable = true
+                updateMusicAndNotificationsLayout(animated = true)
             } else {
+                val shouldPreparePos = notifHub.getItems().isNotEmpty() && !hadNotifsInLayout
+                if (shouldPreparePos) updateMusicAndNotificationsLayout(animated = true)
                 notificationCenter.setNotifications(notifHub.getItems(), null, null)
+                if (!shouldPreparePos) updateMusicAndNotificationsLayout(animated = true)
             }
-            updateMusicAndNotificationsLayout(animated = true)
         }
         dndPill.visibility = if (cfg.dnd) View.VISIBLE else View.GONE
         subjectView.visibility = if (cfg.depth && customSubjectBmp != null) View.VISIBLE else View.GONE
@@ -1301,7 +1331,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val cardGapPx = 8f * dens
         val items = if (::notificationCenter.isInitialized) notifHub.getItems() else emptyList()
         val showNotifs = ::notificationCenter.isInitialized && cfg.notifications && items.isNotEmpty()
-        val headerHPx = (if (notifHub.hasNotificationAccess()) 40f else 66f) * dens
+        val headerHPx = 40f * dens
         val minListHPx = (when {
             items.size <= 1 -> 74f
             items.size == 2 -> 86f
@@ -1310,7 +1340,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val notifNeedPx = if (showNotifs) (headerHPx + minListHPx) else 0f
         val shortcutsTopPx = shellHPx - (safeBottomPx + 84f * dens)
         val npActualHPx = (npCard.height.takeIf { it > 0 } ?: (110f * dens).roundToInt()).toFloat()
-        val npBaseBotPx = shellHPx - (safeBottomPx + 110f * dens)
+        val npBaseBotPx = shellHPx - (safeBottomPx + 94f * dens)
 
         val obstaclePx = when {
             cfg.music && showNotifs -> shortcutsTopPx - notifNeedPx - cardGapPx - npActualHPx - clockGapPx

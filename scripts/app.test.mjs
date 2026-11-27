@@ -155,6 +155,14 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(notifKt.includes('playEntrance3D'));
   assert.ok(notifKt.includes('updateCard3DAndPeek'));
   assert.ok(notifKt.includes('clipRect(-width * 2'));
+  assert.ok(!notifKt.includes('"Notification Center"'));
+  assert.ok(notifKt.includes('processNextBurstReveal'));
+  assert.ok(notifKt.includes('burstDelayMs'));
+  assert.ok(notifKt.includes('enterFrac'));
+  assert.ok(notifKt.includes('onDisplayedCountChanged'));
+  assert.ok(mainKt.includes('hadNotifsInLayout'));
+  assert.ok(mainKt.includes('appearingFromEmpty'));
+  assert.ok(mainKt.includes('94f * dens'));
 
   const aiKt = readFileSync(ktDir + 'AIDepthManager.kt','utf8');
   assert.ok(aiKt.includes('SubjectSegmentation'));
