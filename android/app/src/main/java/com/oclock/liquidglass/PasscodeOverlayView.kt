@@ -864,7 +864,7 @@ class PasscodeOverlayView(
             thickDp = 26f,
             ior = 1.54f,
             shadowInt = 0.0f,
-            innerShadow = 0.88f,
+            innerShadow = 0.34f,
             useBlurredBackdrop = false
         )
         private val helperBackdrop = backdrop
@@ -1006,7 +1006,7 @@ class PasscodeOverlayView(
                 thickDp = baseThickDp,
                 ior = 1.54f,
                 shadowInt = 0.0f,
-                innerShadow = 0.88f,
+                innerShadow = 0.34f,
                 useBlurredBackdrop = false
             )
             invalidate()
@@ -1027,7 +1027,7 @@ class PasscodeOverlayView(
                 p = p.parent as? View
             }
 
-            // Ultra-transparent pure Liquid Glass + white inner shadow ONLY (mirrors Flashlight/Camera crystal lens)
+            // Ultra-transparent pure Liquid Glass + thin white inner shadow ONLY (mirrors Flashlight/Camera crystal lens)
             val glow = glowCur.coerceIn(0f, 1.25f)
             val tintA = (8f + glow * 52f).roundToInt().coerceIn(0, 140)
             val glassTint = Color.argb(tintA, 255, 255, 255)
@@ -1038,7 +1038,7 @@ class PasscodeOverlayView(
                 originX = ox,
                 originY = oy,
                 shadowOverride = 0.0f,
-                innerOverride = 0.88f + glow * 0.42f,
+                innerOverride = 0.34f + glow * 0.28f,
                 thickOverride = baseThickDp * (1f + 0.24f * glow)
             )
 

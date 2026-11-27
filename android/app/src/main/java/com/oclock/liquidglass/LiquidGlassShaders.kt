@@ -88,16 +88,17 @@ object LiquidGlassShaders {
             // glass-bg tint
             col = mix(col, uGlassBg.rgb, uGlassBg.a);
 
-            // Silky fading white inner shadow ONLY (clean directional curve, zero outer stroke or cloudy fill)
-            if (uInnerShadow > 0.001 && dd < 0.0) {
-                float depthPx = -dd;
-                float span = max(10.0, uBezel * 0.44);
+            // Ultra-thin silky white inner shadow ONLY (matches Flashlight/Camera rim thinness, zero outer stroke)
+            if (uInnerShadow > 0.001 && dd <= 0.15) {
+                float depthPx = max(0.0, -dd);
+                float span = clamp(uBezel * 0.048, 2.2, 4.6);
                 if (depthPx < span) {
+                    float edgeAA = clamp((0.15 - dd) / 0.65, 0.0, 1.0);
                     float td = clamp(depthPx / span, 0.0, 1.0);
-                    float fall = pow(1.0 - td, 2.75);
+                    float fall = pow(1.0 - td, 2.15);
                     float k = abs(dot(n, uLightDir));
-                    float lit = pow(clamp((k - 0.18) / 0.82, 0.0, 1.0), 1.75);
-                    float innerGlow = clamp(lit * fall * uInnerShadow * 0.78, 0.0, 0.84);
+                    float lit = pow(max(0.0, k), 1.8);
+                    float innerGlow = clamp(lit * fall * edgeAA * uInnerShadow, 0.0, 0.72);
                     col = mix(col, float3(1.0), innerGlow);
                 }
             }

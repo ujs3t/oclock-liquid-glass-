@@ -92,7 +92,7 @@ class LiquidGlassCardHelper(
             val wall = blurBmp ?: backdrop.compositedBitmap ?: backdrop.wallBitmap ?: return
             val bw = max(16, (w / 2f).roundToInt())
             val bh = max(16, (h / 2f).roundToInt())
-            val cpuShadow = max(shadowOverride, innerOverride * 0.36f)
+            val cpuShadow = max(shadowOverride, innerOverride * 0.85f)
             val srcId = if (blurBmp != null) 2 else if (backdrop.compositedBitmap != null) 1 else 0
             val key = "$srcId|${originX.roundToInt()}|${originY.roundToInt()}|$bw|$bh|$glassBgColor|${(cpuShadow * 100).roundToInt()}|${(thickOverride * 10).roundToInt()}|${(backdrop.wallScaleX * 100).roundToInt()}"
             var out = cpuBmp?.takeIf { it.width == bw && it.height == bh }
