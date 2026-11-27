@@ -389,7 +389,7 @@ class NotificationCenterView(
             clipChildren = false
             clipToPadding = false
             isMotionEventSplittingEnabled = false
-            setPadding(0, (2f * dens).roundToInt(), 0, (240f * dens).roundToInt())
+            setPadding(0, (6f * dens).roundToInt(), 0, (44f * dens).roundToInt())
             layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
         }
         listCol.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
@@ -1347,11 +1347,12 @@ class NotificationCenterView(
 
         val visH = max(1f, svH.toFloat())
         val scrollY = scrollView.scrollY.toFloat()
+        val maxScroll = max(0f, listCol.height.toFloat() - visH)
         val rubberY = scrollView.rubberBotY
         val firstRow = listCol.getChildAt(0)
         val firstBot = (if (firstRow != null && firstRow.height > 0) firstRow.bottom.toFloat() else (70f * dens)) + heightCompOffset
-        val topBand = 70f * dens
-        val botBand = 88f * dens
+        val effTopBand = 6f * dens + min(54f * dens, max(0f, scrollY - rubberY) * 0.65f)
+        val effBotBand = 16f * dens + min(54f * dens, max(0f, (maxScroll - scrollY) + rubberY) * 0.72f)
 
         for (i in 0 until count) {
             val row = listCol.getChildAt(i) as? NotificationCardRow ?: continue
@@ -1496,22 +1497,22 @@ class NotificationCenterView(
 
             if (expandFrac > 0.82f) {
                 val active3D = ((expandFrac - 0.82f) / 0.18f).coerceIn(0f, 1f)
-                if (cardTop < topBand && (scrollY > 1f || rubberY < -2f)) {
-                    val tf = ((topBand - cardTop) / max(1f, row.height + topBand)).coerceIn(0f, 1f)
+                if (cardTop < effTopBand) {
+                    val tf = ((effTopBand - cardTop) / max(1f, row.height + effTopBand)).coerceIn(0f, 1f)
                     val easeT = tf * tf * (3f - 2f * tf)
-                    scrSc = 1f - 0.09f * easeT * active3D
-                    scrRx = 14f * easeT * active3D
-                    scrTy = 5f * dens * easeT * active3D
-                    scrAlpha = 1f - 0.72f * easeT * active3D
+                    scrSc = 1f - 0.11f * easeT * active3D
+                    scrRx = 16f * easeT * active3D
+                    scrTy = 6f * dens * easeT * active3D
+                    scrAlpha = 1f - 0.84f * easeT * active3D
                     pivotRatioY = 0.80f
                     restZ *= (1f - 0.45f * easeT * active3D)
-                } else if (cardBot > visH - botBand && cardTop < visH) {
-                    val bf = ((cardBot - (visH - botBand)) / max(1f, row.height + botBand)).coerceIn(0f, 1f)
+                } else if (cardBot > visH - effBotBand && cardTop < visH) {
+                    val bf = ((cardBot - (visH - effBotBand)) / max(1f, row.height + effBotBand)).coerceIn(0f, 1f)
                     val easeB = bf * bf * (3f - 2f * bf)
-                    scrSc = 1f - 0.09f * easeB * active3D
+                    scrSc = 1f - 0.10f * easeB * active3D
                     scrRx = -14f * easeB * active3D
                     scrTy = -6f * dens * easeB * active3D
-                    scrAlpha = 1f - 0.65f * easeB * active3D
+                    scrAlpha = 1f - 0.75f * easeB * active3D
                     pivotRatioY = 0.20f
                     restZ *= (1f - 0.45f * easeB * active3D)
                 }
@@ -1545,7 +1546,7 @@ class NotificationCenterView(
             row.translationZ = finalZ
             row.rotationX = finalRx
             row.alpha = finalAlpha
-            if (finalAlpha > 0.02f && cardBot >= -80f && cardTop <= visH + 120f) {
+            if (finalAlpha > 0.02f && cardBot >= -120f * dens && cardTop <= visH + 120f * dens) {
                 row.invalidate()
             }
         }
@@ -1742,7 +1743,10 @@ class NotificationCenterView(
             invalidate()
         }
 
+        private val rubberEase = PathInterpolator(0.22f, 1f, 0.36f, 1f)
+
         private fun springBackRubber() {
+            if (!scroller.isFinished) scroller.abortAnimation()
             if (abs(rubberBotY) < 0.5f) {
                 setRubber(0f)
                 return
@@ -1750,9 +1754,14 @@ class NotificationCenterView(
             rubberAnim?.cancel()
             val start = rubberBotY
             rubberAnim = ValueAnimator.ofFloat(start, 0f).apply {
-                duration = 380L
-                interpolator = OvershootInterpolator(1.35f)
+                duration = 300L
+                interpolator = rubberEase
                 addUpdateListener { a -> setRubber(a.animatedValue as Float) }
+                addListener(object : AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: Animator) {
+                        rubberAnim = null
+                    }
+                })
                 start()
             }
         }
@@ -1763,10 +1772,12 @@ class NotificationCenterView(
                 val cy = scroller.currY
                 when {
                     cy < 0 -> {
+                        rubberAnim?.cancel()
                         if (scrollY != 0) scrollTo(0, 0)
                         setRubber(min(44f * dens, -cy.toFloat()))
                     }
                     cy > maxScroll -> {
+                        rubberAnim?.cancel()
                         if (scrollY != maxScroll) scrollTo(0, maxScroll)
                         setRubber(-min(44f * dens, (cy - maxScroll).toFloat()))
                     }
@@ -1837,9 +1848,13 @@ class NotificationCenterView(
                         val used = min(avail.toFloat(), -dy)
                         scrollBy(0, used.roundToInt())
                         val left = (-dy) - used
-                        if (left > 0.5f) setRubber(max(-64f * dens, rubberBotY - left * 0.38f))
+                        if (left > 0.5f) {
+                            val resist = (1f - abs(rubberBotY) / (48f * dens)).coerceIn(0.14f, 1f)
+                            setRubber(max(-44f * dens, rubberBotY - left * 0.36f * resist))
+                        }
                     } else {
-                        setRubber(max(-64f * dens, rubberBotY + dy * 0.38f))
+                        val resist = (1f - abs(rubberBotY) / (48f * dens)).coerceIn(0.14f, 1f)
+                        setRubber(max(-44f * dens, rubberBotY + dy * 0.36f * resist))
                     }
                 } else if (dy > 0f && scrollY > 0) {
                     val used = min(scrollY.toFloat(), dy)
@@ -2034,6 +2049,8 @@ class NotificationCenterView(
                     val wasDrag = dragActive
                     val netTotalDy = curRawY - startRawY
                     val netTotalDx = curRawX - startRawX
+                    val wasBottomOverscroll = rubberBotY < -0.5f
+                    val wasTopOverscroll = rubberBotY > 0.5f
                     dragActive = false
                     springBackRubber()
 
@@ -2052,9 +2069,13 @@ class NotificationCenterView(
                     }
                     if (curExp >= 0.995f && (wasDrag || isFastDownFlick)) {
                         val maxScroll = max(0, (getChildAt(0)?.height ?: 0) - height)
+                        val hittingBottomBound = wasBottomOverscroll || (scrollY >= maxScroll && vy <= 0f)
+                        val hittingTopBound = wasTopOverscroll || (scrollY <= 0 && vy >= 0f)
                         if (canExp && startedAtTop && scrollY <= 0 && (vy > 105f * dens || netTotalDy > 18f * dens)) {
                             onReleaseFn(startExpandFrac, 0.88f, netTotalDy, vy)
-                        } else if ((startedExpanded || scrollY > (12f * dens).roundToInt()) && abs(vy) > 150f * dens) {
+                        } else if (!hittingBottomBound && !hittingTopBound &&
+                            (startedExpanded || scrollY > (12f * dens).roundToInt()) && abs(vy) > 150f * dens
+                        ) {
                             scroller.fling(0, scrollY, 0, (-vy).roundToInt(), 0, 0, 0, maxScroll, 0, (42f * dens).roundToInt())
                             postInvalidateOnAnimation()
                         }

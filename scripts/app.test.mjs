@@ -219,6 +219,9 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(notifKt.includes('gapSpringRunning'));
   assert.ok(notifKt.includes('gapSpringDelayMs'));
   assert.ok(notifKt.includes('gapSpringOmega'));
+  assert.ok(notifKt.includes('effTopBand'));
+  assert.ok(notifKt.includes('effBotBand'));
+  assert.ok(notifKt.includes('wasBottomOverscroll'));
 
   const aiKt = readFileSync(ktDir + 'AIDepthManager.kt','utf8');
   assert.ok(aiKt.includes('SubjectSegmentation'));
