@@ -176,9 +176,9 @@ object LiquidGlassShaders {
             // --clock-shadow-op subtle top ink glaze
             col = mix(col, uShadowTop.rgb, uShadowTop.a);
 
-            // Pure silky wide iOS 26 inner white glass shadow (no harsh border stroke)
+            // Silky fading iOS 26 inner glass shadow (scales smoothly from ultra-fine 0.9dp at 0.1 to deep glow, fades to 0 on unlit edges)
             float depthPx = max(0.0, fld.b * 255.0 / 1.5 - 1.0);
-            float fallLimit = uInnerThick > 0.01 ? max(6.0 * uSS, (uInnerThick * 12.0 + 4.8) * uSS) : 2.0;
+            float fallLimit = uInnerThick > 0.01 ? max(0.75 * uSS, (uInnerThick * 4.8 + 0.45) * uSS) : 0.0;
             if (uInnerOp > 0.001 && uInnerThick > 0.01 && depthPx < fallLimit) {
                 float2 nRaw = ((m0.gb + m1.gb + m2.gb + m3.gb) * 0.25 * 255.0 - 128.0) / 127.0;
                 float gl = length(nRaw);
@@ -187,11 +187,11 @@ object LiquidGlassShaders {
                     float2 n = nRaw / gl;
                     float k = abs(dot(n, uInnerDir));
                     float t = clamp(depthPx / fallLimit, 0.0, 1.0);
-                    float decay = pow(1.0 - t, 2.15) * (0.68 + 0.32 * cos(t * 1.5707963));
+                    float decay = pow(1.0 - t, 2.75);
                     float fadeAmt = clamp(uInnerFade, 0.0, 1.0);
-                    float lit = pow(max(0.0, k), 1.45);
-                    float dirTerm = mix(1.0, 0.32 + 0.68 * lit, fadeAmt);
-                    float rimA = clamp(dirTerm * decay * ridgeFade * uInnerOp * 0.78, 0.0, 0.86);
+                    float lit = pow(clamp((k - 0.28) / 0.72, 0.0, 1.0), 1.85);
+                    float dirTerm = mix(1.0, lit, fadeAmt);
+                    float rimA = clamp(dirTerm * decay * ridgeFade * uInnerOp * 0.68, 0.0, 0.80);
                     col = mix(col, uInnerColor.rgb, rimA);
                 }
             }

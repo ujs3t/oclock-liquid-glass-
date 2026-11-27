@@ -166,6 +166,7 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(glyphKt.includes('inValidBand'));
   assert.ok(shadersKt.includes('0.75 * rg.x'));
   assert.ok(shadersKt.includes('255.0 / 1.5 - 1.0'));
+  assert.ok(shadersKt.includes('mix(1.0, lit, fadeAmt)'));
   assert.ok(!shadersKt.includes('tLip'));
   assert.ok(jniCpp.includes('blurR'));
   assert.ok(!viewsKt.includes('165, 174, 190'));

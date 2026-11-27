@@ -335,7 +335,7 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
     const float shR = float((shadowTopColor >> 16) & 0xff), shG = float((shadowTopColor >> 8) & 0xff), shB = float(shadowTopColor & 0xff);
     const float inR = float((innerColor >> 16) & 0xff), inG = float((innerColor >> 8) & 0xff), inB = float(innerColor & 0xff);
     const float rad = innerAngleDeg * 3.14159265f / 180.f, ax = std::cos(rad), ay = std::sin(rad);
-    const float fallLimit = innerThick > 0.01f ? std::max(6.f * ss, (innerThick * 12.f + 4.8f) * ss) : 2.0f;
+    const float fallLimit = innerThick > 0.01f ? std::max(0.75f * ss, (innerThick * 4.8f + 0.45f) * ss) : 0.0f;
     const float scaleX = dstW / std::max(1.f, float(w)), scaleY = dstH / std::max(1.f, float(h));
 
     for (int y = 0; y < h; y++) {
@@ -377,7 +377,7 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
                 g = g * (1.f - shadowOp) + shG * shadowOp;
                 b = b * (1.f - shadowOp) + shB * shadowOp;
             }
-            // Pure silky wide iOS 26 inner white glass shadow (no harsh border stroke)
+            // Silky fading iOS 26 inner glass shadow (scales smoothly from ultra-fine 0.9dp at 0.1 to deep glow, fades to 0 on unlit edges)
             float depthPx = std::max(0.f, float(fd[2]) / 1.5f - 1.f);
             if (innerOp > 0.001f && innerThick > 0.01f && depthPx < fallLimit) {
                 float gx = (float(aRow[size_t(x) * 4 + 1]) - 128.f) / 127.f;
@@ -387,12 +387,12 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
                     float ridgeFade = clamp01f(gl * 1.40f);
                     float k = std::fabs((gx / gl) * ax + (gy / gl) * ay);
                     float t = clamp01f(depthPx / fallLimit);
-                    float decay = std::pow(1.f - t, 2.15f) * (0.68f + 0.32f * std::cos(t * 1.5707963f));
+                    float decay = std::pow(1.f - t, 2.75f);
                     float fadeAmt = clamp01f(innerFade);
-                    float lit = std::pow(k, 1.45f);
-                    float dirTerm = (1.f - fadeAmt) + fadeAmt * (0.32f + 0.68f * lit);
-                    float rimA = clamp01f(dirTerm * decay * ridgeFade * innerOp * 0.78f);
-                    rimA = std::min(rimA, 0.86f);
+                    float lit = std::pow(clamp01f((k - 0.28f) / 0.72f), 1.85f);
+                    float dirTerm = (1.f - fadeAmt) + fadeAmt * lit;
+                    float rimA = clamp01f(dirTerm * decay * ridgeFade * innerOp * 0.68f);
+                    rimA = std::min(rimA, 0.80f);
                     r = r * (1.f - rimA) + inR * rimA;
                     g = g * (1.f - rimA) + inG * rimA;
                     b = b * (1.f - rimA) + inB * rimA;
