@@ -235,6 +235,8 @@ Java_com_oclock_liquidglass_NativeGlass_computeClockField(
                         for (int x = 0; x < w; x++) {
                             const int xm = std::max(0, x - 1), xp = std::min(w - 1, x + 1);
                             const double dd = dc[x];
+                            const double wSmooth = clamp01f(float(-dd) * 0.45f);
+                            const double ddSmooth = dd * (1.0 - wSmooth) + double(sc[x]) * wSmooth;
                             const double gx = (double(sc[xp]) - sc[xm]) * 0.5;
                             const double gy = (double(sp[x]) - sm[x]) * 0.5;
                             const double len = std::hypot(gx, gy);
@@ -251,8 +253,8 @@ Java_com_oclock_liquidglass_NativeGlass_computeClockField(
 
                             uint8_t* d = outRow + size_t(x) * 4;
                             d[0] = 128; d[1] = 128;
-                            // Exact unshifted depth: dd=+1px outside -> 0, dd=0 -> 5, dd=-50px -> 255
-                            d[2] = glass::byte((-dd + 1.0) * 5.0);
+                            // Wide smooth unclipped depth (0..101 texels) blending contour-accurate edge into Gaussian SDF
+                            d[2] = glass::byte((-ddSmooth + 1.0) * 2.5);
                             d[3] = 255;
                             if (dd > 0.0) continue;
                             if (flatCenter && dd <= -effBezel) continue;
@@ -312,7 +314,8 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
     const float shR = float((shadowTopColor >> 16) & 0xff), shG = float((shadowTopColor >> 8) & 0xff), shB = float(shadowTopColor & 0xff);
     const float inR = float((innerColor >> 16) & 0xff), inG = float((innerColor >> 8) & 0xff), inB = float(innerColor & 0xff);
     const float rad = innerAngleDeg * 3.14159265f / 180.f, ax = std::cos(rad), ay = std::sin(rad);
-    const float fallLimit = std::max(2.0f, innerThick * ss * 1.65f);
+    const float fallLimit = innerThick > 0.01f ? std::max(3.5f, innerThick * ss * 3.1f + 1.4f * ss) : 2.0f;
+    const float lipSpan = std::max(1.6f, ss * 1.45f);
     const float scaleX = dstW / std::max(1.f, float(w)), scaleY = dstH / std::max(1.f, float(h));
 
     for (int y = 0; y < h; y++) {
@@ -354,8 +357,8 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
                 g = g * (1.f - shadowOp) + shG * shadowOp;
                 b = b * (1.f - shadowOp) + shB * shadowOp;
             }
-            // Directional inner shadow layered cleanly ON TOP of any fill opacity (0%..100%)
-            float depthPx = std::max(0.f, float(fd[2]) / 5.f - 1.f);
+            // Smooth 2-stage iOS-grade inner glass bevel layered cleanly ON TOP of any fill opacity (0%..100%)
+            float depthPx = std::max(0.f, float(fd[2]) / 2.5f - 1.f);
             if (innerOp > 0.001f && innerThick > 0.01f && depthPx < fallLimit) {
                 float gx = (float(aRow[size_t(x) * 4 + 1]) - 128.f) / 127.f;
                 float gy = (float(aRow[size_t(x) * 4 + 2]) - 128.f) / 127.f;
@@ -363,12 +366,16 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
                 if (gl > 0.01f) {
                     float ridgeFade = clamp01f(gl * 1.35f);
                     float k = std::fabs((gx / gl) * ax + (gy / gl) * ay);
-                    float tDepth = clamp01f(depthPx / fallLimit);
-                    float fall = (1.f - tDepth) * (1.f - tDepth) * (1.f + 0.6f * tDepth);
+                    float tLip = clamp01f(depthPx / lipSpan);
+                    float lip = std::pow(1.f - tLip, 2.05f) * 0.88f;
+                    float tGlow = clamp01f(depthPx / fallLimit);
+                    float glow = std::pow(1.f - tGlow, 2.25f) * 0.54f;
+                    float profile = clamp01f(lip * 0.72f + glow * 0.60f);
                     float fadeAmt = clamp01f(innerFade);
-                    float dirExp = 1.f + 2.4f * fadeAmt;
-                    float dirTerm = (1.f - fadeAmt) + fadeAmt * std::pow(k, dirExp);
-                    float rimA = clamp01f(dirTerm * fall * ridgeFade * innerOp);
+                    float lit = std::pow(k, 1.55f);
+                    float dirTerm = (1.f - fadeAmt) + fadeAmt * (0.22f + 0.78f * lit);
+                    float rimA = clamp01f(dirTerm * profile * ridgeFade * innerOp);
+                    rimA = std::min(rimA, 0.96f);
                     r = r * (1.f - rimA) + inR * rimA;
                     g = g * (1.f - rimA) + inG * rimA;
                     b = b * (1.f - rimA) + inB * rimA;

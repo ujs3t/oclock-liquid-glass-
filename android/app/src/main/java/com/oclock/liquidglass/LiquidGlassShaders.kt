@@ -139,11 +139,21 @@ object LiquidGlassShaders {
             float2 uv = fragCoord / max(float2(1.0), uDstSize);
             float2 fp = uv * uFieldSize;
 
-            float4 msk = uMask.eval(fp);
-            float alpha = msk.r;
+            // 4-tap Rotated-Grid Supersampling (RGSS) eliminates texture-minification aliasing & 8-bit SDF jaggies
+            float2 pxScale = uFieldSize / max(float2(1.0), uDstSize);
+            float2 rg = max(float2(0.32), pxScale * 0.44);
+            float4 m0 = uMask.eval(fp + float2( 0.75 * rg.x,  0.25 * rg.y));
+            float4 m1 = uMask.eval(fp + float2(-0.75 * rg.x, -0.25 * rg.y));
+            float4 m2 = uMask.eval(fp + float2(-0.25 * rg.x,  0.75 * rg.y));
+            float4 m3 = uMask.eval(fp + float2( 0.25 * rg.x, -0.75 * rg.y));
+            float alpha = (m0.r + m1.r + m2.r + m3.r) * 0.25;
             if (alpha <= 0.002) return half4(0.0);
 
-            float4 fld = uField.eval(fp);
+            float4 f0 = uField.eval(fp + float2( 0.75 * rg.x,  0.25 * rg.y));
+            float4 f1 = uField.eval(fp + float2(-0.75 * rg.x, -0.25 * rg.y));
+            float4 f2 = uField.eval(fp + float2(-0.25 * rg.x,  0.75 * rg.y));
+            float4 f3 = uField.eval(fp + float2( 0.25 * rg.x, -0.75 * rg.y));
+            float4 fld = (f0 + f1 + f2 + f3) * 0.25;
             float2 dispNorm = (fld.rg * 255.0 - 128.0) / 127.0;
             float2 disp = dispNorm * uMaxAbsPx;
 
@@ -166,22 +176,26 @@ object LiquidGlassShaders {
             // --clock-shadow-op subtle top ink glaze
             col = mix(col, uShadowTop.rgb, uShadowTop.a);
 
-            // Dynamic GPU directional inner shadow layered cleanly ON TOP of any clock fill (0%..100% opacity)
-            float depthPx = max(0.0, fld.b * 255.0 / 5.0 - 1.0);
-            float fallLimit = max(2.0, uInnerThick * uSS * 1.65);
+            // Authentic iOS 26 2-stage silky inner glass bevel (crisp specular lip + wide soft volumetric bevel glow)
+            float depthPx = max(0.0, fld.b * 255.0 / 2.5 - 1.0);
+            float fallLimit = uInnerThick > 0.01 ? max(3.5, uInnerThick * uSS * 3.1 + 1.4 * uSS) : 2.0;
             if (uInnerOp > 0.001 && uInnerThick > 0.01 && depthPx < fallLimit) {
-                float2 nRaw = (msk.gb * 255.0 - 128.0) / 127.0;
+                float2 nRaw = ((m0.gb + m1.gb + m2.gb + m3.gb) * 0.25 * 255.0 - 128.0) / 127.0;
                 float gl = length(nRaw);
                 if (gl > 0.01) {
                     float ridgeFade = clamp(gl * 1.35, 0.0, 1.0);
                     float2 n = nRaw / gl;
                     float k = abs(dot(n, uInnerDir));
-                    float tDepth = clamp(depthPx / fallLimit, 0.0, 1.0);
-                    float fall = (1.0 - tDepth) * (1.0 - tDepth) * (1.0 + 0.6 * tDepth);
+                    float lipSpan = max(1.6, uSS * 1.45);
+                    float tLip = clamp(depthPx / lipSpan, 0.0, 1.0);
+                    float lip = pow(1.0 - tLip, 2.05) * 0.88;
+                    float tGlow = clamp(depthPx / fallLimit, 0.0, 1.0);
+                    float glow = pow(1.0 - tGlow, 2.25) * 0.54;
+                    float profile = clamp(lip * 0.72 + glow * 0.60, 0.0, 1.0);
                     float fadeAmt = clamp(uInnerFade, 0.0, 1.0);
-                    float dirExp = mix(1.0, 3.4, fadeAmt);
-                    float dirTerm = mix(1.0 - fadeAmt, 1.0, pow(max(0.0, k), dirExp));
-                    float rimA = clamp(dirTerm * fall * ridgeFade * uInnerOp, 0.0, 1.0);
+                    float lit = pow(max(0.0, k), 1.55);
+                    float dirTerm = mix(1.0, 0.22 + 0.78 * lit, fadeAmt);
+                    float rimA = clamp(dirTerm * profile * ridgeFade * uInnerOp, 0.0, 0.96);
                     col = mix(col, uInnerColor.rgb, rimA);
                 }
             }

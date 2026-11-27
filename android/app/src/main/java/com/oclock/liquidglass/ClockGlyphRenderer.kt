@@ -408,7 +408,7 @@ class ClockGlyphRenderer(private val context: Context) {
     ): ClockArtifact? {
         var size = cfg.size
         val maxW = max(80f, hostWDp - 12f)
-        var ss = min(3.5f, max(2.5f, density * 1.15f))
+        var ss = min(3.8f, max(2.6f, density * 1.35f))
 
         val (capRatio, refMidRel) = measureNumeralMetrics(cfg.font)
         val tf = getTypeface(cfg.font)
@@ -441,12 +441,12 @@ class ClockGlyphRenderer(private val context: Context) {
         val hDp = ceil(max(40f, lines.size * capH * cfg.sy) + pad * 2f)
 
         val rawArea = max(1f, wDp * hDp)
-        val maxArea = 1_900_000f
+        val maxArea = 2_600_000f
         if (rawArea * ss * ss > maxArea) {
-            ss = max(1.5f, floor(sqrt(maxArea / rawArea) * 10f) / 10f)
+            ss = max(1.8f, floor(sqrt(maxArea / rawArea) * 10f) / 10f)
         }
         val longSide = max(wDp, hDp)
-        if (longSide * ss > 1760f) ss = max(1.5f, floor((1760f / longSide) * 10f) / 10f)
+        if (longSide * ss > 2200f) ss = max(1.8f, floor((2200f / longSide) * 10f) / 10f)
 
         val wPx = max(4, (wDp * ss).roundToInt())
         val hPx = max(4, (hDp * ss).roundToInt())

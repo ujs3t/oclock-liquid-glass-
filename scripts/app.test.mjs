@@ -67,7 +67,7 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(shadersKt.includes('RuntimeShader'));
   assert.ok(shadersKt.includes('CARD_AGSL'));
   assert.ok(shadersKt.includes('CLOCK_AGSL'));
-  assert.ok(shadersKt.includes('msk.gb'));
+  assert.ok(shadersKt.includes('m0.gb'));
   assert.ok(shadersKt.includes('uInnerFade'));
 
   const stateKt = readFileSync(ktDir + 'AppState.kt','utf8');
@@ -160,6 +160,12 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(notifKt.includes('burstDelayMs'));
   assert.ok(notifKt.includes('enterFrac'));
   assert.ok(notifKt.includes('onDisplayedCountChanged'));
+  assert.ok(notifKt.includes('deckCycleProg'));
+  assert.ok(notifKt.includes('rotateFrontCardToBack'));
+  assert.ok(notifKt.includes('settleDeckCycle'));
+  assert.ok(shadersKt.includes('0.75 * rg.x'));
+  assert.ok(shadersKt.includes('255.0 / 2.5 - 1.0'));
+  assert.ok(jniCpp.includes('ddSmooth'));
   assert.ok(mainKt.includes('hadNotifsInLayout'));
   assert.ok(mainKt.includes('appearingFromEmpty'));
   assert.ok(mainKt.includes('94f * dens'));

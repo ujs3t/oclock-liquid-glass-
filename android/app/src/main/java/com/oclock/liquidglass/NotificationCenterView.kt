@@ -27,10 +27,12 @@ import android.widget.LinearLayout
 import android.widget.OverScroller
 import android.widget.ScrollView
 import android.widget.TextView
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 class NotificationCenterView(
@@ -84,6 +86,9 @@ class NotificationCenterView(
     private var deckShift = 0f
     private var heightCompOffset = 0f
     private var deckPromoteAnim: ValueAnimator? = null
+    private var deckCycleProg = 0f
+    private var deckCycleCommitting = false
+    private var deckCycleAnim: ValueAnimator? = null
     private var expandGapShift = 0f
     private var expandGapStartIdx = Int.MAX_VALUE
     private var expandGapAnim: ValueAnimator? = null
@@ -179,16 +184,27 @@ class NotificationCenterView(
                         }
                         val dx = ev.rawX - hDownX
                         val dy = ev.rawY - hDownY
-                        if (canExp && !hDragging && abs(dy) > hSlop && abs(dy) > abs(dx) * 1.05f) {
-                            hDragging = true
-                            val travel = max(220f * dens, restingOffsetPx)
-                            applyExpandProgress((expandFrac + (-dy) / travel).coerceIn(0f, 1f))
-                            hLastY = ev.rawY
-                        } else if (canExp && hDragging) {
+                        if (!hDragging && abs(dy) > hSlop && abs(dy) > abs(dx) * 1.05f) {
+                            if (expandFrac <= 0.001f && dy > 0f && canCycleDeck()) {
+                                hDragging = true
+                                prepareDeckCycleForTouch()
+                                applyDeckCycleDelta(ev.rawY - hLastY)
+                                hLastY = ev.rawY
+                            } else if (canExp && ((dy < 0f && expandFrac < 0.999f) || (dy > 0f && expandFrac > 0.001f))) {
+                                hDragging = true
+                                val travel = max(220f * dens, restingOffsetPx)
+                                applyExpandProgress((expandFrac + (-dy) / travel).coerceIn(0f, 1f))
+                                hLastY = ev.rawY
+                            }
+                        } else if (hDragging) {
                             val stepDy = ev.rawY - hLastY
                             hLastY = ev.rawY
-                            val travel = max(220f * dens, restingOffsetPx)
-                            applyExpandProgress((expandFrac + (-stepDy) / travel).coerceIn(0f, 1f))
+                            if (deckCycleProg > 0.001f || (expandFrac <= 0.001f && stepDy > 0f && canCycleDeck())) {
+                                applyDeckCycleDelta(stepDy)
+                            } else if (canExp) {
+                                val travel = max(220f * dens, restingOffsetPx)
+                                applyExpandProgress((expandFrac + (-stepDy) / travel).coerceIn(0f, 1f))
+                            }
                         }
                         true
                     }
@@ -204,7 +220,9 @@ class NotificationCenterView(
                         hVt?.recycle()
                         hVt = null
                         val netDy = ev.rawY - hDownY
-                        if (canExp && (hDragging || (-vy > 110f * dens && -netDy > 6f * dens) || (vy > 110f * dens && netDy > 6f * dens))) {
+                        if (deckCycleProg > 0.001f || (canCycleDeck() && expandFrac <= 0.001f && vy > 110f * dens && netDy > 6f * dens)) {
+                            settleDeckCycle(netDy, vy, ev.actionMasked == MotionEvent.ACTION_CANCEL)
+                        } else if (canExp && (hDragging || (-vy > 110f * dens && -netDy > 6f * dens) || (vy > 110f * dens && netDy > 6f * dens))) {
                             settleExpandProgress(hStartExp, expandFrac, netDy, vy)
                         } else if (canExp && expandFrac > 0.002f && expandFrac < 0.995f) {
                             settleExpandProgress(hStartExp, expandFrac, netDy, vy)
@@ -237,8 +255,15 @@ class NotificationCenterView(
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f)
             onPullOverscroll = { pullDy -> onDragMusicCoupling(pullDy) }
             onRubberChanged = { updateCard3DAndPeek() }
-            onInteractionStart = { expandAnim?.cancel() }
+            onInteractionStart = {
+                expandAnim?.cancel()
+                prepareDeckCycleForTouch()
+            }
             getExpandTravelPx = { max(220f * dens, restingOffsetPx) }
+            canCycleDeckFn = { canCycleDeck() }
+            isCyclingFn = { deckCycleProg > 0.001f }
+            onDeckCycleDeltaFn = { dyPx -> applyDeckCycleDelta(dyPx) }
+            onDeckCycleReleaseFn = { netDy, vy, cancelled -> settleDeckCycle(netDy, vy, cancelled) }
         }
         scrollView.setOnScrollChangeListener { _, _, _, _, _ ->
             updateCard3DAndPeek()
@@ -617,6 +642,9 @@ class NotificationCenterView(
             expandFrac = 0f
             swipePeekAnim?.cancel()
             deckPromoteAnim?.cancel()
+            deckCycleAnim?.cancel()
+            deckCycleProg = 0f
+            deckCycleCommitting = false
             expandGapAnim?.cancel()
             swipePeekAdvance = 0f
             activeSwipeIndex = -1
@@ -678,6 +706,16 @@ class NotificationCenterView(
 
         val pendingNew = items.filter { item -> filteredDisplayed.none { it.id == item.id } }
 
+        if (pendingNew.isEmpty() && removedId == null && currentItems.size == items.size &&
+            currentItems.mapTo(HashSet()) { it.id } == nextIdSet
+        ) {
+            // Preserve the user's rotated 3D deck order while updating notification counts/text in place
+            val byId = items.associateBy { it.id }
+            val ordered = currentItems.mapNotNull { byId[it.id] }
+            commitDisplayedList(ordered, animateAddedId = null, seedEntrance = false)
+            return
+        }
+
         // Initial seed / unhidden restore with multiple existing cards -> show together with gentle slot-staggered reveal
         if (added == null && filteredDisplayed.isEmpty() && pendingNew.size > 1) {
             removeCallbacks(burstRunnable)
@@ -688,6 +726,9 @@ class NotificationCenterView(
         }
 
         if (pendingNew.isNotEmpty()) {
+            deckCycleAnim?.cancel()
+            deckCycleProg = 0f
+            deckCycleCommitting = false
             val now = SystemClock.uptimeMillis()
             val elapsed = now - lastBurstRevealMs
             if (filteredDisplayed.isEmpty() || elapsed >= burstDelayMs) {
@@ -859,7 +900,7 @@ class NotificationCenterView(
                         onCardTapped(tapped)
                     },
                     onPressCancelled = {
-                        post { updateCard3DAndPeek() }
+                        updateCard3DAndPeek()
                     },
                     onEntranceFrame = {
                         updateCard3DAndPeek()
@@ -898,11 +939,119 @@ class NotificationCenterView(
         val firstBot = (if (firstRow != null && firstRow.height > 0) firstRow.bottom.toFloat() else (70f * dens)) + heightCompOffset
         val peekSpan = if (currentItems.size >= 3) 20f * dens else 11f * dens
         val stackBotInContainer = scrollView.top.toFloat() + firstBot + peekSpan
+        val cycleArcYield = sin(deckCycleProg.coerceIn(0f, 1f) * PI).toFloat() * 14f * dens
         moreHintPill.visibility = VISIBLE
-        moreHintPill.translationY = containerCol.translationY + stackBotInContainer + 4f * dens
+        moreHintPill.translationY = containerCol.translationY + stackBotInContainer + 4f * dens + cycleArcYield
         moreHintPill.alpha = (1f - expandFrac * 4.5f).coerceIn(0f, 1f)
         moreHintPill.setCount(hiddenCount)
         moreHintPill.invalidate()
+    }
+
+    private fun canCycleDeck(): Boolean =
+        !isLandscapeCompact && expandFrac < 0.02f && currentItems.size > 1 && scrollView.scrollY <= 0
+
+    private fun prepareDeckCycleForTouch() {
+        if (deckCycleCommitting) {
+            deckCycleAnim?.cancel()
+            rotateFrontCardToBack()
+            deckCycleProg = 0f
+            deckCycleCommitting = false
+            updateCard3DAndPeek()
+            updateMoreHintPill()
+        } else if (deckCycleAnim?.isRunning == true) {
+            deckCycleAnim?.cancel()
+        }
+    }
+
+    private fun applyDeckCycleDelta(dyPx: Float) {
+        if (!canCycleDeck()) return
+        val stride = max(64f * dens, 88f * dens)
+        deckCycleProg = (deckCycleProg + dyPx / stride).coerceIn(0f, 1.08f)
+        if (deckCycleProg > 0.001f) {
+            onDragMusicCoupling(sin(deckCycleProg.coerceIn(0f, 1f) * PI).toFloat() * 8f * dens)
+        } else {
+            onDragMusicCoupling(0f)
+        }
+        updateCard3DAndPeek()
+        updateMoreHintPill()
+    }
+
+    private fun rotateFrontCardToBack() {
+        if (currentItems.size <= 1 || listCol.childCount <= 1) return
+        val rotated = ArrayList<LockNotification>(currentItems.size)
+        for (i in 1 until currentItems.size) rotated.add(currentItems[i])
+        rotated.add(currentItems[0])
+        currentItems = rotated
+
+        val frontRow = listCol.getChildAt(0)
+        if (frontRow != null) {
+            listCol.removeViewAt(0)
+            listCol.addView(frontRow)
+        }
+    }
+
+    private fun settleDeckCycle(netTotalDyPx: Float, vyPxPerSec: Float, cancelled: Boolean = false) {
+        onDragMusicCoupling(0f)
+        if (!canCycleDeck()) {
+            deckCycleProg = 0f
+            deckCycleCommitting = false
+            updateCard3DAndPeek()
+            updateMoreHintPill()
+            return
+        }
+        val shouldCommit = !cancelled && (
+            (vyPxPerSec > 110f * dens && netTotalDyPx > 6f * dens) ||
+                deckCycleProg >= 0.24f ||
+                netTotalDyPx >= 22f * dens
+            )
+        deckCycleAnim?.cancel()
+        val startP = deckCycleProg.coerceIn(0f, 1.08f)
+        if (shouldCommit) {
+            onHaptic("tick")
+            deckCycleCommitting = true
+            val speedBoost = (abs(vyPxPerSec) / (2600f * dens)).coerceIn(0f, 0.35f)
+            val dur = ((1f - startP.coerceAtMost(0.95f)) * 360f * (1f - speedBoost)).roundToInt().toLong().coerceIn(190L, 380L)
+            deckCycleAnim = ValueAnimator.ofFloat(startP, 1f).apply {
+                duration = dur
+                interpolator = iosEase
+                addUpdateListener { a ->
+                    deckCycleProg = a.animatedValue as Float
+                    updateCard3DAndPeek()
+                    updateMoreHintPill()
+                }
+                addListener(object : AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: Animator) {
+                        if (deckCycleCommitting) {
+                            rotateFrontCardToBack()
+                            deckCycleProg = 0f
+                            deckCycleCommitting = false
+                            updateCard3DAndPeek()
+                            updateMoreHintPill()
+                        }
+                    }
+                })
+                start()
+            }
+        } else {
+            deckCycleCommitting = false
+            deckCycleAnim = ValueAnimator.ofFloat(startP, 0f).apply {
+                duration = 280L
+                interpolator = OvershootInterpolator(1.25f)
+                addUpdateListener { a ->
+                    deckCycleProg = a.animatedValue as Float
+                    updateCard3DAndPeek()
+                    updateMoreHintPill()
+                }
+                addListener(object : AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: Animator) {
+                        deckCycleProg = 0f
+                        updateCard3DAndPeek()
+                        updateMoreHintPill()
+                    }
+                })
+                start()
+            }
+        }
     }
 
     private fun sampleDeckSlot(slot: Float): FloatArray {
@@ -978,62 +1127,101 @@ class NotificationCenterView(
             var pivotRatioY = 0.5f
 
             if (!isLandscapeCompact) {
-                val swipeBoost = if (activeSwipeIndex in 0 until i && expandFrac < 0.35f) swipePeekAdvance else 0f
-                val effSlot = if (expandFrac < 0.35f) {
-                    val shifted = when {
-                        deckShift < -0.001f -> if (i == 0) 0f else max(0f, i.toFloat() + deckShift)
-                        else -> i.toFloat() + deckShift
-                    }
-                    val base = shifted - swipeBoost
-                    if (activeSwipeIndex >= 0 && i > activeSwipeIndex) max(activeSwipeIndex.toFloat(), base) else base
-                } else {
-                    i.toFloat()
-                }
-
-                if (effSlot > 0.001f || effSlot < -0.001f || expandFrac < 0.999f) {
-                    val slotVal = sampleDeckSlot(effSlot)
-                    val dPeek = slotVal[0]
-                    val dScale = slotVal[1]
-                    val dRx = slotVal[2]
-                    val dAlpha = slotVal[3]
-                    val dZ = slotVal[4]
-
-                    val staggerIdx = max(0, effSlot.roundToInt() - 1).coerceAtMost(4)
-                    val staggerStart = staggerIdx * 0.045f
-                    val staggerSpan = max(0.35f, 1f - staggerStart * 0.72f)
-                    val cardP = if (effSlot <= 0.001f) {
-                        expandFrac.coerceIn(0f, 1f)
-                    } else {
-                        ((expandFrac - staggerStart) / staggerSpan).coerceIn(0f, 1f)
-                    }
-                    val unfold = cardP * cardP * (3f - 2f * cardP)
-                    val closed = 1f - unfold
+                val cycling = count > 1 && expandFrac < 0.05f && deckCycleProg > 0.001f
+                if (cycling && i == 0) {
+                    // Front card smoothly swings down-and-back in 3D behind the advancing card into the back slot
+                    val p = deckCycleProg.coerceIn(0f, 1.08f)
+                    val easeP = p.coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
+                    val swing = sin(p.coerceIn(0f, 1f) * PI).toFloat()
+                    val destSlot = min(count - 1, 3).toFloat()
+                    val destVal = sampleDeckSlot(destSlot)
+                    val destPeek = destVal[0]
+                    val destScale = destVal[1]
+                    val destRx = destVal[2]
+                    val destAlpha = destVal[3]
+                    val destZ = destVal[4]
 
                     val rowH = if (row.height > 0) row.height.toFloat() else row.cardHeightEstimate()
-                    val collapsedTy = if (row.top > 0 || i == 0) {
-                        (firstBot - rowH + dPeek) - row.top.toFloat()
+                    val destCollapsedTy = if (row.top > 0 || i == 0) {
+                        (firstBot - rowH + destPeek) - row.top.toFloat()
                     } else {
-                        -row.cardHeightEstimate() * min(i, 4) * 0.85f
+                        -row.cardHeightEstimate() * min(count - 1, 3) * 0.85f
                     }
-
-                    restSc = dScale + (1f - dScale) * unfold
-                    restTy = collapsedTy * closed
-                    restRx = dRx * closed
-                    restAlpha = if (effSlot >= 2.2f) {
-                        val revealP = ((cardP - 0.10f) / 0.52f).coerceIn(0f, 1f)
-                        val openAlpha = revealP * revealP * (3f - 2f * revealP)
-                        dAlpha + (openAlpha - dAlpha) * unfold
-                    } else {
-                        dAlpha + (1f - dAlpha) * unfold
+                    restSc = (1f + (destScale - 1f) * easeP) - 0.055f * swing
+                    restTy = destCollapsedTy * easeP + (26f * dens) * swing
+                    restRx = destRx * easeP - 17f * swing
+                    restAlpha = (1f + (destAlpha - 1f) * easeP) * (1f - 0.16f * swing)
+                    restZ = when {
+                        p < 0.36f -> 34f * dens
+                        p < 0.52f -> {
+                            val zt = (p - 0.36f) / 0.16f
+                            (34f * (1f - zt) + 2f * zt) * dens
+                        }
+                        else -> {
+                            val zt = (p - 0.52f) / 0.48f
+                            (2f + (destZ / dens - 2f) * zt) * dens
+                        }
                     }
-                    restZ = dZ * closed + (18f * dens) * unfold
-                    if (closed > 0.08f && effSlot > 0.1f) pivotRatioY = 0.35f
+                    pivotRatioY = 0.42f
                 } else {
-                    restZ = 18f * dens
-                }
+                    val swipeBoost = if (activeSwipeIndex in 0 until i && expandFrac < 0.35f) swipePeekAdvance else 0f
+                    val cycleAdvance = if (cycling && i >= 1) deckCycleProg.coerceIn(0f, 1.05f) else 0f
+                    val effSlot = if (expandFrac < 0.35f) {
+                        val shifted = when {
+                            deckShift < -0.001f -> if (i == 0) 0f else max(0f, i.toFloat() + deckShift)
+                            else -> i.toFloat() + deckShift
+                        }
+                        val base = max(0f, shifted - swipeBoost - cycleAdvance)
+                        if (activeSwipeIndex >= 0 && i > activeSwipeIndex) max(activeSwipeIndex.toFloat(), base) else base
+                    } else {
+                        i.toFloat()
+                    }
 
-                if (expandFrac >= 0.35f && abs(expandGapShift) > 0.5f && i >= expandGapStartIdx) {
-                    restTy += expandGapShift
+                    if (effSlot > 0.001f || effSlot < -0.001f || expandFrac < 0.999f) {
+                        val slotVal = sampleDeckSlot(effSlot)
+                        val dPeek = slotVal[0]
+                        val dScale = slotVal[1]
+                        val dRx = slotVal[2]
+                        val dAlpha = slotVal[3]
+                        val dZ = slotVal[4]
+
+                        val staggerIdx = max(0, effSlot.roundToInt() - 1).coerceAtMost(4)
+                        val staggerStart = staggerIdx * 0.045f
+                        val staggerSpan = max(0.35f, 1f - staggerStart * 0.72f)
+                        val cardP = if (effSlot <= 0.001f) {
+                            expandFrac.coerceIn(0f, 1f)
+                        } else {
+                            ((expandFrac - staggerStart) / staggerSpan).coerceIn(0f, 1f)
+                        }
+                        val unfold = cardP * cardP * (3f - 2f * cardP)
+                        val closed = 1f - unfold
+
+                        val rowH = if (row.height > 0) row.height.toFloat() else row.cardHeightEstimate()
+                        val collapsedTy = if (row.top > 0 || i == 0) {
+                            (firstBot - rowH + dPeek) - row.top.toFloat()
+                        } else {
+                            -row.cardHeightEstimate() * min(i, 4) * 0.85f
+                        }
+
+                        restSc = dScale + (1f - dScale) * unfold
+                        restTy = collapsedTy * closed
+                        restRx = dRx * closed
+                        restAlpha = if (effSlot >= 2.2f) {
+                            val revealP = ((cardP - 0.10f) / 0.52f).coerceIn(0f, 1f)
+                            val openAlpha = revealP * revealP * (3f - 2f * revealP)
+                            dAlpha + (openAlpha - dAlpha) * unfold
+                        } else {
+                            dAlpha + (1f - dAlpha) * unfold
+                        }
+                        restZ = dZ * closed + (18f * dens) * unfold
+                        if (closed > 0.08f && effSlot > 0.1f) pivotRatioY = 0.35f
+                    } else {
+                        restZ = 18f * dens
+                    }
+
+                    if (expandFrac >= 0.35f && abs(expandGapShift) > 0.5f && i >= expandGapStartIdx) {
+                        restTy += expandGapShift
+                    }
                 }
             }
 
@@ -1155,6 +1343,10 @@ class NotificationCenterView(
         var onRubberChanged: (() -> Unit)? = null
         var onInteractionStart: (() -> Unit)? = null
         var getExpandTravelPx: () -> Float = { 300f * dens }
+        var canCycleDeckFn: () -> Boolean = { false }
+        var isCyclingFn: () -> Boolean = { false }
+        var onDeckCycleDeltaFn: (Float) -> Unit = {}
+        var onDeckCycleReleaseFn: (Float, Float, Boolean) -> Unit = { _, _, _ -> }
 
         private var canExpandFn: () -> Boolean = { false }
         private var getExpandFn: () -> Float = { 0f }
@@ -1254,6 +1446,11 @@ class NotificationCenterView(
             val canExp = canExpandFn()
             val travel = max(220f * dens, getExpandTravelPx())
 
+            if (!startedExpanded && curExp <= 0.001f && canCycleDeckFn() && (isCyclingFn() || dy > 0f)) {
+                onDeckCycleDeltaFn(dy)
+                return
+            }
+
             if (canExp && dy < 0f && curExp < 0.999f) {
                 val next = (curExp + (-dy) / travel).coerceIn(0f, 1f)
                 setExpandFn(next)
@@ -1325,9 +1522,11 @@ class NotificationCenterView(
                     val dy = ev.rawY - startRawY
                     val curExp = getExpandFn()
                     val canExp = canExpandFn()
-                    val slopReq = if (canExp && curExp < 0.999f) vertSlop else touchSlop
+                    val cyclePossible = !startedExpanded && curExp <= 0.001f && dy > 0f && canCycleDeckFn()
+                    val slopReq = if (cyclePossible || (canExp && curExp < 0.999f)) vertSlop else touchSlop
                     if (abs(dy) > slopReq && abs(dy) > abs(dx) * 1.05f) {
-                        if ((canExp && ((dy < 0f && curExp < 0.999f) || (dy > 0f && scrollY <= 0 && curExp > 0.001f))) ||
+                        if (cyclePossible ||
+                            (canExp && ((dy < 0f && curExp < 0.999f) || (dy > 0f && scrollY <= 0 && curExp > 0.001f))) ||
                             curExp >= 0.999f ||
                             canScrollVertically(1) ||
                             canScrollVertically(-1)
@@ -1350,6 +1549,13 @@ class NotificationCenterView(
                     val netDx = ev.rawX - startRawX
                     val curExp = getExpandFn()
                     val canExp = canExpandFn()
+                    val downCycleFlick = !startedExpanded && curExp <= 0.001f && canCycleDeckFn() &&
+                        abs(netDy) >= abs(netDx) && ((vy > 110f * dens && netDy > 6f * dens) || netDy >= max(vertSlop, 14f * dens))
+                    if (downCycleFlick) {
+                        dragActive = false
+                        onDeckCycleReleaseFn(netDy, vy, false)
+                        return true
+                    }
                     val upFlick = canExp && curExp < 0.995f && abs(netDy) >= abs(netDx) &&
                         ((-vy > 105f * dens && -netDy > 6f * dens) || -netDy >= max(vertSlop, 12f * dens))
                     val downFlick = canExp && curExp >= 0.995f && startedAtTop && scrollY <= 0 &&
@@ -1393,7 +1599,8 @@ class NotificationCenterView(
                         val totalDy = ev.rawY - startRawY
                         val totalDx = ev.rawX - startRawX
                         val curExp = getExpandFn()
-                        val slopReq = if (canExpandFn() && curExp < 0.999f) vertSlop else touchSlop
+                        val cyclePossible = !startedExpanded && curExp <= 0.001f && totalDy > 0f && canCycleDeckFn()
+                        val slopReq = if (cyclePossible || (canExpandFn() && curExp < 0.999f)) vertSlop else touchSlop
                         if (abs(totalDy) > slopReq && abs(totalDy) > abs(totalDx) * 1.05f) {
                             dragActive = true
                             val initialDy = ev.rawY - lastRawY
@@ -1428,6 +1635,10 @@ class NotificationCenterView(
                     val isFastDownFlick = ev.actionMasked == MotionEvent.ACTION_UP &&
                         vy > 110f * dens && netTotalDy > 6f * dens && abs(netTotalDy) >= abs(netTotalDx)
 
+                    if (!startedExpanded && curExp <= 0.001f && (isCyclingFn() || (canCycleDeckFn() && isFastDownFlick))) {
+                        onDeckCycleReleaseFn(netTotalDy, vy, ev.actionMasked == MotionEvent.ACTION_CANCEL)
+                        return true
+                    }
                     if (canExp && curExp < 0.995f && (wasDrag || isFastUpFlick || (curExp > 0.002f))) {
                         onReleaseFn(startExpandFrac, curExp, netTotalDy, vy)
                         return true
@@ -1505,9 +1716,9 @@ class NotificationCenterView(
 
         fun setCount(hidden: Int) {
             label.text = if (hidden == 1) {
-                "↑ إشعار إضافي • اسحب للأعلى"
+                "↕ إشعار إضافي • اسحب للأعلى أو للأسفل"
             } else {
-                "↑ +$hidden إشعارات مكدّسة • اسحب للأعلى"
+                "↕ +$hidden إشعارات • اسحب للأعلى أو للأسفل"
             }
         }
 
