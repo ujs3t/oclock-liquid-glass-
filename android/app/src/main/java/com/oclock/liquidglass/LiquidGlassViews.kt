@@ -44,7 +44,8 @@ class LiquidGlassCardHelper(
     private val bezelDp: Float,
     private val thickDp: Float,
     private val ior: Float,
-    private val shadowInt: Float
+    private val shadowInt: Float,
+    private val innerShadow: Float = 0f
 ) {
     private var shader: RuntimeShader? = if (Build.VERSION.SDK_INT >= 33) LiquidGlassShaders.createCardShader() else null
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -66,7 +67,7 @@ class LiquidGlassCardHelper(
             val t0 = SystemClock.elapsedRealtimeNanos()
             val sh = shader!!
             LiquidGlassShaders.configureCardShader(
-                sh, shaderSrc, originX, originY, w, h, radPx, bzPx, thPx, ior, glassBgColor, shadowInt
+                sh, shaderSrc, originX, originY, w, h, radPx, bzPx, thPx, ior, glassBgColor, shadowInt, innerShadow
             )
             paint.shader = sh
             canvas.drawRect(0f, 0f, w, h, paint)

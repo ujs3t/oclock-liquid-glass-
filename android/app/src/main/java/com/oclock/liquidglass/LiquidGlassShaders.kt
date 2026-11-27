@@ -25,6 +25,7 @@ object LiquidGlassShaders {
         uniform float4 uGlassBg;
         uniform float uShadowInt;
         uniform float2 uLightDir;
+        uniform float uInnerShadow;
 
         float sdRoundBox(float2 p, float2 b, float r) {
             float2 q = abs(p) - b + r;
@@ -87,8 +88,23 @@ object LiquidGlassShaders {
             // glass-bg tint
             col = mix(col, uGlassBg.rgb, uGlassBg.a);
 
+            // Soft fading directional white inner shadow (no full border stroke)
+            if (uInnerShadow > 0.001 && dd < 0.0) {
+                float depthPx = -dd;
+                float span = max(14.0, uBezel * 1.35);
+                if (depthPx < span) {
+                    float td = clamp(depthPx / span, 0.0, 1.0);
+                    float fall = pow(1.0 - td, 2.45);
+                    float2 lDir = normalize(float2(-0.32, -0.95));
+                    float topLit = pow(clamp(dot(n, lDir) * 0.5 + 0.5, 0.0, 1.0), 2.35);
+                    float botLit = pow(clamp(dot(n, -lDir) * 0.5 + 0.5, 0.0, 1.0), 3.6) * 0.22;
+                    float innerGlow = clamp((topLit + botLit) * fall * uInnerShadow * 0.50, 0.0, 0.56);
+                    col = mix(col, float3(1.0), innerGlow);
+                }
+            }
+
             // Fresnel specular rim shadow
-            if (dd <= 0.45 && -dd <= 1.8) {
+            if (uShadowInt > 0.001 && dd <= 0.45 && -dd <= 1.8) {
                 float band = clamp((1.5 + dd) / 1.5, 0.0, 1.0);
                 float edgeAA = clamp((0.45 - dd) / 0.9, 0.0, 1.0);
                 float k = abs(dot(n, uLightDir));
@@ -300,7 +316,8 @@ object LiquidGlassShaders {
         thickPx: Float,
         ior: Float,
         glassBg: Int,
-        shadowInt: Float
+        shadowInt: Float,
+        innerShadow: Float = 0f
     ) {
         shader.setInputShader("uBackdrop", backdrop)
         shader.setFloatUniform("uCardOrigin", cardX, cardY)
@@ -319,6 +336,7 @@ object LiquidGlassShaders {
         shader.setFloatUniform("uShadowInt", shadowInt)
         val rad = Math.toRadians(55.0)
         shader.setFloatUniform("uLightDir", cos(rad).toFloat(), sin(rad).toFloat())
+        shader.setFloatUniform("uInnerShadow", innerShadow)
     }
 
     fun isGpuAgslAvailable(): Boolean = Build.VERSION.SDK_INT >= 33
