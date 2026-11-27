@@ -1609,6 +1609,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             notificationCenter.collapseScrollIfExpanded()
         }
         if (!unlocked) {
+            if (::passcodeOverlay.isInitialized) passcodeOverlay.resetToClosedState(notify = false)
+            passcodeProgress = 0f
             haptic("tick")
             island.pulse("تم قفل الشاشة", 0xFF38BDF8.toInt(), 1400L)
         }
@@ -1668,7 +1670,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
             if (!cfg.passcodeEnabled || isUnlocked ||
                 editorSheet.isOpen || cameraOverlay.isOpen ||
-                musicLibraryOverlay.isOpen || resizeOverlay.isOpen ||
+                musicLibraryOverlay.isOpen ||
                 passcodeOverlay.isOpen
             ) {
                 if (swipingUp || eligible) {
@@ -1685,7 +1687,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     downY = ev.rawY
                     startSwipeY = ev.rawY
                     swipingUp = false
-                    eligible = isEligibleForUnlockSwipe(ev.rawX, ev.rawY)
+                    eligible = !(resizeOverlay.isOpen && isPointInView(resizeOverlay, ev.rawX, ev.rawY, 16f * dens)) &&
+                        isEligibleForUnlockSwipe(ev.rawX, ev.rawY)
                     vt?.recycle()
                     vt = if (eligible) VelocityTracker.obtain().also { trackRaw(ev) } else null
                     return false
@@ -1697,9 +1700,12 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     val dy = ev.rawY - downY
                     if (-dy > slop && -dy > abs(dx) * 1.12f) {
                         swipingUp = true
-                        startSwipeY = ev.rawY
+                        startSwipeY = downY + slop * 0.35f
                         if (island.isExpanded) island.collapseIfExpanded()
                         if (resizeOverlay.isOpen) resizeOverlay.close()
+                        val travel = max(220f * dens, height * 0.42f)
+                        val p = ((startSwipeY - ev.rawY) / travel).coerceIn(0.01f, 1f)
+                        passcodeOverlay.setInteractiveProgress(p)
                         return true
                     }
                 }
@@ -1754,8 +1760,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     val dy = ev.rawY - downY
                     if (!swipingUp && -dy > slop && -dy > abs(dx) * 1.12f) {
                         swipingUp = true
-                        startSwipeY = ev.rawY
+                        startSwipeY = downY + slop * 0.35f
                         if (island.isExpanded) island.collapseIfExpanded()
+                        if (resizeOverlay.isOpen) resizeOverlay.close()
                     }
                     if (swipingUp) {
                         val travel = max(220f * dens, height * 0.42f)
@@ -1779,7 +1786,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                         if (ev.actionMasked == MotionEvent.ACTION_CANCEL) {
                             passcodeOverlay.closeAnimated()
                         } else {
-                            passcodeOverlay.settleInteractive(vy)
+                            passcodeOverlay.settleInteractive(vy, draggedUpPx = max(0f, -netDy))
                         }
                         return true
                     }

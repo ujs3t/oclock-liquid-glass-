@@ -75,10 +75,13 @@ class PasscodeOverlayView(
 
     var progress = 0f
         private set
+    private var isClosing = false
+    private var animGen = 0
     val isOpen: Boolean
-        get() = progress > 0.002f || anim?.isRunning == true
+        get() = visibility == VISIBLE && !isClosing && (progress > 0.002f || anim?.isRunning == true)
 
     private var anim: ValueAnimator? = null
+    private var verifyRunnable: Runnable? = null
     private var elasticCascade = false
     private var safeTopPx = 0
     private var safeBottomPx = 0
@@ -360,12 +363,51 @@ class PasscodeOverlayView(
         if (w > 0 && h > 0) post { relayoutResponsive() }
     }
 
-    fun prepareUnlockSession() {
-        mode = Mode.UNLOCK
+    private fun cancelPendingVerification() {
+        verifyRunnable?.let { removeCallbacks(it) }
+        verifyRunnable = null
+        dotsView.cancelAnimations()
         isVerifying = false
+    }
+
+    fun resetToClosedState(notify: Boolean = false) {
+        animGen++
+        anim?.cancel()
+        anim = null
+        cancelPendingVerification()
+        progress = 0f
+        isClosing = false
+        elasticCascade = false
+        dismissingDrag = false
+        mode = Mode.UNLOCK
+        entered.clear()
+        pendingNewPin = ""
+        contentCol.alpha = 1f
+        contentCol.scaleX = 1f
+        contentCol.scaleY = 1f
+        applyCascadeTransforms(0f, elastic = false)
+        visibility = GONE
+        onProgressChanged(0f)
+        if (notify) onClosed()
+    }
+
+    override fun onDetachedFromWindow() {
+        animGen++
+        anim?.cancel()
+        anim = null
+        cancelPendingVerification()
+        super.onDetachedFromWindow()
+    }
+
+    fun prepareUnlockSession() {
+        cancelPendingVerification()
+        mode = Mode.UNLOCK
         val pin = getExpectedPin()
         targetLen = if (pin.length == 4) 4 else 6
         entered.clear()
+        contentCol.alpha = 1f
+        contentCol.scaleX = 1f
+        contentCol.scaleY = 1f
         lenSwitchRow.visibility = GONE
         titleLabel.text = "أدخل رمز الدخول"
         hintLabel.visibility = if (pin == "000000") VISIBLE else GONE
@@ -374,12 +416,18 @@ class PasscodeOverlayView(
     }
 
     fun openForSetup(initialLength: Int = 6) {
+        animGen++
         anim?.cancel()
+        anim = null
+        isClosing = false
+        cancelPendingVerification()
         mode = Mode.SETUP_NEW
-        isVerifying = false
         targetLen = if (initialLength == 4) 4 else 6
         pendingNewPin = ""
         entered.clear()
+        contentCol.alpha = 1f
+        contentCol.scaleX = 1f
+        contentCol.scaleY = 1f
         lenSwitchRow.visibility = VISIBLE
         styleLenChips()
         titleLabel.text = "أدخل رمز الدخول الجديد"
@@ -435,6 +483,12 @@ class PasscodeOverlayView(
 
     fun setInteractiveProgress(p: Float) {
         val clamped = p.coerceIn(0f, 1f)
+        if (clamped > 0.001f && (isClosing || anim?.isRunning == true)) {
+            animGen++
+            anim?.cancel()
+            anim = null
+            isClosing = false
+        }
         if (clamped > 0.001f && visibility != VISIBLE) {
             prepareUnlockSession()
             visibility = VISIBLE
@@ -446,26 +500,32 @@ class PasscodeOverlayView(
         invalidate()
         invalidateAllKeys()
         if (clamped <= 0.001f && anim?.isRunning != true) {
-            elasticCascade = false
-            visibility = GONE
+            resetToClosedState(notify = false)
         }
     }
 
-    fun settleInteractive(vyPxPerSec: Float) {
+    fun settleInteractive(vyPxPerSec: Float, draggedUpPx: Float = 0f) {
         val shouldOpen = when {
-            vyPxPerSec < -180f * dens -> true
+            vyPxPerSec < -140f * dens -> true
             vyPxPerSec > 210f * dens -> false
-            else -> progress >= 0.24f
+            else -> progress >= 0.22f || draggedUpPx >= 44f * dens
         }
         if (shouldOpen) openAnimated(vyPxPerSec) else closeAnimated(vyPxPerSec)
     }
 
     fun openAnimated(vyPxPerSec: Float = 0f) {
+        val myGen = ++animGen
         anim?.cancel()
+        anim = null
+        isClosing = false
         if (visibility != VISIBLE) {
             if (mode == Mode.UNLOCK) prepareUnlockSession()
             visibility = VISIBLE
             relayoutResponsive()
+        } else {
+            contentCol.alpha = 1f
+            contentCol.scaleX = 1f
+            contentCol.scaleY = 1f
         }
         val start = progress
         val dist = abs(1f - start)
@@ -477,17 +537,28 @@ class PasscodeOverlayView(
         elasticCascade = true
         val speedBoost = (abs(vyPxPerSec) / (3000f * dens)).coerceIn(0f, 0.32f)
         val dur = ((320f + 190f * dist) * (1f - speedBoost)).roundToInt().toLong().coerceIn(260L, 480L)
+        var cancelled = false
         anim = ValueAnimator.ofFloat(start, 1f).apply {
             duration = dur
             interpolator = iosEase
             addUpdateListener { a ->
-                setInteractiveProgress((a.animatedValue as Float).coerceIn(0f, 1f))
+                if (myGen == animGen && !cancelled) {
+                    setInteractiveProgress((a.animatedValue as Float).coerceIn(0f, 1f))
+                }
             }
             addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationCancel(animation: Animator) {
+                    cancelled = true
+                }
                 override fun onAnimationEnd(animation: Animator) {
-                    elasticCascade = false
-                    applyCascadeTransforms(progress, elastic = false)
-                    invalidateAllKeys()
+                    if (!cancelled && myGen == animGen) {
+                        anim = null
+                        elasticCascade = false
+                        progress = 1f
+                        applyCascadeTransforms(1f, elastic = false)
+                        onProgressChanged(1f)
+                        invalidateAllKeys()
+                    }
                 }
             })
             start()
@@ -495,33 +566,45 @@ class PasscodeOverlayView(
     }
 
     fun closeAnimated(vyPxPerSec: Float = 0f, afterClose: (() -> Unit)? = null) {
+        val myGen = ++animGen
         anim?.cancel()
+        anim = null
+        cancelPendingVerification()
         elasticCascade = false
+        dismissingDrag = false
         val start = progress
-        if (start <= 0.005f) {
-            mode = Mode.UNLOCK
-            setInteractiveProgress(0f)
-            visibility = GONE
-            onClosed()
+        if (start <= 0.005f || visibility != VISIBLE) {
+            resetToClosedState(notify = true)
             afterClose?.invoke()
             return
         }
+        isClosing = true
         val speedBoost = (abs(vyPxPerSec) / (3000f * dens)).coerceIn(0f, 0.35f)
         val dur = ((250f + 150f * start) * (1f - speedBoost)).roundToInt().toLong().coerceIn(190L, 380L)
+        var cancelled = false
         anim = ValueAnimator.ofFloat(start, 0f).apply {
             duration = dur
             interpolator = iosEase
             addUpdateListener { a ->
-                setInteractiveProgress((a.animatedValue as Float).coerceIn(0f, 1f))
+                if (myGen == animGen && !cancelled) {
+                    val p = (a.animatedValue as Float).coerceIn(0f, 1f)
+                    progress = p
+                    applyCascadeTransforms(p, elastic = false)
+                    onProgressChanged(p)
+                    invalidate()
+                    invalidateAllKeys()
+                }
             }
             addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationCancel(animation: Animator) {
+                    cancelled = true
+                }
                 override fun onAnimationEnd(animation: Animator) {
-                    entered.clear()
-                    isVerifying = false
-                    mode = Mode.UNLOCK
-                    visibility = GONE
-                    onClosed()
-                    afterClose?.invoke()
+                    if (!cancelled && myGen == animGen) {
+                        anim = null
+                        resetToClosedState(notify = true)
+                        afterClose?.invoke()
+                    }
                 }
             })
             start()
@@ -529,7 +612,7 @@ class PasscodeOverlayView(
     }
 
     private fun onDigitTapped(digit: String) {
-        if (isVerifying || progress < 0.55f || entered.length >= targetLen) return
+        if (isClosing || isVerifying || progress < 0.55f || entered.length >= targetLen) return
         onHaptic("tick")
         entered.append(digit)
         dotsView.configure(targetLen, entered.length, animateLast = true)
@@ -538,7 +621,17 @@ class PasscodeOverlayView(
         if (entered.length == targetLen) {
             isVerifying = true
             val code = entered.toString()
-            postDelayed({ handleCompleteEntry(code) }, 135L)
+            verifyRunnable?.let { removeCallbacks(it) }
+            val r = Runnable {
+                verifyRunnable = null
+                if (!isClosing && visibility == VISIBLE) {
+                    handleCompleteEntry(code)
+                } else {
+                    isVerifying = false
+                }
+            }
+            verifyRunnable = r
+            postDelayed(r, 135L)
         }
     }
 
@@ -547,31 +640,37 @@ class PasscodeOverlayView(
             Mode.UNLOCK -> {
                 if (code == getExpectedPin()) {
                     onHaptic("pop")
+                    val myGen = ++animGen
                     anim?.cancel()
+                    anim = null
+                    isClosing = true
                     val start = progress
+                    var cancelled = false
                     anim = ValueAnimator.ofFloat(start, 0f).apply {
                         duration = 320L
                         interpolator = iosEase
                         addUpdateListener { a ->
-                            val p = (a.animatedValue as Float).coerceIn(0f, 1f)
-                            progress = p
-                            contentCol.alpha = p
-                            val sc = 1f + (1f - p) * 0.09f
-                            contentCol.scaleX = sc
-                            contentCol.scaleY = sc
-                            invalidate()
-                            invalidateAllKeys()
+                            if (myGen == animGen && !cancelled) {
+                                val p = (a.animatedValue as Float).coerceIn(0f, 1f)
+                                progress = p
+                                contentCol.alpha = p
+                                val sc = 1f + (1f - p) * 0.09f
+                                contentCol.scaleX = sc
+                                contentCol.scaleY = sc
+                                invalidate()
+                                invalidateAllKeys()
+                            }
                         }
                         addListener(object : AnimatorListenerAdapter() {
+                            override fun onAnimationCancel(animation: Animator) {
+                                cancelled = true
+                            }
                             override fun onAnimationEnd(animation: Animator) {
-                                entered.clear()
-                                isVerifying = false
-                                contentCol.scaleX = 1f
-                                contentCol.scaleY = 1f
-                                contentCol.alpha = 1f
-                                applyCascadeTransforms(0f, elastic = false)
-                                visibility = GONE
-                                onUnlocked()
+                                if (!cancelled && myGen == animGen) {
+                                    anim = null
+                                    resetToClosedState(notify = false)
+                                    onUnlocked()
+                                }
                             }
                         })
                         start()
@@ -647,11 +746,15 @@ class PasscodeOverlayView(
         for (btn in keypadButtons) btn.invalidate()
     }
 
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (visibility != VISIBLE || isClosing) return false
+        return super.dispatchTouchEvent(ev)
+    }
+
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
-        if (progress < 0.80f) return false
+        if (isClosing || progress < 0.55f) return false
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                anim?.cancel()
                 downRawX = ev.rawX
                 downRawY = ev.rawY
                 dragStartRawY = ev.rawY
@@ -665,6 +768,11 @@ class PasscodeOverlayView(
                 val dx = ev.rawX - downRawX
                 val dy = ev.rawY - downRawY
                 if (dy > touchSlop * 1.4f && abs(dy) > abs(dx) * 1.25f) {
+                    animGen++
+                    anim?.cancel()
+                    anim = null
+                    elasticCascade = false
+                    startDragProg = progress
                     dismissingDrag = true
                     dragStartRawY = ev.rawY
                     return true
@@ -681,9 +789,9 @@ class PasscodeOverlayView(
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(ev: MotionEvent): Boolean {
+        if (isClosing || visibility != VISIBLE) return false
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                anim?.cancel()
                 downRawX = ev.rawX
                 downRawY = ev.rawY
                 dragStartRawY = ev.rawY
@@ -698,6 +806,11 @@ class PasscodeOverlayView(
                 val dx = ev.rawX - downRawX
                 val dy = ev.rawY - downRawY
                 if (!dismissingDrag && dy > touchSlop * 1.3f && abs(dy) > abs(dx) * 1.2f) {
+                    animGen++
+                    anim?.cancel()
+                    anim = null
+                    elasticCascade = false
+                    startDragProg = progress
                     dismissingDrag = true
                     dragStartRawY = ev.rawY
                 }
@@ -720,6 +833,8 @@ class PasscodeOverlayView(
                     val shouldDismiss = ev.actionMasked == MotionEvent.ACTION_UP &&
                         (vy > 190f * dens || progress < 0.72f)
                     if (shouldDismiss) closeAnimated(vy) else openAnimated(vy)
+                } else if (progress < 0.99f && anim?.isRunning != true) {
+                    openAnimated()
                 }
                 return true
             }
@@ -798,8 +913,19 @@ class PasscodeOverlayView(
             }
         }
 
+        fun cancelAnimations() {
+            popAnim?.cancel()
+            popAnim = null
+            shakeAnim?.cancel()
+            shakeAnim = null
+            shakeOffsetX = 0f
+            for (i in dotScales.indices) dotScales[i] = 1f
+            invalidate()
+        }
+
         fun playShake(onDone: () -> Unit) {
             shakeAnim?.cancel()
+            var cancelled = false
             shakeAnim = ValueAnimator.ofFloat(0f, 1f).apply {
                 duration = 480L
                 addUpdateListener { a ->
@@ -809,10 +935,13 @@ class PasscodeOverlayView(
                     invalidate()
                 }
                 addListener(object : AnimatorListenerAdapter() {
+                    override fun onAnimationCancel(animation: Animator) {
+                        cancelled = true
+                    }
                     override fun onAnimationEnd(animation: Animator) {
                         shakeOffsetX = 0f
                         invalidate()
-                        onDone()
+                        if (!cancelled) onDone()
                     }
                 })
                 start()

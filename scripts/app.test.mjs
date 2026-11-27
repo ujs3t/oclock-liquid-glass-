@@ -200,6 +200,9 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(passcodeKt.includes('Choreographer.FrameCallback'));
   assert.ok(passcodeKt.includes('applyCascadeTransforms'));
   assert.ok(passcodeKt.includes('setInteractiveProgress'));
+  assert.ok(passcodeKt.includes('resetToClosedState'));
+  assert.ok(passcodeKt.includes('cancelAnimations'));
+  assert.ok(passcodeKt.includes('isClosing'));
   assert.ok(passcodeKt.includes('openForSetup'));
 
   const aiKt = readFileSync(ktDir + 'AIDepthManager.kt','utf8');
