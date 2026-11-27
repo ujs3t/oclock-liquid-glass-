@@ -517,7 +517,7 @@ class EditorSheetView(
         }
         body.addView(inOpSeek)
 
-        val (itH, itV) = secHeaderWithValue("السُمك", "0.9")
+        val (itH, itV) = secHeaderWithValue("السُمك", "0.3")
         inThVal = itV
         body.addView(itH)
         inThSeek = makeSeekBar(0, 80) { v, fromUser ->
@@ -528,7 +528,7 @@ class EditorSheetView(
         }
         body.addView(inThSeek)
 
-        val (iaH, iaV) = secHeaderWithValue("اتجاه الظل", "55°")
+        val (iaH, iaV) = secHeaderWithValue("اتجاه الظل", "59°")
         inAngVal = iaV
         body.addView(iaH)
         inAngSeek = makeSeekBar(0, 360) { v, fromUser ->

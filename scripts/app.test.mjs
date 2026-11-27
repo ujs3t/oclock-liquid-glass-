@@ -73,7 +73,8 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   const stateKt = readFileSync(ktDir + 'AppState.kt','utf8');
   assert.ok(stateKt.includes('innerFade'));
   assert.ok(stateKt.includes('innerOpacity: Int = 100'));
-  assert.ok(stateKt.includes('innerThickness: Float = 0.9f'));
+  assert.ok(stateKt.includes('innerThickness: Float = 0.3f'));
+  assert.ok(stateKt.includes('innerAngle: Float = 59f'));
   assert.ok(stateKt.includes('innerFade: Int = 100'));
 
   const sheetKt = readFileSync(ktDir + 'EditorSheetView.kt','utf8');
@@ -192,8 +193,8 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(passcodeKt.includes('PasscodeDotsView'));
   assert.ok(passcodeKt.includes('useBlurredBackdrop = false'));
   assert.ok(passcodeKt.includes('shadowInt = 0.0f'));
-  assert.ok(passcodeKt.includes('innerShadow = 0.34f'));
-  assert.ok(shadersKt.includes('clamp(uBezel * 0.048, 2.2, 4.6)'));
+  assert.ok(passcodeKt.includes('innerShadow = 0.46f'));
+  assert.ok(shadersKt.includes('clamp(uBezel * 0.095, 4.0, 9.5)'));
   assert.ok(passcodeKt.includes('Choreographer.FrameCallback'));
   assert.ok(passcodeKt.includes('applyCascadeTransforms'));
   assert.ok(passcodeKt.includes('setInteractiveProgress'));

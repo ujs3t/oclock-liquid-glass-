@@ -88,17 +88,17 @@ object LiquidGlassShaders {
             // glass-bg tint
             col = mix(col, uGlassBg.rgb, uGlassBg.a);
 
-            // Ultra-thin silky white inner shadow ONLY (matches Flashlight/Camera rim thinness, zero outer stroke)
+            // Balanced silky white inner shadow ONLY (slightly fuller rim on large keys while staying crisp & stroke-free)
             if (uInnerShadow > 0.001 && dd <= 0.15) {
                 float depthPx = max(0.0, -dd);
-                float span = clamp(uBezel * 0.048, 2.2, 4.6);
+                float span = clamp(uBezel * 0.095, 4.0, 9.5);
                 if (depthPx < span) {
                     float edgeAA = clamp((0.15 - dd) / 0.65, 0.0, 1.0);
                     float td = clamp(depthPx / span, 0.0, 1.0);
-                    float fall = pow(1.0 - td, 2.15);
+                    float fall = pow(1.0 - td, 2.25);
                     float k = abs(dot(n, uLightDir));
                     float lit = pow(max(0.0, k), 1.8);
-                    float innerGlow = clamp(lit * fall * edgeAA * uInnerShadow, 0.0, 0.72);
+                    float innerGlow = clamp(lit * fall * edgeAA * uInnerShadow, 0.0, 0.78);
                     col = mix(col, float3(1.0), innerGlow);
                 }
             }
