@@ -479,13 +479,16 @@ class ClockResizeOverlayView(
         val fitSz = max(40f, startFitSize)
         val fullWidthSize = (fitSz * (maxW / max(40f, startW))).roundToInt().toFloat().coerceIn(56f, 420f)
 
+        val baseUnitH = startH / max(0.5f, startSy)
+        val maxSizeAtUnitSy = (fitSz * (maxH / max(40f, baseUnitH))).coerceIn(56f, fullWidthSize)
+
         if (horiz) {
             val dxOut = dx * if (dir.contains('w')) -2f else 2f
             val nextW = (startW + dxOut).coerceIn(80f, maxW)
-            cfg.size = (fitSz * (nextW / max(40f, startW))).roundToInt().toFloat().coerceIn(56f, fullWidthSize)
+            cfg.size = (fitSz * (nextW / max(40f, startW))).roundToInt().toFloat().coerceIn(56f, maxSizeAtUnitSy)
             cfg.sx = 1.0f
         }
-        val baseHAtSize = (startH / max(0.5f, startSy)) * (cfg.size / fitSz)
+        val baseHAtSize = baseUnitH * (cfg.size / fitSz)
         val maxSyAtSize = (maxH / max(40f, baseHAtSize)).coerceIn(1.0f, 3.10f)
 
         if (vert) {
@@ -505,10 +508,15 @@ class ClockResizeOverlayView(
         val hPct = (((cfg.sy - 1f) / max(0.1f, maxSyAtSize - 1f)) * 100f).roundToInt().coerceIn(0, 100)
         labelPill.text = "الحجم $wPct% · الطول $hPct%"
 
-        val baseSize = max(40f, clockView.activeArtifact?.sizeDp ?: clockView.committedSize())
+        val art = clockView.activeArtifact
+        val baseSize = max(40f, art?.sizeDp ?: clockView.committedSize())
         val baseSy = max(0.5f, clockView.committedSy())
-        val kSize = cfg.size / baseSize
-        clockView.updatePreviewTransform(kSize * (cfg.sx / 1f), kSize * (cfg.sy / baseSy))
+        val curTextW = max(40f, art?.textWDp ?: (clockView.width / dens))
+        val curTextH = max(40f, art?.textHDp ?: (clockView.height / dens))
+        val rawScaleX = (cfg.size / baseSize) * cfg.sx
+        val rawScaleY = (cfg.size / baseSize) * (cfg.sy / baseSy)
+        val previewFit = min(1f, min(maxW / max(1f, curTextW * rawScaleX), maxH / max(1f, curTextH * rawScaleY)))
+        clockView.updatePreviewTransform(rawScaleX * previewFit, rawScaleY * previewFit)
         layoutAroundClock()
         onConfigChanged(true)
     }

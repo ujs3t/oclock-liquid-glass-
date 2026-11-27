@@ -139,9 +139,12 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private var pullY = 0f
     private var pullAnimator: ValueAnimator? = null
     private var springTargetClock = 0f
+    private var springTargetClockFit = 1f
     private var springTargetNp = 0f
     private var springTargetNc = 0f
+    private var clockFitScale = 1f
     private var springVelClock = 0f
+    private var springVelClockFit = 0f
     private var springVelNp = 0f
     private var springVelNc = 0f
     private var springRunning = false
@@ -164,6 +167,10 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             springVelClock += fC * dt
             clockRestOffset += springVelClock * dt
 
+            val fF = (springTargetClockFit - clockFitScale) * stiffness - springVelClockFit * damping
+            springVelClockFit += fF * dt
+            clockFitScale = (clockFitScale + springVelClockFit * dt).coerceIn(0.35f, 1.05f)
+
             val fN = (springTargetNp - npBaseTranslationY) * stiffness - springVelNp * damping
             springVelNp += fN * dt
             npBaseTranslationY += springVelNp * dt
@@ -178,14 +185,17 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             if (::resizeOverlay.isInitialized && resizeOverlay.isOpen) resizeOverlay.layoutAroundClock()
 
             val settled = abs(springTargetClock - clockRestOffset) < 0.35f && abs(springVelClock) < 2f &&
+                    abs(springTargetClockFit - clockFitScale) < 0.003f && abs(springVelClockFit) < 0.02f &&
                     abs(springTargetNp - npBaseTranslationY) < 0.35f && abs(springVelNp) < 2f &&
                     abs(springTargetNc - nextNc) < 0.35f && abs(springVelNc) < 2f
 
             if (settled) {
                 clockRestOffset = springTargetClock
+                clockFitScale = springTargetClockFit
                 npBaseTranslationY = springTargetNp
                 if (::notificationCenter.isInitialized) notificationCenter.setAnimatedRestingOffset(springTargetNc)
                 springVelClock = 0f
+                springVelClockFit = 0f
                 springVelNp = 0f
                 springVelNc = 0f
                 springRunning = false
@@ -778,18 +788,18 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         (island.layoutParams as FrameLayout.LayoutParams).topMargin = safeTopPx + (7f * dens).roundToInt()
         island.visibility = if (isShortLandscape) View.GONE else View.VISIBLE
 
-        (toplineRow.layoutParams as FrameLayout.LayoutParams).topMargin = safeTopPx + (if (isShortLandscape) 26f else 50f).let { (it * dens).roundToInt() }
+        (toplineRow.layoutParams as FrameLayout.LayoutParams).topMargin = safeTopPx + (if (isShortLandscape) 26f else 48f).let { (it * dens).roundToInt() }
         (clockContainer.layoutParams as FrameLayout.LayoutParams).topMargin =
-            safeTopPx + ((if (isShortLandscape) 48f else 82f) + cfg.clockY).let { (it * dens).roundToInt() }
+            safeTopPx + ((if (isShortLandscape) 48f else 78f) + cfg.clockY).let { (it * dens).roundToInt() }
 
         val npLp = npCard.layoutParams as FrameLayout.LayoutParams
         if (isShortLandscape) {
-            npLp.width = min((310f * dens).roundToInt(), (resources.displayMetrics.widthPixels * 0.43f).roundToInt())
+            npLp.width = min((330f * dens).roundToInt(), (resources.displayMetrics.widthPixels * 0.46f).roundToInt())
             npLp.gravity = Gravity.BOTTOM or Gravity.LEFT
             npLp.bottomMargin = safeBottomPx + (20f * dens).roundToInt()
         } else {
             val availW = max(1, phoneShell.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels)
-            npLp.width = min((368f * dens).roundToInt(), availW - (36f * dens).roundToInt())
+            npLp.width = min((416f * dens).roundToInt(), max(220, availW - (16f * dens).roundToInt()))
             npLp.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
             npLp.bottomMargin = safeBottomPx + (110f * dens).roundToInt()
         }
@@ -820,11 +830,14 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             springRunning = false
             Choreographer.getInstance().removeFrameCallback(layoutSpringCallback)
             clockRestOffset = 0f
+            clockFitScale = 1f
             npBaseTranslationY = 0f
             springTargetClock = 0f
+            springTargetClockFit = 1f
             springTargetNp = 0f
             springTargetNc = 0f
             springVelClock = 0f
+            springVelClockFit = 0f
             springVelNp = 0f
             springVelNc = 0f
             notifExpandFrac = 0f
@@ -847,24 +860,29 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         }
 
         val cardW = min((400f * dens).roundToInt(), max(220, shellW - (28f * dens).roundToInt()))
-        val shortcutsReserve = safeBottomPx + (90f * dens).roundToInt()
+        val shortcutsReserve = safeBottomPx + (84f * dens).roundToInt()
         val shortcutsTop = shellH - shortcutsReserve
         val expandedTop = safeTopPx + (54f * dens).roundToInt()
         val npBaseBottom = safeBottomPx + (110f * dens).roundToInt()
-        val npH = npCard.height.takeIf { it > 0 } ?: (108f * dens).roundToInt()
-        val headerH = ((if (notifHub.hasNotificationAccess()) 44f else 76f) * dens).roundToInt()
+        val npH = npCard.height.takeIf { it > 0 } ?: (110f * dens).roundToInt()
+        val headerH = ((if (notifHub.hasNotificationAccess()) 40f else 66f) * dens).roundToInt()
+        val clockGap = (10f * dens).roundToInt()
+        val cardGap = (8f * dens).roundToInt()
 
-        val clockNaturalTop = safeTopPx + ((82f + cfg.clockY) * dens).roundToInt()
-        val clockH = if (clockView.height > 0) {
-            (clockView.height * max(0.35f, clockView.scaleY)).roundToInt()
-        } else {
-            (186f * dens).roundToInt()
-        }
-        val clockNaturalBot = clockNaturalTop + clockH
-        val minClockTop = safeTopPx + (42f * dens).roundToInt()
-        val maxUpLift = max(0f, (clockNaturalTop - minClockTop).toFloat())
+        val art = clockView.activeArtifact
+        val clockNaturalTop = safeTopPx + ((78f + cfg.clockY) * dens).roundToInt()
+        val rawViewH = if (clockView.height > 0) clockView.height.toFloat() else (art?.hDp ?: 210f) * dens
+        val cScaleY = max(0.35f, clockView.scaleY)
+        val inkTopInView = ((art?.inkTopDp ?: 18f) * dens) * cScaleY
+        val inkBotInView = ((art?.inkBottomDp ?: max(48f, rawViewH / dens - 18f)) * dens) * cScaleY
+        val clockNaturalInkTop = clockNaturalTop + inkTopInView
+        val clockNaturalInkBot = clockNaturalTop + inkBotInView
+        val curInkH = max(1f, inkBotInView - inkTopInView)
+        val minClockInkTop = safeTopPx + (74f * dens)
+        val maxUpLift = max(0f, clockNaturalInkTop - minClockInkTop)
 
         var targetClockRest = 0f
+        var targetClockFit = 1f
         var targetNpTy = 0f
         var targetNcResting = notificationCenter.restingOffsetPx
 
@@ -875,42 +893,58 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             targetNcResting = 0f
             if (cfg.music) {
                 val npNaturalTop = shellH - npBaseBottom - npH
-                val overlap = (clockNaturalBot - (npNaturalTop - (12f * dens).roundToInt())).toFloat()
+                val overlap = clockNaturalInkBot - (npNaturalTop - clockGap)
                 if (overlap > 0f) {
                     targetClockRest = -min(overlap, maxUpLift)
+                }
+                val effClockBot = clockNaturalInkBot + targetClockRest
+                if (effClockBot > npNaturalTop - clockGap) {
+                    val availInkH = max(72f * dens, (npNaturalTop - clockGap) - (clockNaturalInkTop + targetClockRest))
+                    targetClockFit = (availInkH / curInkH).coerceIn(0.45f, 1f)
                 }
             }
         } else {
             val desiredListH = when {
-                items.size <= 1 -> (84f * dens).roundToInt()
-                items.size == 2 -> (112f * dens).roundToInt()
-                else -> (126f * dens).roundToInt()
+                items.size <= 1 -> (78f * dens).roundToInt()
+                items.size == 2 -> (96f * dens).roundToInt()
+                else -> (106f * dens).roundToInt()
             }
             val desiredTotalNotifH = headerH + desiredListH
-            val minTotalNotifH = headerH + (84f * dens).roundToInt()
+            val minTotalNotifH = headerH + (74f * dens).roundToInt()
+            val idealRestingTop = max(expandedTop, shortcutsTop - desiredTotalNotifH)
+            val maxRestingTop = max(expandedTop, shortcutsTop - minTotalNotifH)
 
             val restingTop: Int
             if (cfg.music) {
-                val neededBelowClock = npH + (10f * dens).roundToInt() + desiredTotalNotifH + (6f * dens).roundToInt()
-                val availBelowNatural = shortcutsTop - clockNaturalBot - (8f * dens).roundToInt()
-                targetClockRest = -min(max(0f, (neededBelowClock - availBelowNatural).toFloat()), maxUpLift)
-                val effectiveClockBot = (clockNaturalBot + targetClockRest).roundToInt()
+                val idealNpBottom = (shellH - idealRestingTop) + cardGap
+                val minNpBottom = max(npBaseBottom, (shellH - maxRestingTop) + cardGap)
+                val idealNpTop = shellH - idealNpBottom - npH
+                val neededLift = clockNaturalInkBot - (idealNpTop - clockGap)
+                targetClockRest = -min(max(0f, neededLift), maxUpLift)
+                val effectiveClockBot = clockNaturalInkBot + targetClockRest
 
-                val maxNpBottom = max(npBaseBottom, shellH - effectiveClockBot - npH - (8f * dens).roundToInt())
-                val idealNpBottom = shortcutsReserve + desiredTotalNotifH + (10f * dens).roundToInt()
-                val targetNpBottom = min(maxNpBottom, max(npBaseBottom, idealNpBottom))
+                val targetNpBottom = min(idealNpBottom, max(minNpBottom, (shellH - effectiveClockBot - npH - clockGap).roundToInt()))
                 targetNpTy = -(targetNpBottom - npBaseBottom).toFloat()
 
-                restingTop = ((shellH - targetNpBottom) + (10f * dens).roundToInt())
-                    .coerceIn(expandedTop, max(expandedTop, shortcutsTop - minTotalNotifH))
+                // Strictly keep notifications below music player bottom + gap (never overlap music card!)
+                restingTop = max(expandedTop, (shellH - targetNpBottom) + cardGap)
+                val targetNpTop = shellH - targetNpBottom - npH
+                if (effectiveClockBot > targetNpTop - clockGap) {
+                    val availInkH = max(72f * dens, (targetNpTop - clockGap) - (clockNaturalInkTop + targetClockRest))
+                    targetClockFit = (availInkH / curInkH).coerceIn(0.45f, 1f)
+                }
             } else {
-                val availBelowNatural = shortcutsTop - clockNaturalBot - (8f * dens).roundToInt()
-                targetClockRest = -min(max(0f, (desiredTotalNotifH - availBelowNatural).toFloat()), maxUpLift)
-                val effectiveClockBot = (clockNaturalBot + targetClockRest).roundToInt()
+                val neededLift = clockNaturalInkBot - (idealRestingTop - clockGap)
+                targetClockRest = -min(max(0f, neededLift), maxUpLift)
+                val effectiveClockBot = clockNaturalInkBot + targetClockRest
                 targetNpTy = 0f
 
-                restingTop = max(effectiveClockBot + (10f * dens).roundToInt(), shortcutsTop - desiredTotalNotifH)
-                    .coerceIn(expandedTop, max(expandedTop, shortcutsTop - minTotalNotifH))
+                restingTop = max(effectiveClockBot.roundToInt() + clockGap, idealRestingTop)
+                    .coerceIn(expandedTop, maxRestingTop)
+                if (effectiveClockBot > restingTop - clockGap) {
+                    val availInkH = max(72f * dens, (restingTop - clockGap) - (clockNaturalInkTop + targetClockRest))
+                    targetClockFit = (availInkH / curInkH).coerceIn(0.45f, 1f)
+                }
             }
 
             val fullH = max((140f * dens).roundToInt(), shortcutsTop - expandedTop)
@@ -938,6 +972,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         }
 
         springTargetClock = targetClockRest
+        springTargetClockFit = targetClockFit
         springTargetNp = targetNpTy
         springTargetNc = targetNcResting
 
@@ -945,6 +980,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val needsAnim = animated && (
             abs(springTargetNp - npBaseTranslationY) > 0.5f ||
             abs(springTargetClock - clockRestOffset) > 0.5f ||
+            abs(springTargetClockFit - clockFitScale) > 0.004f ||
             (showNotifs && abs(springTargetNc - curNc) > 0.5f)
         )
 
@@ -958,9 +994,11 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             springRunning = false
             Choreographer.getInstance().removeFrameCallback(layoutSpringCallback)
             clockRestOffset = springTargetClock
+            clockFitScale = springTargetClockFit
             npBaseTranslationY = springTargetNp
             if (showNotifs) notificationCenter.setAnimatedRestingOffset(springTargetNc)
             springVelClock = 0f
+            springVelClockFit = 0f
             springVelNp = 0f
             springVelNc = 0f
             applyDepthAndLayerTransforms()
@@ -1121,16 +1159,21 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         subjectView.translationY = 0f
 
         val clockLift = clockRestOffset + pullY - clockLiftTravel * liftLead
+        val artClock = clockView.activeArtifact
+        val inkTopPx = ((artClock?.inkTopDp ?: 18f) * dens) * max(0.35f, clockView.scaleY)
         clockContainer.cameraDistance = 12000f * dens
+        clockContainer.pivotX = clockContainer.width * 0.5f
+        clockContainer.pivotY = inkTopPx + (clockContainer.height * 0.5f - inkTopPx) * liftLead
         clockContainer.translationY = clockLift
         clockContainer.rotationX = liftLead * 10f
-        val cScale = 1f - 0.11f * liftLead
+        val cScale = (1f - 0.11f * liftLead) * clockFitScale
         clockContainer.scaleX = cScale
         clockContainer.scaleY = cScale
         clockContainer.alpha = (1f - clockFade).coerceIn(0f, 1f)
         clockView.pullOffsetYPx = clockLift
 
-        toplineRow.translationY = clockRestOffset * 1.04f + pullY - (clockLiftTravel + 18f * dens) * liftLead
+        val toplineRest = if (clockRestOffset < 0f) max(clockRestOffset * 0.14f, -(3f * dens)) else clockRestOffset
+        toplineRow.translationY = toplineRest + pullY - (clockLiftTravel + 18f * dens) * liftLead
         val tScale = 1f - 0.08f * liftLead
         toplineRow.scaleX = tScale
         toplineRow.scaleY = tScale
@@ -1252,23 +1295,41 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val dens = resources.displayMetrics.density
         val hostW = (phoneShell.width / dens).coerceAtLeast(320f)
         val hostH = (phoneShell.height / dens).coerceAtLeast(480f)
-        val topSafe = ((toplineRow.y + toplineRow.height) / dens) + 10f
-        val showNotifs = ::notificationCenter.isInitialized && cfg.notifications && notifHub.getItems().isNotEmpty()
+        val shellHPx = (phoneShell.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels).toFloat()
+        val minInkTopPx = safeTopPx + 74f * dens
+        val clockGapPx = 10f * dens
+        val cardGapPx = 8f * dens
+        val items = if (::notificationCenter.isInitialized) notifHub.getItems() else emptyList()
+        val showNotifs = ::notificationCenter.isInitialized && cfg.notifications && items.isNotEmpty()
+        val headerHPx = (if (notifHub.hasNotificationAccess()) 40f else 66f) * dens
+        val minListHPx = (when {
+            items.size <= 1 -> 74f
+            items.size == 2 -> 86f
+            else -> 92f
+        }) * dens
+        val notifNeedPx = if (showNotifs) (headerHPx + minListHPx) else 0f
+        val shortcutsTopPx = shellHPx - (safeBottomPx + 84f * dens)
+        val npActualHPx = (npCard.height.takeIf { it > 0 } ?: (110f * dens).roundToInt()).toFloat()
+        val npBaseBotPx = shellHPx - (safeBottomPx + 110f * dens)
+
         val obstaclePx = when {
-            cfg.music && npCard.height > 0 -> (phoneShell.height - (safeBottomPx + 110f * dens) + npBaseTranslationY - npCard.height)
-            showNotifs && bottomRow.y > 0f -> (bottomRow.y - 160f * dens)
-            bottomRow.y > 0f -> bottomRow.y
-            else -> (hostH - 180f) * dens
+            cfg.music && showNotifs -> shortcutsTopPx - notifNeedPx - cardGapPx - npActualHPx - clockGapPx
+            cfg.music -> npBaseBotPx - npActualHPx - clockGapPx
+            showNotifs -> shortcutsTopPx - notifNeedPx - clockGapPx
+            else -> shellHPx - (safeBottomPx + 96f * dens)
         }
         val maxW = max(140f, hostW - 16f - 36f)
-        val maxH = max(96f, min(max(hostH * 0.56f, obstaclePx / dens - topSafe - 10f), hostH * 0.78f))
-        return maxW to maxH
+        val maxTextH = max(92f, min((obstaclePx - minInkTopPx) / dens, hostH * 0.74f))
+        return maxW to maxTextH
     }
 
     private fun scheduleClockRender(force: Boolean) {
         val dens = resources.displayMetrics.density
         val hostW = (phoneShell.width / dens).takeIf { it > 100f } ?: (resources.displayMetrics.widthPixels / dens)
-        val maxStretchH = ((resources.displayMetrics.heightPixels / dens) * 0.68f).coerceAtLeast(180f)
+        val (_, maxTextH) = computeClockLimitsDp()
+        val art = clockView.activeArtifact
+        val padEstimate = art?.padDp ?: 52f
+        val maxStretchH = max(120f, maxTextH + padEstimate)
         clockView.scheduleRender(cfg, hostW, maxStretchH, force)
     }
 
@@ -1545,10 +1606,19 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         if (yChanged) {
             layoutScreenPositions(animatedLayout = true)
         } else {
-            val baseSize = max(40f, clockView.activeArtifact?.sizeDp ?: clockView.committedSize())
+            val (maxW, maxTextH) = computeClockLimitsDp()
+            val art = clockView.activeArtifact
+            val baseSize = max(40f, art?.sizeDp ?: clockView.committedSize())
             val baseSy = max(0.5f, clockView.committedSy())
-            val kSize = cfg.size / baseSize
-            clockView.updatePreviewTransform(kSize, kSize * (cfg.sy / baseSy))
+            val curTextW = max(40f, art?.textWDp ?: (clockView.width / resources.displayMetrics.density))
+            val curTextH = max(40f, art?.textHDp ?: (clockView.height / resources.displayMetrics.density))
+            val rawScaleX = cfg.size / baseSize
+            val rawScaleY = rawScaleX * (cfg.sy / baseSy)
+            val previewFit = min(
+                1f,
+                min(maxW / max(1f, curTextW * rawScaleX), maxTextH / max(1f, curTextH * rawScaleY))
+            )
+            clockView.updatePreviewTransform(rawScaleX * previewFit, rawScaleY * previewFit)
             if (sizeChanged || stretchChanged) {
                 updateMusicAndNotificationsLayout(animated = true)
             }
@@ -1651,6 +1721,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         cfg.notifications = !cfg.notifications
         store.save(cfg)
         applyToggles()
+        scheduleClockRender(force = true)
         haptic("tick")
     }
 
@@ -1745,7 +1816,10 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             musicLibraryOverlay.onPermissionResult(media.hasAudioPermission())
         }
         notifHub.refreshFromSystem()
-        if (::notificationCenter.isInitialized) notificationCenter.refreshPermissionBadge()
+        if (::notificationCenter.isInitialized) {
+            notificationCenter.refreshPermissionBadge()
+            updateMusicAndNotificationsLayout(animated = hasInitialLayout)
+        }
         updateDateLabel()
         scheduleClockRender(force = false)
         scheduleMinuteTicker()

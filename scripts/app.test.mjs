@@ -128,6 +128,11 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   const mainCheck = readFileSync(ktDir + 'MainActivity.kt','utf8');
   assert.ok(mainCheck.includes('applyDepthAndLayerTransforms'));
   assert.ok(mainCheck.includes('clockRestOffset'));
+  assert.ok(mainCheck.includes('clockFitScale'));
+  assert.ok(mainCheck.includes('springTargetClockFit'));
+  assert.ok(mainCheck.includes('minClockInkTop'));
+  assert.ok(mainCheck.includes('416f * dens'));
+  assert.ok(!mainCheck.includes('max(hostH * 0.56f'));
   assert.ok(mainCheck.includes('onScrollExpandChanged'));
   assert.ok(mainCheck.includes('layoutSpringCallback'));
   assert.ok(mainCheck.includes('springTargetNc'));

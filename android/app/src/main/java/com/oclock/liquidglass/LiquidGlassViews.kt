@@ -1386,7 +1386,7 @@ class NowPlayingCardView(
     init {
         setWillNotDraw(false)
         layoutDirection = LAYOUT_DIRECTION_LTR
-        setPadding((14f * dens).roundToInt(), (9f * dens).roundToInt(), (14f * dens).roundToInt(), (8f * dens).roundToInt())
+        setPadding((14f * dens).roundToInt(), (8f * dens).roundToInt(), (14f * dens).roundToInt(), (7f * dens).roundToInt())
 
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -1400,7 +1400,7 @@ class NowPlayingCardView(
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
         }
         artView = ImageView(context).apply {
-            val s = (40f * dens).roundToInt()
+            val s = (38f * dens).roundToInt()
             layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = (11f * dens).roundToInt() }
             scaleType = ImageView.ScaleType.CENTER_CROP
             clipToOutline = true

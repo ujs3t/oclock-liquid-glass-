@@ -106,7 +106,7 @@ class NotificationCenterView(
             gravity = Gravity.CENTER_VERTICAL
             clipChildren = false
             clipToPadding = false
-            setPadding((4f * dens).roundToInt(), 0, (4f * dens).roundToInt(), (8f * dens).roundToInt())
+            setPadding((4f * dens).roundToInt(), 0, (4f * dens).roundToInt(), (5f * dens).roundToInt())
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
         }
 
@@ -207,7 +207,7 @@ class NotificationCenterView(
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
             gravity = Gravity.CENTER
-            setPadding((12f * dens).roundToInt(), (5f * dens).roundToInt(), (12f * dens).roundToInt(), (5f * dens).roundToInt())
+            setPadding((11f * dens).roundToInt(), (3.5f * dens).roundToInt(), (11f * dens).roundToInt(), (3.5f * dens).roundToInt())
             background = GradientDrawable().apply {
                 setColor(Color.argb(56, 18, 22, 32))
                 cornerRadius = 999f
@@ -215,7 +215,7 @@ class NotificationCenterView(
             }
             layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
                 gravity = Gravity.START
-                bottomMargin = (7f * dens).roundToInt()
+                bottomMargin = (5f * dens).roundToInt()
             }
             setOnClickListener { v ->
                 onHaptic("pop")
@@ -781,7 +781,7 @@ class NotificationCenterView(
         val peekSpan = if (currentItems.size >= 3) 20f * dens else 11f * dens
         val stackBotInContainer = scrollView.top.toFloat() + firstBot + peekSpan
         moreHintPill.visibility = VISIBLE
-        moreHintPill.translationY = containerCol.translationY + stackBotInContainer + 6f * dens
+        moreHintPill.translationY = containerCol.translationY + stackBotInContainer + 4f * dens
         moreHintPill.alpha = (1f - expandFrac * 4.5f).coerceIn(0f, 1f)
         moreHintPill.setCount(hiddenCount)
         moreHintPill.invalidate()
