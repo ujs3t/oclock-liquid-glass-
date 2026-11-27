@@ -121,14 +121,82 @@ class NotificationCenterView(
             layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
                 marginEnd = (6f * dens).roundToInt()
             }
-            setOnClickListener {
-                if (currentItems.size > 1 && restingOffsetPx > 14f * dens) {
-                    onHaptic("pop")
-                    if (expandFrac > 0.45f) {
-                        collapseScrollIfExpanded()
-                    } else {
-                        animateExpandTo(1f)
+            var hDownX = 0f
+            var hDownY = 0f
+            var hLastY = 0f
+            var hDragging = false
+            var hStartExp = 0f
+            var hVt: VelocityTracker? = null
+            val hSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+            @SuppressLint("ClickableViewAccessibility")
+            setOnTouchListener { _, ev ->
+                val canExp = !isLandscapeCompact && currentItems.isNotEmpty() && restingOffsetPx > 14f * dens
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        expandAnim?.cancel()
+                        hDownX = ev.rawX
+                        hDownY = ev.rawY
+                        hLastY = ev.rawY
+                        hDragging = false
+                        hStartExp = expandFrac
+                        hVt?.recycle()
+                        hVt = VelocityTracker.obtain().also { tracker ->
+                            val c = MotionEvent.obtain(ev)
+                            c.offsetLocation(ev.rawX - ev.x, ev.rawY - ev.y)
+                            tracker.addMovement(c)
+                            c.recycle()
+                        }
+                        true
                     }
+                    MotionEvent.ACTION_MOVE -> {
+                        hVt?.let { tracker ->
+                            val c = MotionEvent.obtain(ev)
+                            c.offsetLocation(ev.rawX - ev.x, ev.rawY - ev.y)
+                            tracker.addMovement(c)
+                            c.recycle()
+                        }
+                        val dx = ev.rawX - hDownX
+                        val dy = ev.rawY - hDownY
+                        if (canExp && !hDragging && abs(dy) > hSlop && abs(dy) > abs(dx) * 1.05f) {
+                            hDragging = true
+                            val travel = max(220f * dens, restingOffsetPx)
+                            applyExpandProgress((expandFrac + (-dy) / travel).coerceIn(0f, 1f))
+                            hLastY = ev.rawY
+                        } else if (canExp && hDragging) {
+                            val stepDy = ev.rawY - hLastY
+                            hLastY = ev.rawY
+                            val travel = max(220f * dens, restingOffsetPx)
+                            applyExpandProgress((expandFrac + (-stepDy) / travel).coerceIn(0f, 1f))
+                        }
+                        true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        hVt?.let { tracker ->
+                            val c = MotionEvent.obtain(ev)
+                            c.offsetLocation(ev.rawX - ev.x, ev.rawY - ev.y)
+                            tracker.addMovement(c)
+                            c.recycle()
+                        }
+                        hVt?.computeCurrentVelocity(1000)
+                        val vy = hVt?.yVelocity ?: 0f
+                        hVt?.recycle()
+                        hVt = null
+                        val netDy = ev.rawY - hDownY
+                        if (canExp && (hDragging || (-vy > 110f * dens && -netDy > 6f * dens) || (vy > 110f * dens && netDy > 6f * dens))) {
+                            settleExpandProgress(hStartExp, expandFrac, netDy, vy)
+                        } else if (ev.actionMasked == MotionEvent.ACTION_UP &&
+                            abs(ev.rawX - hDownX) < hSlop && abs(netDy) < hSlop &&
+                            currentItems.size > 1 && restingOffsetPx > 14f * dens
+                        ) {
+                            onHaptic("pop")
+                            if (expandFrac > 0.45f) collapseScrollIfExpanded() else animateExpandTo(1f)
+                        } else if (canExp && expandFrac > 0.002f && expandFrac < 0.995f) {
+                            settleExpandProgress(hStartExp, expandFrac, netDy, vy)
+                        }
+                        hDragging = false
+                        true
+                    }
+                    else -> false
                 }
             }
         }
@@ -233,12 +301,16 @@ class NotificationCenterView(
         expandedTopPx: Int,
         restingTopPx: Int,
         fullHeightPx: Int,
-        landscapeCompact: Boolean
+        landscapeCompact: Boolean,
+        preserveCurrentOffset: Boolean = false
     ) {
         isLandscapeCompact = landscapeCompact
-        restingOffsetPx = if (landscapeCompact) 0f else max(0f, (restingTopPx - expandedTopPx).toFloat())
+        val targetResting = if (landscapeCompact) 0f else max(0f, (restingTopPx - expandedTopPx).toFloat())
+        if (!preserveCurrentOffset || landscapeCompact) {
+            restingOffsetPx = targetResting
+        }
         val headerEst = headerHeightEstimatePx()
-        restingVisibleListH = max((90f * dens).roundToInt(), fullHeightPx - restingOffsetPx.roundToInt() - headerEst)
+        restingVisibleListH = max((90f * dens).roundToInt(), fullHeightPx - targetResting.roundToInt() - headerEst)
         if (landscapeCompact) {
             expandFrac = 0f
             containerCol.translationY = 0f
@@ -255,6 +327,14 @@ class NotificationCenterView(
             updateCard3DAndPeek()
             updateMoreHintPill()
         }
+    }
+
+    fun setAnimatedRestingOffset(offsetPx: Float) {
+        if (isLandscapeCompact) return
+        restingOffsetPx = max(0f, offsetPx)
+        containerCol.translationY = restingOffsetPx * (1f - expandFrac)
+        updateCard3DAndPeek()
+        updateMoreHintPill()
     }
 
     fun collapseScrollIfExpanded() {
@@ -286,22 +366,22 @@ class NotificationCenterView(
 
     private fun settleExpandProgress(startFrac: Float, curFrac: Float, netTotalDyPx: Float, vyPxPerSec: Float) {
         val travel = max(220f * dens, restingOffsetPx)
-        val lightSwipePx = 24f * dens
+        val lightSwipePx = 18f * dens
         val target = if (startFrac < 0.50f) {
-            // Opening from stacked rest: support light short swipe (>= 24dp up), gentle flick, or long drag
+            // Opening from stacked rest: support fast vertical flick, light short swipe (>= 18dp up), or long drag
             when {
-                vyPxPerSec < -115f * dens -> 1f
-                vyPxPerSec > 180f * dens -> 0f
-                -netTotalDyPx >= lightSwipePx || curFrac >= 0.25f -> 1f
+                vyPxPerSec < -105f * dens -> 1f
+                vyPxPerSec > 210f * dens -> 0f
+                -netTotalDyPx >= lightSwipePx || curFrac >= 0.22f -> 1f
                 else -> 0f
             }
         } else {
-            // Collapsing from expanded list: support light short swipe (>= 24dp down at top), gentle flick, or long drag
+            // Collapsing from expanded list: support fast vertical flick down, light short swipe (>= 18dp down at top), or long drag
             val collapsedPx = (startFrac - curFrac) * travel
             when {
-                vyPxPerSec > 115f * dens -> 0f
-                vyPxPerSec < -180f * dens -> 1f
-                collapsedPx >= lightSwipePx || curFrac <= 0.65f -> 0f
+                vyPxPerSec > 105f * dens -> 0f
+                vyPxPerSec < -210f * dens -> 1f
+                collapsedPx >= lightSwipePx || netTotalDyPx >= lightSwipePx || curFrac <= 0.65f -> 0f
                 else -> 1f
             }
         }
@@ -921,6 +1001,7 @@ class NotificationCenterView(
     private class RubberScrollView(context: Context) : ScrollView(context) {
         private val dens = resources.displayMetrics.density
         private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+        private val vertSlop = min(touchSlop, 8f * dens)
         private val scroller = OverScroller(context)
         private var startRawX = 0f
         private var startRawY = 0f
@@ -1024,6 +1105,67 @@ class NotificationCenterView(
             canvas.restoreToCount(saved)
         }
 
+        private fun trackRawMovement(ev: MotionEvent) {
+            val copy = MotionEvent.obtain(ev)
+            copy.offsetLocation(ev.rawX - ev.x, ev.rawY - ev.y)
+            vt?.addMovement(copy)
+            copy.recycle()
+        }
+
+        private fun processVerticalDelta(dy: Float, rawY: Float) {
+            val curExp = getExpandFn()
+            val canExp = canExpandFn()
+            val travel = max(220f * dens, getExpandTravelPx())
+
+            if (canExp && dy < 0f && curExp < 0.999f) {
+                val next = (curExp + (-dy) / travel).coerceIn(0f, 1f)
+                setExpandFn(next)
+                val usedPx = (next - curExp) * travel
+                val leftover = (-dy) - usedPx
+                if (next >= 0.999f && leftover > 0.5f) {
+                    val maxScroll = max(0, (getChildAt(0)?.height ?: 0) - height)
+                    val avail = max(0, maxScroll - scrollY)
+                    if (avail > 0) scrollBy(0, min(avail, leftover.roundToInt()))
+                }
+                return
+            }
+            if (canExp && dy > 0f && scrollY <= 0 && rubberBotY >= -0.5f && curExp > 0.001f) {
+                val next = (curExp - dy / travel).coerceIn(0f, 1f)
+                setExpandFn(next)
+                return
+            }
+            if (curExp >= 0.999f || !canExp) {
+                val maxScroll = max(0, (getChildAt(0)?.height ?: 0) - height)
+                if (rubberBotY < -0.5f && dy > 0f) {
+                    val absorb = min(-rubberBotY, dy)
+                    setRubber(rubberBotY + absorb)
+                    val rem = dy - absorb
+                    if (rem > 0f && scrollY > 0) scrollBy(0, -min(scrollY, rem.roundToInt()))
+                } else if (dy < 0f) {
+                    val avail = max(0, maxScroll - scrollY)
+                    if (avail > 0) {
+                        val used = min(avail.toFloat(), -dy)
+                        scrollBy(0, used.roundToInt())
+                        val left = (-dy) - used
+                        if (left > 0.5f) setRubber(max(-64f * dens, rubberBotY - left * 0.38f))
+                    } else {
+                        setRubber(max(-64f * dens, rubberBotY + dy * 0.38f))
+                    }
+                } else if (dy > 0f && scrollY > 0) {
+                    val used = min(scrollY.toFloat(), dy)
+                    scrollBy(0, -used.roundToInt())
+                    val left = dy - used
+                    if (left > 0.5f && canExp) {
+                        setExpandFn((curExp - left / travel).coerceIn(0f, 1f))
+                    }
+                }
+                return
+            }
+            if (scrollY <= 0 && curExp <= 0.001f && rawY > startRawY) {
+                onPullOverscroll?.invoke(min(18f * dens, (rawY - startRawY) * 0.14f))
+            }
+        }
+
         override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -1037,25 +1179,54 @@ class NotificationCenterView(
                     lastRawY = ev.rawY
                     dragActive = false
                     vt?.recycle()
-                    vt = VelocityTracker.obtain().apply { addMovement(ev) }
+                    vt = VelocityTracker.obtain()
+                    trackRawMovement(ev)
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    vt?.addMovement(ev)
+                    trackRawMovement(ev)
                     val dx = ev.rawX - startRawX
                     val dy = ev.rawY - startRawY
                     val curExp = getExpandFn()
-                    if (abs(dy) > touchSlop && abs(dy) > abs(dx) * 1.15f) {
-                        val canExp = canExpandFn()
+                    val canExp = canExpandFn()
+                    val slopReq = if (canExp && curExp < 0.999f) vertSlop else touchSlop
+                    if (abs(dy) > slopReq && abs(dy) > abs(dx) * 1.05f) {
                         if ((canExp && ((dy < 0f && curExp < 0.999f) || (dy > 0f && scrollY <= 0 && curExp > 0.001f))) ||
                             curExp >= 0.999f ||
                             canScrollVertically(1) ||
                             canScrollVertically(-1)
                         ) {
                             dragActive = true
+                            val initialDy = ev.rawY - lastRawY
                             lastRawY = ev.rawY
+                            processVerticalDelta(initialDy, ev.rawY)
                             return true
                         }
                     }
+                }
+                MotionEvent.ACTION_UP -> {
+                    trackRawMovement(ev)
+                    vt?.computeCurrentVelocity(1000)
+                    val vy = vt?.yVelocity ?: 0f
+                    vt?.recycle()
+                    vt = null
+                    val netDy = ev.rawY - startRawY
+                    val netDx = ev.rawX - startRawX
+                    val curExp = getExpandFn()
+                    val canExp = canExpandFn()
+                    val upFlick = canExp && curExp < 0.995f && abs(netDy) >= abs(netDx) &&
+                        ((-vy > 105f * dens && -netDy > 6f * dens) || -netDy >= max(vertSlop, 12f * dens))
+                    val downFlick = canExp && curExp >= 0.995f && startedAtTop && scrollY <= 0 &&
+                        abs(netDy) >= abs(netDx) && ((vy > 105f * dens && netDy > 6f * dens) || netDy >= max(vertSlop, 12f * dens))
+                    if (upFlick || downFlick) {
+                        dragActive = false
+                        onReleaseFn(startExpandFrac, if (downFlick) 0.88f else curExp, netDy, vy)
+                        return true
+                    }
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    vt?.recycle()
+                    vt = null
+                    dragActive = false
                 }
             }
             return super.onInterceptTouchEvent(ev)
@@ -1075,79 +1246,33 @@ class NotificationCenterView(
                     lastRawY = ev.rawY
                     dragActive = false
                     vt?.recycle()
-                    vt = VelocityTracker.obtain().apply { addMovement(ev) }
+                    vt = VelocityTracker.obtain()
+                    trackRawMovement(ev)
                     return true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    vt?.addMovement(ev)
+                    trackRawMovement(ev)
                     if (!dragActive) {
                         val totalDy = ev.rawY - startRawY
                         val totalDx = ev.rawX - startRawX
-                        if (abs(totalDy) > touchSlop && abs(totalDy) > abs(totalDx) * 1.1f) {
+                        val curExp = getExpandFn()
+                        val slopReq = if (canExpandFn() && curExp < 0.999f) vertSlop else touchSlop
+                        if (abs(totalDy) > slopReq && abs(totalDy) > abs(totalDx) * 1.05f) {
                             dragActive = true
+                            val initialDy = ev.rawY - lastRawY
                             lastRawY = ev.rawY
-                        } else {
-                            return true
+                            processVerticalDelta(initialDy, ev.rawY)
                         }
+                        return true
                     }
 
                     val dy = ev.rawY - lastRawY
                     lastRawY = ev.rawY
-                    val curExp = getExpandFn()
-                    val canExp = canExpandFn()
-                    val travel = max(220f * dens, getExpandTravelPx())
-
-                    if (canExp && dy < 0f && curExp < 0.999f) {
-                        val next = (curExp + (-dy) / travel).coerceIn(0f, 1f)
-                        setExpandFn(next)
-                        val usedPx = (next - curExp) * travel
-                        val leftover = (-dy) - usedPx
-                        if (next >= 0.999f && leftover > 0.5f) {
-                            val maxScroll = max(0, (getChildAt(0)?.height ?: 0) - height)
-                            val avail = max(0, maxScroll - scrollY)
-                            if (avail > 0) scrollBy(0, min(avail, leftover.roundToInt()))
-                        }
-                        return true
-                    }
-                    if (canExp && dy > 0f && scrollY <= 0 && rubberBotY >= -0.5f && curExp > 0.001f) {
-                        val next = (curExp - dy / travel).coerceIn(0f, 1f)
-                        setExpandFn(next)
-                        return true
-                    }
-                    if (curExp >= 0.999f || !canExp) {
-                        val maxScroll = max(0, (getChildAt(0)?.height ?: 0) - height)
-                        if (rubberBotY < -0.5f && dy > 0f) {
-                            val absorb = min(-rubberBotY, dy)
-                            setRubber(rubberBotY + absorb)
-                            val rem = dy - absorb
-                            if (rem > 0f && scrollY > 0) scrollBy(0, -min(scrollY, rem.roundToInt()))
-                        } else if (dy < 0f) {
-                            val avail = max(0, maxScroll - scrollY)
-                            if (avail > 0) {
-                                val used = min(avail.toFloat(), -dy)
-                                scrollBy(0, used.roundToInt())
-                                val left = (-dy) - used
-                                if (left > 0.5f) setRubber(max(-64f * dens, rubberBotY - left * 0.38f))
-                            } else {
-                                setRubber(max(-64f * dens, rubberBotY + dy * 0.38f))
-                            }
-                        } else if (dy > 0f && scrollY > 0) {
-                            val used = min(scrollY.toFloat(), dy)
-                            scrollBy(0, -used.roundToInt())
-                            val left = dy - used
-                            if (left > 0.5f && canExp) {
-                                setExpandFn((curExp - left / travel).coerceIn(0f, 1f))
-                            }
-                        }
-                        return true
-                    }
-                    if (scrollY <= 0 && curExp <= 0.001f && ev.rawY > startRawY) {
-                        onPullOverscroll?.invoke(min(18f * dens, (ev.rawY - startRawY) * 0.14f))
-                        return true
-                    }
+                    processVerticalDelta(dy, ev.rawY)
+                    return true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    vt?.addMovement(ev)
+                    trackRawMovement(ev)
                     vt?.computeCurrentVelocity(1000)
                     val vy = vt?.yVelocity ?: 0f
                     vt?.recycle()
@@ -1157,16 +1282,22 @@ class NotificationCenterView(
                     val canExp = canExpandFn()
                     val wasDrag = dragActive
                     val netTotalDy = ev.rawY - startRawY
+                    val netTotalDx = ev.rawX - startRawX
                     dragActive = false
                     springBackRubber()
 
-                    if (canExp && curExp > 0.005f && curExp < 0.995f) {
+                    val isFastUpFlick = ev.actionMasked == MotionEvent.ACTION_UP &&
+                        -vy > 110f * dens && -netTotalDy > 6f * dens && abs(netTotalDy) >= abs(netTotalDx)
+                    val isFastDownFlick = ev.actionMasked == MotionEvent.ACTION_UP &&
+                        vy > 110f * dens && netTotalDy > 6f * dens && abs(netTotalDy) >= abs(netTotalDx)
+
+                    if (canExp && curExp < 0.995f && (wasDrag || isFastUpFlick || (curExp > 0.002f))) {
                         onReleaseFn(startExpandFrac, curExp, netTotalDy, vy)
                         return true
                     }
-                    if (curExp >= 0.995f && wasDrag) {
+                    if (curExp >= 0.995f && (wasDrag || isFastDownFlick)) {
                         val maxScroll = max(0, (getChildAt(0)?.height ?: 0) - height)
-                        if (canExp && startedAtTop && scrollY <= 0 && (vy > 180f * dens || netTotalDy > 24f * dens)) {
+                        if (canExp && startedAtTop && scrollY <= 0 && (vy > 105f * dens || netTotalDy > 18f * dens)) {
                             onReleaseFn(startExpandFrac, 0.88f, netTotalDy, vy)
                         } else if ((startedExpanded || scrollY > (12f * dens).roundToInt()) && abs(vy) > 150f * dens) {
                             scroller.fling(0, scrollY, 0, (-vy).roundToInt(), 0, 0, 0, maxScroll, 0, (42f * dens).roundToInt())
@@ -1206,9 +1337,12 @@ class NotificationCenterView(
                 text = "↑ اسحب للأعلى"
             }
             addView(label)
+            var pillDownY = 0f
+            val pillSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
             setOnTouchListener { _, ev ->
                 when (ev.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
+                        pillDownY = ev.rawY
                         animate().cancel()
                         animate().scaleX(0.90f).scaleY(0.90f).setDuration(90L).start()
                         true
@@ -1216,7 +1350,10 @@ class NotificationCenterView(
                     MotionEvent.ACTION_UP -> {
                         animate().cancel()
                         animate().scaleX(1f).scaleY(1f).setDuration(360L).setInterpolator(OvershootInterpolator(1.9f)).start()
-                        onClick()
+                        val dy = ev.rawY - pillDownY
+                        if (dy <= pillSlop) {
+                            onClick()
+                        }
                         true
                     }
                     MotionEvent.ACTION_CANCEL -> {

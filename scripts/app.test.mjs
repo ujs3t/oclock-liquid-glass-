@@ -129,6 +129,9 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(mainCheck.includes('applyDepthAndLayerTransforms'));
   assert.ok(mainCheck.includes('clockRestOffset'));
   assert.ok(mainCheck.includes('onScrollExpandChanged'));
+  assert.ok(mainCheck.includes('layoutSpringCallback'));
+  assert.ok(mainCheck.includes('springTargetNc'));
+  assert.ok(mainCheck.includes('setAnimatedRestingOffset'));
 
   const notifKt = readFileSync(ktDir + 'NotificationCenterView.kt','utf8');
   assert.ok(notifKt.includes('dismissWithSpring'));
@@ -138,6 +141,12 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(notifKt.includes('GlassMoreHintPill'));
   assert.ok(!notifKt.includes('GlassShowLessPill'));
   assert.ok(notifKt.includes('configureLayoutBounds'));
+  assert.ok(notifKt.includes('setAnimatedRestingOffset'));
+  assert.ok(notifKt.includes('preserveCurrentOffset'));
+  assert.ok(notifKt.includes('trackRawMovement'));
+  assert.ok(notifKt.includes('processVerticalDelta'));
+  assert.ok(notifKt.includes('vertSlop'));
+  assert.ok(notifKt.includes('isFastUpFlick'));
   assert.ok(notifKt.includes('playEntrance3D'));
   assert.ok(notifKt.includes('updateCard3DAndPeek'));
   assert.ok(notifKt.includes('clipRect(-width * 2'));

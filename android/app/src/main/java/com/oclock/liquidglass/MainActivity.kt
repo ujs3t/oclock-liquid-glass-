@@ -38,6 +38,7 @@ import android.os.VibratorManager
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.TypedValue
+import android.view.Choreographer
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
@@ -137,7 +138,65 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private var notifCouplingY = 0f
     private var pullY = 0f
     private var pullAnimator: ValueAnimator? = null
-    private var layoutSpringAnim: ValueAnimator? = null
+    private var springTargetClock = 0f
+    private var springTargetNp = 0f
+    private var springTargetNc = 0f
+    private var springVelClock = 0f
+    private var springVelNp = 0f
+    private var springVelNc = 0f
+    private var springRunning = false
+    private var springLastNs = 0L
+    private var hasInitialLayout = false
+
+    private val layoutSpringCallback = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            if (!springRunning) return
+            val dt = if (springLastNs == 0L) 0.016f
+            else ((frameTimeNanos - springLastNs) / 1_000_000_000f).coerceIn(0.004f, 0.032f)
+            springLastNs = frameTimeNanos
+
+            val omega = 13.5f
+            val zeta = 0.86f
+            val stiffness = omega * omega
+            val damping = 2f * zeta * omega
+
+            val fC = (springTargetClock - clockRestOffset) * stiffness - springVelClock * damping
+            springVelClock += fC * dt
+            clockRestOffset += springVelClock * dt
+
+            val fN = (springTargetNp - npBaseTranslationY) * stiffness - springVelNp * damping
+            springVelNp += fN * dt
+            npBaseTranslationY += springVelNp * dt
+
+            val curNc = if (::notificationCenter.isInitialized) notificationCenter.restingOffsetPx else 0f
+            val fM = (springTargetNc - curNc) * stiffness - springVelNc * damping
+            springVelNc += fM * dt
+            val nextNc = max(0f, curNc + springVelNc * dt)
+            if (::notificationCenter.isInitialized) notificationCenter.setAnimatedRestingOffset(nextNc)
+
+            applyDepthAndLayerTransforms()
+            if (::resizeOverlay.isInitialized && resizeOverlay.isOpen) resizeOverlay.layoutAroundClock()
+
+            val settled = abs(springTargetClock - clockRestOffset) < 0.35f && abs(springVelClock) < 2f &&
+                    abs(springTargetNp - npBaseTranslationY) < 0.35f && abs(springVelNp) < 2f &&
+                    abs(springTargetNc - nextNc) < 0.35f && abs(springVelNc) < 2f
+
+            if (settled) {
+                clockRestOffset = springTargetClock
+                npBaseTranslationY = springTargetNp
+                if (::notificationCenter.isInitialized) notificationCenter.setAnimatedRestingOffset(springTargetNc)
+                springVelClock = 0f
+                springVelNp = 0f
+                springVelNc = 0f
+                springRunning = false
+                springLastNs = 0L
+                applyDepthAndLayerTransforms()
+                if (::resizeOverlay.isInitialized && resizeOverlay.isOpen) resizeOverlay.layoutAroundClock()
+            } else {
+                Choreographer.getInstance().postFrameCallback(this)
+            }
+        }
+    }
     private var flashOn = false
     private var flashBurstTimer: Runnable? = null
     private var toastTimer: Runnable? = null
@@ -310,7 +369,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         clockView.addOnLayoutChangeListener { _, _, top, _, bottom, _, oTop, _, oBottom ->
             if ((bottom - top) != (oBottom - oTop)) {
                 clockView.post {
-                    updateMusicAndNotificationsLayout(animated = false)
+                    updateMusicAndNotificationsLayout(animated = hasInitialLayout)
                 }
             }
             if (resizeOverlay.isOpen) {
@@ -321,7 +380,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             if (resizeOverlay.isOpen) {
                 resizeOverlay.post { resizeOverlay.layoutAroundClock() }
             }
-            updateMusicAndNotificationsLayout(animated = false)
+            updateMusicAndNotificationsLayout(animated = hasInitialLayout)
             refreshAllGlass()
         }
         attachClockLongPressAndPull(clockView)
@@ -345,9 +404,11 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             getLimits = { computeClockLimitsDp() },
             onConfigChanged = { syncUi ->
                 if (syncUi && editorSheet.isOpen) editorSheet.syncFromConfig()
+                updateMusicAndNotificationsLayout(animated = true)
             },
             onCommit = {
                 store.save(cfg)
+                updateMusicAndNotificationsLayout(animated = true)
                 scheduleClockRender(force = true)
             },
             onReset = {
@@ -356,7 +417,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 cfg.sy = 1.68f
                 cfg.clockY = 0f
                 store.save(cfg)
-                layoutScreenPositions()
+                layoutScreenPositions(animatedLayout = true)
                 scheduleClockRender(force = true)
                 if (editorSheet.isOpen) editorSheet.syncFromConfig()
             },
@@ -366,6 +427,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     cfg.sx = s.sx
                     cfg.sy = s.sy
                     store.save(cfg)
+                    updateMusicAndNotificationsLayout(animated = true)
                     scheduleClockRender(force = true)
                     if (editorSheet.isOpen) editorSheet.syncFromConfig()
                 }
@@ -687,7 +749,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         }
     }
 
-    private fun layoutScreenPositions() {
+    private fun layoutScreenPositions(animatedLayout: Boolean = false) {
         val dens = resources.displayMetrics.density
         val isShortLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE &&
                 (resources.displayMetrics.heightPixels / dens) < 560f
@@ -737,7 +799,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         (homeBar.layoutParams as FrameLayout.LayoutParams).bottomMargin = safeBottomPx + (7f * dens).roundToInt()
         (toastView.layoutParams as FrameLayout.LayoutParams).topMargin = safeTopPx + (52f * dens).roundToInt()
         musicLibraryOverlay.applySafeInsets(safeTopPx, safeBottomPx)
-        updateMusicAndNotificationsLayout(animated = false)
+        updateMusicAndNotificationsLayout(animated = animatedLayout && hasInitialLayout)
+        hasInitialLayout = true
         phoneShell.requestLayout()
     }
 
@@ -754,9 +817,16 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val ncLp = notificationCenter.layoutParams as FrameLayout.LayoutParams
 
         if (isShortLandscape) {
-            layoutSpringAnim?.cancel()
+            springRunning = false
+            Choreographer.getInstance().removeFrameCallback(layoutSpringCallback)
             clockRestOffset = 0f
             npBaseTranslationY = 0f
+            springTargetClock = 0f
+            springTargetNp = 0f
+            springTargetNc = 0f
+            springVelClock = 0f
+            springVelNp = 0f
+            springVelNc = 0f
             notifExpandFrac = 0f
             ncLp.width = min((340f * dens).roundToInt(), (shellW * 0.46f).roundToInt())
             ncLp.height = max((110f * dens).roundToInt(), shellH - safeTopPx - safeBottomPx - (48f * dens).roundToInt())
@@ -785,21 +855,24 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val headerH = ((if (notifHub.hasNotificationAccess()) 44f else 76f) * dens).roundToInt()
 
         val clockNaturalTop = safeTopPx + ((82f + cfg.clockY) * dens).roundToInt()
-        val clockH = max(
-            clockContainer.height,
-            (clockView.height * max(1f, clockView.scaleY)).roundToInt()
-        ).takeIf { it > 0 } ?: (186f * dens).roundToInt()
+        val clockH = if (clockView.height > 0) {
+            (clockView.height * max(0.35f, clockView.scaleY)).roundToInt()
+        } else {
+            (186f * dens).roundToInt()
+        }
         val clockNaturalBot = clockNaturalTop + clockH
         val minClockTop = safeTopPx + (42f * dens).roundToInt()
         val maxUpLift = max(0f, (clockNaturalTop - minClockTop).toFloat())
 
         var targetClockRest = 0f
         var targetNpTy = 0f
+        var targetNcResting = notificationCenter.restingOffsetPx
 
         if (!showNotifs) {
             notifExpandFrac = 0f
             npCard.isClickable = true
             npCard.isFocusable = true
+            targetNcResting = 0f
             if (cfg.music) {
                 val npNaturalTop = shellH - npBaseBottom - npH
                 val overlap = (clockNaturalBot - (npNaturalTop - (12f * dens).roundToInt())).toFloat()
@@ -841,40 +914,55 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             }
 
             val fullH = max((140f * dens).roundToInt(), shortcutsTop - expandedTop)
-            ncLp.width = cardW
-            ncLp.height = fullH
-            ncLp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            ncLp.leftMargin = 0
-            ncLp.rightMargin = 0
-            ncLp.bottomMargin = 0
-            ncLp.topMargin = expandedTop
-            notificationCenter.layoutParams = ncLp
+            val needLayout = ncLp.width != cardW || ncLp.height != fullH ||
+                    ncLp.topMargin != expandedTop || ncLp.rightMargin != 0 ||
+                    ncLp.gravity != (Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+            if (needLayout) {
+                ncLp.width = cardW
+                ncLp.height = fullH
+                ncLp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                ncLp.leftMargin = 0
+                ncLp.rightMargin = 0
+                ncLp.bottomMargin = 0
+                ncLp.topMargin = expandedTop
+                notificationCenter.layoutParams = ncLp
+            }
+            targetNcResting = max(0f, (restingTop - expandedTop).toFloat())
             notificationCenter.configureLayoutBounds(
                 expandedTopPx = expandedTop,
                 restingTopPx = restingTop,
                 fullHeightPx = fullH,
-                landscapeCompact = false
+                landscapeCompact = false,
+                preserveCurrentOffset = animated
             )
         }
 
-        layoutSpringAnim?.cancel()
-        if (animated && (abs(targetNpTy - npBaseTranslationY) > 1f || abs(targetClockRest - clockRestOffset) > 1f)) {
-            val startNp = npBaseTranslationY
-            val startClock = clockRestOffset
-            layoutSpringAnim = ValueAnimator.ofFloat(0f, 1f).apply {
-                duration = 460L
-                interpolator = OvershootInterpolator(1.18f)
-                addUpdateListener { a ->
-                    val t = a.animatedValue as Float
-                    npBaseTranslationY = startNp + (targetNpTy - startNp) * t
-                    clockRestOffset = startClock + (targetClockRest - startClock) * t
-                    applyDepthAndLayerTransforms()
-                }
-                start()
+        springTargetClock = targetClockRest
+        springTargetNp = targetNpTy
+        springTargetNc = targetNcResting
+
+        val curNc = notificationCenter.restingOffsetPx
+        val needsAnim = animated && (
+            abs(springTargetNp - npBaseTranslationY) > 0.5f ||
+            abs(springTargetClock - clockRestOffset) > 0.5f ||
+            (showNotifs && abs(springTargetNc - curNc) > 0.5f)
+        )
+
+        if (needsAnim) {
+            if (!springRunning) {
+                springRunning = true
+                springLastNs = 0L
+                Choreographer.getInstance().postFrameCallback(layoutSpringCallback)
             }
         } else {
-            npBaseTranslationY = targetNpTy
-            clockRestOffset = targetClockRest
+            springRunning = false
+            Choreographer.getInstance().removeFrameCallback(layoutSpringCallback)
+            clockRestOffset = springTargetClock
+            npBaseTranslationY = springTargetNp
+            if (showNotifs) notificationCenter.setAnimatedRestingOffset(springTargetNc)
+            springVelClock = 0f
+            springVelNp = 0f
+            springVelNc = 0f
             applyDepthAndLayerTransforms()
         }
     }
@@ -1455,14 +1543,14 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
     override fun onGeometryPreview(sizeChanged: Boolean, stretchChanged: Boolean, yChanged: Boolean) {
         if (yChanged) {
-            layoutScreenPositions()
+            layoutScreenPositions(animatedLayout = true)
         } else {
             val baseSize = max(40f, clockView.activeArtifact?.sizeDp ?: clockView.committedSize())
             val baseSy = max(0.5f, clockView.committedSy())
             val kSize = cfg.size / baseSize
             clockView.updatePreviewTransform(kSize, kSize * (cfg.sy / baseSy))
             if (sizeChanged || stretchChanged) {
-                updateMusicAndNotificationsLayout(animated = false)
+                updateMusicAndNotificationsLayout(animated = true)
             }
         }
         geometryDebounce?.let { mainHandler.removeCallbacks(it) }
@@ -1674,6 +1762,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
     override fun onDestroy() {
         super.onDestroy()
+        springRunning = false
+        Choreographer.getInstance().removeFrameCallback(layoutSpringCallback)
         if (Build.VERSION.SDK_INT >= 33 && backCallback != null) {
             try { onBackInvokedDispatcher.unregisterOnBackInvokedCallback(backCallback!!) } catch (_: Throwable) {}
         }
