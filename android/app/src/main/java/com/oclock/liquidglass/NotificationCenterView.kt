@@ -7,11 +7,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.LinearGradient
 import android.graphics.Paint
-import android.graphics.Path
-import android.graphics.RectF
-import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.text.TextUtils
@@ -253,7 +249,7 @@ class NotificationCenterView(
             canExpand = { !landscapeCompact && currentItems.isNotEmpty() && restingOffsetPx > 14f * dens },
             getExpand = { expandFrac },
             setExpand = { f -> applyExpandProgress(f) },
-            onRelease = { f, vy -> settleExpandProgress(f, vy) }
+            onRelease = { startF, curF, netDy, vy -> settleExpandProgress(startF, curF, netDy, vy) }
         )
         post {
             updateCard3DAndPeek()
@@ -288,12 +284,26 @@ class NotificationCenterView(
         scrollView.invalidate()
     }
 
-    private fun settleExpandProgress(curFrac: Float, vyPxPerSec: Float) {
-        val target = when {
-            vyPxPerSec < -260f * dens -> 1f
-            vyPxPerSec > 260f * dens -> 0f
-            curFrac >= 0.34f -> 1f
-            else -> 0f
+    private fun settleExpandProgress(startFrac: Float, curFrac: Float, netTotalDyPx: Float, vyPxPerSec: Float) {
+        val travel = max(220f * dens, restingOffsetPx)
+        val lightSwipePx = 24f * dens
+        val target = if (startFrac < 0.50f) {
+            // Opening from stacked rest: support light short swipe (>= 24dp up), gentle flick, or long drag
+            when {
+                vyPxPerSec < -115f * dens -> 1f
+                vyPxPerSec > 180f * dens -> 0f
+                -netTotalDyPx >= lightSwipePx || curFrac >= 0.25f -> 1f
+                else -> 0f
+            }
+        } else {
+            // Collapsing from expanded list: support light short swipe (>= 24dp down at top), gentle flick, or long drag
+            val collapsedPx = (startFrac - curFrac) * travel
+            when {
+                vyPxPerSec > 115f * dens -> 0f
+                vyPxPerSec < -180f * dens -> 1f
+                collapsedPx >= lightSwipePx || curFrac <= 0.65f -> 0f
+                else -> 1f
+            }
         }
         animateExpandTo(target, vyPxPerSec)
     }
@@ -917,6 +927,8 @@ class NotificationCenterView(
         private var lastRawY = 0f
         private var dragActive = false
         private var startedExpanded = false
+        private var startExpandFrac = 0f
+        private var startedAtTop = true
         private var vt: VelocityTracker? = null
         private var rubberAnim: ValueAnimator? = null
         var rubberBotY = 0f
@@ -929,13 +941,13 @@ class NotificationCenterView(
         private var canExpandFn: () -> Boolean = { false }
         private var getExpandFn: () -> Float = { 0f }
         private var setExpandFn: (Float) -> Unit = {}
-        private var onReleaseFn: (Float, Float) -> Unit = { _, _ -> }
+        private var onReleaseFn: (Float, Float, Float, Float) -> Unit = { _, _, _, _ -> }
 
         fun setExpandCallbacks(
             canExpand: () -> Boolean,
             getExpand: () -> Float,
             setExpand: (Float) -> Unit,
-            onRelease: (Float, Float) -> Unit
+            onRelease: (Float, Float, Float, Float) -> Unit
         ) {
             canExpandFn = canExpand
             getExpandFn = getExpand
@@ -1017,7 +1029,9 @@ class NotificationCenterView(
                 MotionEvent.ACTION_DOWN -> {
                     abortScrolling()
                     onInteractionStart?.invoke()
-                    startedExpanded = getExpandFn() >= 0.99f
+                    startExpandFrac = getExpandFn()
+                    startedExpanded = startExpandFrac >= 0.99f
+                    startedAtTop = scrollY <= (4f * dens).roundToInt()
                     startRawX = ev.rawX
                     startRawY = ev.rawY
                     lastRawY = ev.rawY
@@ -1053,7 +1067,9 @@ class NotificationCenterView(
                 MotionEvent.ACTION_DOWN -> {
                     abortScrolling()
                     onInteractionStart?.invoke()
-                    startedExpanded = getExpandFn() >= 0.99f
+                    startExpandFrac = getExpandFn()
+                    startedExpanded = startExpandFrac >= 0.99f
+                    startedAtTop = scrollY <= (4f * dens).roundToInt()
                     startRawX = ev.rawX
                     startRawY = ev.rawY
                     lastRawY = ev.rawY
@@ -1140,17 +1156,18 @@ class NotificationCenterView(
                     val curExp = getExpandFn()
                     val canExp = canExpandFn()
                     val wasDrag = dragActive
+                    val netTotalDy = ev.rawY - startRawY
                     dragActive = false
                     springBackRubber()
 
                     if (canExp && curExp > 0.005f && curExp < 0.995f) {
-                        onReleaseFn(curExp, vy)
+                        onReleaseFn(startExpandFrac, curExp, netTotalDy, vy)
                         return true
                     }
                     if (curExp >= 0.995f && wasDrag) {
                         val maxScroll = max(0, (getChildAt(0)?.height ?: 0) - height)
-                        if (canExp && scrollY <= 0 && vy > 620f * dens) {
-                            onReleaseFn(0.45f, vy)
+                        if (canExp && startedAtTop && scrollY <= 0 && (vy > 180f * dens || netTotalDy > 24f * dens)) {
+                            onReleaseFn(startExpandFrac, 0.88f, netTotalDy, vy)
                         } else if ((startedExpanded || scrollY > (12f * dens).roundToInt()) && abs(vy) > 150f * dens) {
                             scroller.fling(0, scrollY, 0, (-vy).roundToInt(), 0, 0, 0, maxScroll, 0, (42f * dens).roundToInt())
                             postInvalidateOnAnimation()
@@ -1326,13 +1343,7 @@ class NotificationCenterView(
     ) : FrameLayout(context) {
 
         private val dens = resources.displayMetrics.density
-        private val glassHelper = LiquidGlassCardHelper(backdrop, perf, 24f, 18f, 13f, 1.46f, 0.0f, 1.0f)
-        private val innerFallbackPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val clipPath = Path()
-        private val rectF = RectF()
-        private var cachedW = 0
-        private var cachedH = 0
-        private var fallbackWashShader: LinearGradient? = null
+        private val glassHelper = LiquidGlassCardHelper(backdrop, perf, 24f, 20f, 16f, 1.48f, 0.30f, 0.0f)
         private val dismissEase = PathInterpolator(0.22f, 1f, 0.36f, 1f)
 
         private val iconView: ImageView
@@ -1468,8 +1479,10 @@ class NotificationCenterView(
             glassBg = gBg
             titleText.setTextColor(ink)
             bodyText.setTextColor(dim)
-            timeText.setTextColor(Color.argb(185, Color.red(ink), Color.green(ink), Color.blue(ink)))
-            cachedW = 0
+            timeText.setTextColor(Color.argb(190, Color.red(ink), Color.green(ink), Color.blue(ink)))
+            val shadowCol = if (ink == Color.WHITE) Color.argb(64, 0, 0, 0) else Color.TRANSPARENT
+            titleText.setShadowLayer(4f * dens, 0f, 1f * dens, shadowCol)
+            bodyText.setShadowLayer(3.5f * dens, 0f, 1f * dens, shadowCol)
             invalidate()
         }
 
@@ -1630,7 +1643,7 @@ class NotificationCenterView(
             val h = height.toFloat()
             if (w <= 1f || h <= 1f) return
 
-            // Always render genuine Liquid Glass refraction + soft fading white inner shadow (no full border stroke)
+            // Exact same crisp Liquid Glass refraction + sharp directional white Fresnel inner highlight as Flashlight/Camera buttons
             val rootShell = getRootShell()
             var ox = x
             var oy = y
@@ -1641,41 +1654,7 @@ class NotificationCenterView(
                 p = p.parent as? View
             }
 
-            val smokedTint = Color.argb(
-                max(42, Color.alpha(glassBg)),
-                (Color.red(glassBg) * 0.40f).roundToInt(),
-                (Color.green(glassBg) * 0.42f).roundToInt(),
-                (Color.blue(glassBg) * 0.48f).roundToInt()
-            )
-            glassHelper.draw(this, canvas, smokedTint, ox, oy)
-
-            // Fallback fading white inner shadow ONLY when GPU AGSL isn't available (API < 33) — pure FILL gradient wash, zero stroke!
-            if (!LiquidGlassShaders.isGpuAgslAvailable()) {
-                val rad = 24f * dens
-                if (cachedW != width || cachedH != height || fallbackWashShader == null) {
-                    cachedW = width
-                    cachedH = height
-                    rectF.set(0f, 0f, w, h)
-                    clipPath.reset()
-                    clipPath.addRoundRect(rectF, rad, rad, Path.Direction.CW)
-                    fallbackWashShader = LinearGradient(
-                        w * 0.28f, 0f, w * 0.56f, h * 0.52f,
-                        intArrayOf(
-                            Color.argb(86, 255, 255, 255),
-                            Color.argb(24, 255, 255, 255),
-                            Color.TRANSPARENT
-                        ),
-                        floatArrayOf(0f, 0.35f, 1f),
-                        Shader.TileMode.CLAMP
-                    )
-                }
-                val saved = canvas.save()
-                canvas.clipPath(clipPath)
-                innerFallbackPaint.shader = fallbackWashShader
-                canvas.drawRect(0f, 0f, w, h * 0.55f, innerFallbackPaint)
-                innerFallbackPaint.shader = null
-                canvas.restoreToCount(saved)
-            }
+            glassHelper.draw(this, canvas, glassBg, ox, oy)
         }
     }
 }
