@@ -204,6 +204,14 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(passcodeKt.includes('cancelAnimations'));
   assert.ok(passcodeKt.includes('isClosing'));
   assert.ok(passcodeKt.includes('openForSetup'));
+  assert.ok(passcodeKt.includes('activePointerId'));
+  assert.ok(passcodeKt.includes('isMotionEventSplittingEnabled = false'));
+  assert.ok(mainKt.includes('isWallOrClockPulling'));
+  assert.ok(mainKt.includes('cancelActivePullForPasscode'));
+  assert.ok(mainKt.includes('isMotionEventSplittingEnabled = false'));
+  assert.ok(notifKt.includes('playFrontSettleBounce'));
+  assert.ok(notifKt.includes('isActivelyInteracting'));
+  assert.ok(notifKt.includes('4800f'));
 
   const aiKt = readFileSync(ktDir + 'AIDepthManager.kt','utf8');
   assert.ok(aiKt.includes('SubjectSegmentation'));

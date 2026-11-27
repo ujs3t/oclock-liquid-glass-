@@ -141,6 +141,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private var notifCouplingY = 0f
     private var pullY = 0f
     private var pullAnimator: ValueAnimator? = null
+    private var isWallOrClockPulling = false
+    private var clockHoldPendingRunnable: Runnable? = null
     private var springTargetClock = 0f
     private var springTargetClockFit = 1f
     private var springTargetNp = 0f
@@ -370,12 +372,14 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             layoutDirection = View.LAYOUT_DIRECTION_RTL
             clipChildren = false
             clipToPadding = false
+            isMotionEventSplittingEnabled = false
         }
 
         phoneShell = UnlockSwipeShell(this).apply {
             layoutDirection = View.LAYOUT_DIRECTION_LTR
             clipChildren = false
             clipToPadding = false
+            isMotionEventSplittingEnabled = false
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT,
@@ -588,6 +592,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             layoutDirection = View.LAYOUT_DIRECTION_LTR
             clipChildren = false
             clipToPadding = false
+            isMotionEventSplittingEnabled = false
             setPadding((24f * dens).roundToInt(), 0, (24f * dens).roundToInt(), 0)
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, (54f * dens).roundToInt(), Gravity.BOTTOM)
         }
@@ -1123,44 +1128,84 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         }
     }
 
+    private fun ptrRawX(ev: MotionEvent, idx: Int): Float = ev.getX(idx) + (ev.rawX - ev.x)
+    private fun ptrRawY(ev: MotionEvent, idx: Int): Float = ev.getY(idx) + (ev.rawY - ev.y)
+
+    private fun cancelActivePullForPasscode() {
+        clockHoldPendingRunnable?.let { mainHandler.removeCallbacks(it) }
+        clockHoldPendingRunnable = null
+        pullAnimator?.cancel()
+        pullAnimator = null
+        isWallOrClockPulling = false
+        if (pullY > 0.01f) {
+            pullY = 0f
+        }
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     private fun attachClockLongPressAndPull(target: View) {
         val dens = resources.displayMetrics.density
         val slop = ViewConfiguration.get(this).scaledTouchSlop.toFloat()
         val wobble = 14f * dens
+        var activePtrId = MotionEvent.INVALID_POINTER_ID
         var downX = 0f
         var downY = 0f
         var holdFired = false
         var pulling = false
         val holdRunnable = Runnable {
-            if (!holdFired && !pulling && !editorSheet.isOpen && !resizeOverlay.isOpen) {
+            if (!holdFired && !pulling && !editorSheet.isOpen && !resizeOverlay.isOpen &&
+                !passcodeOverlay.isOpen && passcodeProgress <= 0.01f
+            ) {
                 holdFired = true
                 undoSnap = cfg.snapshotForUndo()
                 resizeOverlay.open()
                 island.pulse("تخصيص حجم الساعة", 0xFF38BDF8.toInt(), 1500L)
             }
         }
+        clockHoldPendingRunnable = holdRunnable
 
         target.setOnTouchListener { _, ev ->
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    if (resizeOverlay.isOpen || isUnlocked || passcodeProgress > 0.05f) return@setOnTouchListener false
+                    if (resizeOverlay.isOpen || isUnlocked ||
+                        passcodeOverlay.isOpen || passcodeProgress > 0.01f
+                    ) return@setOnTouchListener false
                     pullAnimator?.cancel()
+                    activePtrId = ev.getPointerId(0)
                     downX = ev.rawX
                     downY = ev.rawY
                     holdFired = false
                     pulling = false
+                    mainHandler.removeCallbacks(holdRunnable)
                     mainHandler.postDelayed(holdRunnable, 360L)
                     true
                 }
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    mainHandler.removeCallbacks(holdRunnable)
+                    true
+                }
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = ev.rawX - downX
-                    val dy = ev.rawY - downY
+                    if (passcodeOverlay.isOpen || passcodeProgress > 0.02f) {
+                        mainHandler.removeCallbacks(holdRunnable)
+                        if (pulling) {
+                            pulling = false
+                            isWallOrClockPulling = false
+                            pullY = 0f
+                            applyDepthAndLayerTransforms()
+                        }
+                        activePtrId = MotionEvent.INVALID_POINTER_ID
+                        return@setOnTouchListener false
+                    }
+                    val idx = ev.findPointerIndex(activePtrId)
+                    if (idx < 0) return@setOnTouchListener false
+                    val dx = ptrRawX(ev, idx) - downX
+                    val dy = ptrRawY(ev, idx) - downY
                     if (!holdFired && hypot(dx, dy) > wobble) {
                         mainHandler.removeCallbacks(holdRunnable)
                     }
                     if (!holdFired && !pulling && dy > slop && abs(dy) > abs(dx)) {
                         pulling = true
+                        isWallOrClockPulling = true
                         mainHandler.removeCallbacks(holdRunnable)
                     }
                     if (pulling) {
@@ -1170,10 +1215,24 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     }
                     true
                 }
+                MotionEvent.ACTION_POINTER_UP -> {
+                    if (ev.getPointerId(ev.actionIndex) == activePtrId) {
+                        mainHandler.removeCallbacks(holdRunnable)
+                        activePtrId = MotionEvent.INVALID_POINTER_ID
+                        if (pulling) {
+                            pulling = false
+                            isWallOrClockPulling = false
+                            releasePullSpring()
+                        }
+                    }
+                    true
+                }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     mainHandler.removeCallbacks(holdRunnable)
+                    activePtrId = MotionEvent.INVALID_POINTER_ID
                     if (pulling) {
                         pulling = false
+                        isWallOrClockPulling = false
                         releasePullSpring()
                     }
                     true
@@ -1187,26 +1246,43 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private fun attachWallpaperPullAndDoubleTap() {
         val dens = resources.displayMetrics.density
         val slop = ViewConfiguration.get(this).scaledTouchSlop.toFloat()
+        var activePtrId = MotionEvent.INVALID_POINTER_ID
         var dragging = false
         var startY = 0f
         var startX = 0f
 
         wallView.setOnTouchListener { _, ev ->
-            if (editorSheet.isOpen || cameraOverlay.isOpen) return@setOnTouchListener false
+            if (editorSheet.isOpen || cameraOverlay.isOpen ||
+                passcodeOverlay.isOpen || passcodeProgress > 0.01f
+            ) {
+                activePtrId = MotionEvent.INVALID_POINTER_ID
+                if (dragging) {
+                    dragging = false
+                    isWallOrClockPulling = false
+                    pullY = 0f
+                    applyDepthAndLayerTransforms()
+                }
+                return@setOnTouchListener false
+            }
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     if (island.isExpanded) island.collapseIfExpanded()
                     pullAnimator?.cancel()
+                    activePtrId = ev.getPointerId(0)
                     startX = ev.rawX
                     startY = ev.rawY
                     dragging = false
                     true
                 }
+                MotionEvent.ACTION_POINTER_DOWN -> true
                 MotionEvent.ACTION_MOVE -> {
-                    val dy = ev.rawY - startY
-                    val dx = ev.rawX - startX
+                    val idx = ev.findPointerIndex(activePtrId)
+                    if (idx < 0) return@setOnTouchListener false
+                    val dy = ptrRawY(ev, idx) - startY
+                    val dx = ptrRawX(ev, idx) - startX
                     if (!dragging && dy > slop && abs(dy) > abs(dx)) {
                         dragging = true
+                        isWallOrClockPulling = true
                         if (resizeOverlay.isOpen) resizeOverlay.close()
                     }
                     if (dragging) {
@@ -1216,13 +1292,29 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     }
                     true
                 }
+                MotionEvent.ACTION_POINTER_UP -> {
+                    if (ev.getPointerId(ev.actionIndex) == activePtrId) {
+                        activePtrId = MotionEvent.INVALID_POINTER_ID
+                        if (dragging) {
+                            dragging = false
+                            isWallOrClockPulling = false
+                            releasePullSpring()
+                        }
+                    }
+                    true
+                }
                 MotionEvent.ACTION_UP -> {
+                    val idx = ev.findPointerIndex(activePtrId).let { if (it >= 0) it else 0 }
+                    val upX = ptrRawX(ev, idx)
+                    val upY = ptrRawY(ev, idx)
+                    activePtrId = MotionEvent.INVALID_POINTER_ID
                     if (dragging) {
                         dragging = false
+                        isWallOrClockPulling = false
                         releasePullSpring()
                     } else {
                         val now = SystemClock.uptimeMillis()
-                        if (now - lastTapUpMs < 320L && hypot(ev.rawX - lastTapX, ev.rawY - lastTapY) < 42f * dens) {
+                        if (now - lastTapUpMs < 320L && hypot(upX - lastTapX, upY - lastTapY) < 42f * dens) {
                             lastTapUpMs = 0L
                             if (resizeOverlay.isOpen) resizeOverlay.close()
                             if (::notificationCenter.isInitialized && notificationCenter.expandFrac > 0.05f) {
@@ -1232,16 +1324,18 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                             editorSheet.open()
                         } else {
                             lastTapUpMs = now
-                            lastTapX = ev.rawX
-                            lastTapY = ev.rawY
+                            lastTapX = upX
+                            lastTapY = upY
                             if (resizeOverlay.isOpen) resizeOverlay.close()
                         }
                     }
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
+                    activePtrId = MotionEvent.INVALID_POINTER_ID
                     if (dragging) {
                         dragging = false
+                        isWallOrClockPulling = false
                         releasePullSpring()
                     }
                     true
@@ -1258,7 +1352,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
     private fun applyDepthAndLayerTransforms() {
         val dens = resources.displayMetrics.density
-        val yDp = pullY / dens
+        val passFadeT = (passcodeProgress / 0.62f).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
+        val pullEff = pullY * (1f - passFadeT)
+        val yDp = pullEff / dens
         val exp = notifExpandFrac.coerceIn(0f, 1f)
         // liftLead >= exp at all t in (0,1), guaranteeing npCard & clock ALWAYS clear NotificationCenter upward with zero overlap!
         val liftLead = 1f - (1f - exp) * (1f - exp)
@@ -1268,7 +1364,6 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val clockLiftTravel = max(290f * dens, ncTravel + 64f * dens)
         val npLiftTravel = ncTravel + 52f * dens
 
-        val passFadeT = (passcodeProgress / 0.62f).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
         val lockOverlayAlpha = if (isUnlocked) 0f else (1f - passFadeT) * (1f - unlockedFrac)
         val lockScaleMult = 1f - 0.055f * passcodeProgress - 0.04f * unlockedFrac
         val fullyUnlocked = isUnlocked || unlockedFrac >= 0.995f
@@ -1282,7 +1377,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         subjectView.scaleY = wallZoom
         subjectView.translationY = 0f
 
-        val clockLift = clockRestOffset + pullY - clockLiftTravel * liftLead
+        val clockLift = clockRestOffset + pullEff - clockLiftTravel * liftLead
         val artClock = clockView.activeArtifact
         val inkTopPx = ((artClock?.inkTopDp ?: 18f) * dens) * max(0.35f, clockView.scaleY)
         clockContainer.visibility = hideLockChrome
@@ -1299,14 +1394,14 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
         val toplineRest = if (clockRestOffset < 0f) max(clockRestOffset * 0.14f, -(3f * dens)) else clockRestOffset
         toplineRow.visibility = hideLockChrome
-        toplineRow.translationY = toplineRest + pullY - (clockLiftTravel + 18f * dens) * liftLead
+        toplineRow.translationY = toplineRest + pullEff - (clockLiftTravel + 18f * dens) * liftLead
         val tScale = (1f - 0.08f * liftLead) * lockScaleMult
         toplineRow.scaleX = tScale
         toplineRow.scaleY = tScale
         toplineRow.alpha = ((1f - fastFade) * lockOverlayAlpha).coerceIn(0f, 1f)
 
         npCard.cameraDistance = 12000f * dens
-        npCard.translationY = npBaseTranslationY + pullY * 0.6f + notifCouplingY - npLiftTravel * liftLead
+        npCard.translationY = npBaseTranslationY + pullEff * 0.6f + notifCouplingY - npLiftTravel * liftLead
         npCard.rotationX = liftLead * 9f
         val mScale = (1f - 0.11f * liftLead) * lockScaleMult
         npCard.scaleX = mScale
@@ -1638,6 +1733,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
     private fun isEligibleForUnlockSwipe(rawX: Float, rawY: Float): Boolean {
         val dens = resources.displayMetrics.density
+        if (isWallOrClockPulling || pullY > 6f * dens) return false
+        if (notifExpandFrac > 0.04f) return false
+        if (::notificationCenter.isInitialized && notificationCenter.isActivelyInteracting()) return false
         if (isPointInView(island, rawX, rawY, 6f * dens)) return false
         if (isPointInView(shLeft, rawX, rawY, 4f * dens)) return false
         if (isPointInView(shRight, rawX, rawY, 4f * dens)) return false
@@ -1653,6 +1751,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private inner class UnlockSwipeShell(context: Context) : FrameLayout(context) {
         private val dens = resources.displayMetrics.density
         private val slop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+        private var activePointerId = MotionEvent.INVALID_POINTER_ID
         private var downX = 0f
         private var downY = 0f
         private var startSwipeY = 0f
@@ -1667,6 +1766,16 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             copy.recycle()
         }
 
+        override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+            if (::passcodeOverlay.isInitialized && (passcodeOverlay.isOpen || passcodeProgress > 0.01f)) {
+                if (isWallOrClockPulling || pullY > 0.5f || pullAnimator?.isRunning == true) {
+                    cancelActivePullForPasscode()
+                    applyDepthAndLayerTransforms()
+                }
+            }
+            return super.dispatchTouchEvent(ev)
+        }
+
         override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
             if (!cfg.passcodeEnabled || isUnlocked ||
                 editorSheet.isOpen || cameraOverlay.isOpen ||
@@ -1678,11 +1787,13 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     vt = null
                     swipingUp = false
                     eligible = false
+                    activePointerId = MotionEvent.INVALID_POINTER_ID
                 }
                 return false
             }
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    activePointerId = ev.getPointerId(0)
                     downX = ev.rawX
                     downY = ev.rawY
                     startSwipeY = ev.rawY
@@ -1693,40 +1804,72 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     vt = if (eligible) VelocityTracker.obtain().also { trackRaw(ev) } else null
                     return false
                 }
+                MotionEvent.ACTION_POINTER_DOWN -> return false
                 MotionEvent.ACTION_MOVE -> {
                     if (!eligible) return false
-                    trackRaw(ev)
-                    val dx = ev.rawX - downX
-                    val dy = ev.rawY - downY
-                    if (-dy > slop && -dy > abs(dx) * 1.12f) {
-                        swipingUp = true
-                        startSwipeY = downY + slop * 0.35f
-                        if (island.isExpanded) island.collapseIfExpanded()
-                        if (resizeOverlay.isOpen) resizeOverlay.close()
-                        val travel = max(220f * dens, height * 0.42f)
-                        val p = ((startSwipeY - ev.rawY) / travel).coerceIn(0.01f, 1f)
-                        passcodeOverlay.setInteractiveProgress(p)
-                        return true
-                    }
-                }
-                MotionEvent.ACTION_UP -> {
-                    if (eligible) {
-                        trackRaw(ev)
-                        vt?.computeCurrentVelocity(1000)
-                        val vy = vt?.yVelocity ?: 0f
-                        val netDy = ev.rawY - downY
-                        val netDx = ev.rawX - downX
+                    if (isWallOrClockPulling || pullY > 6f * dens) {
                         vt?.recycle()
                         vt = null
                         eligible = false
                         swipingUp = false
-                        if (-vy > 280f * dens && -netDy > 12f * dens && abs(netDy) > abs(netDx) * 1.15f) {
+                        activePointerId = MotionEvent.INVALID_POINTER_ID
+                        return false
+                    }
+                    val idx = ev.findPointerIndex(activePointerId)
+                    if (idx < 0) return false
+                    trackRaw(ev)
+                    val curRawX = ptrRawX(ev, idx)
+                    val curRawY = ptrRawY(ev, idx)
+                    val dx = curRawX - downX
+                    val dy = curRawY - downY
+                    if (-dy > slop && -dy > abs(dx) * 1.12f) {
+                        swipingUp = true
+                        startSwipeY = downY + slop * 0.35f
+                        cancelActivePullForPasscode()
+                        if (island.isExpanded) island.collapseIfExpanded()
+                        if (resizeOverlay.isOpen) resizeOverlay.close()
+                        val travel = max(220f * dens, height * 0.42f)
+                        val p = ((startSwipeY - curRawY) / travel).coerceIn(0.01f, 1f)
+                        passcodeOverlay.setInteractiveProgress(p)
+                        return true
+                    }
+                }
+                MotionEvent.ACTION_POINTER_UP -> {
+                    if (ev.getPointerId(ev.actionIndex) == activePointerId) {
+                        vt?.recycle()
+                        vt = null
+                        eligible = false
+                        swipingUp = false
+                        activePointerId = MotionEvent.INVALID_POINTER_ID
+                    }
+                    return false
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (eligible) {
+                        val idx = ev.findPointerIndex(activePointerId).let { if (it >= 0) it else 0 }
+                        val curRawX = ptrRawX(ev, idx)
+                        val curRawY = ptrRawY(ev, idx)
+                        trackRaw(ev)
+                        vt?.computeCurrentVelocity(1000)
+                        val vy = vt?.yVelocity ?: 0f
+                        val netDy = curRawY - downY
+                        val netDx = curRawX - downX
+                        vt?.recycle()
+                        vt = null
+                        eligible = false
+                        swipingUp = false
+                        activePointerId = MotionEvent.INVALID_POINTER_ID
+                        if (!isWallOrClockPulling && pullY <= 6f * dens &&
+                            -vy > 280f * dens && -netDy > 12f * dens && abs(netDy) > abs(netDx) * 1.15f
+                        ) {
+                            cancelActivePullForPasscode()
                             passcodeOverlay.openAnimated(vy)
                             return true
                         }
                     } else {
                         vt?.recycle()
                         vt = null
+                        activePointerId = MotionEvent.INVALID_POINTER_ID
                     }
                 }
                 MotionEvent.ACTION_CANCEL -> {
@@ -1734,6 +1877,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     vt = null
                     eligible = false
                     swipingUp = false
+                    activePointerId = MotionEvent.INVALID_POINTER_ID
                 }
             }
             return super.onInterceptTouchEvent(ev)
@@ -1744,6 +1888,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             if (!cfg.passcodeEnabled || isUnlocked) return super.onTouchEvent(ev)
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    activePointerId = ev.getPointerId(0)
                     downX = ev.rawX
                     downY = ev.rawY
                     startSwipeY = ev.rawY
@@ -1753,35 +1898,78 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     vt = if (eligible) VelocityTracker.obtain().also { trackRaw(ev) } else null
                     return eligible
                 }
+                MotionEvent.ACTION_POINTER_DOWN -> return eligible
                 MotionEvent.ACTION_MOVE -> {
                     if (!eligible) return false
+                    val idx = ev.findPointerIndex(activePointerId)
+                    if (idx < 0) return true
                     trackRaw(ev)
-                    val dx = ev.rawX - downX
-                    val dy = ev.rawY - downY
+                    val curRawX = ptrRawX(ev, idx)
+                    val curRawY = ptrRawY(ev, idx)
+                    val dx = curRawX - downX
+                    val dy = curRawY - downY
                     if (!swipingUp && -dy > slop && -dy > abs(dx) * 1.12f) {
+                        if (isWallOrClockPulling || pullY > 6f * dens) {
+                            eligible = false
+                            vt?.recycle()
+                            vt = null
+                            activePointerId = MotionEvent.INVALID_POINTER_ID
+                            return false
+                        }
                         swipingUp = true
                         startSwipeY = downY + slop * 0.35f
+                        cancelActivePullForPasscode()
                         if (island.isExpanded) island.collapseIfExpanded()
                         if (resizeOverlay.isOpen) resizeOverlay.close()
                     }
                     if (swipingUp) {
                         val travel = max(220f * dens, height * 0.42f)
-                        val p = ((startSwipeY - ev.rawY) / travel).coerceIn(0f, 1f)
+                        val p = ((startSwipeY - curRawY) / travel).coerceIn(0f, 1f)
                         passcodeOverlay.setInteractiveProgress(p)
                     }
                     return true
                 }
+                MotionEvent.ACTION_POINTER_UP -> {
+                    if (ev.getPointerId(ev.actionIndex) == activePointerId) {
+                        val upIdx = ev.actionIndex
+                        val curRawX = ptrRawX(ev, upIdx)
+                        val curRawY = ptrRawY(ev, upIdx)
+                        vt?.computeCurrentVelocity(1000)
+                        val vy = vt?.yVelocity ?: 0f
+                        vt?.recycle()
+                        vt = null
+                        val wasSwipe = swipingUp
+                        val netDy = curRawY - downY
+                        val netDx = curRawX - downX
+                        swipingUp = false
+                        eligible = false
+                        activePointerId = MotionEvent.INVALID_POINTER_ID
+                        if (wasSwipe) {
+                            passcodeOverlay.settleInteractive(vy, draggedUpPx = max(0f, -netDy))
+                        } else if (!isWallOrClockPulling && pullY <= 6f * dens &&
+                            -vy > 280f * dens && -netDy > 12f * dens && abs(netDy) > abs(netDx) * 1.15f
+                        ) {
+                            cancelActivePullForPasscode()
+                            passcodeOverlay.openAnimated(vy)
+                        }
+                    }
+                    return true
+                }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    val idx = ev.findPointerIndex(activePointerId).let { if (it >= 0) it else 0 }
+                    val curRawX = ptrRawX(ev, idx)
+                    val curRawY = ptrRawY(ev, idx)
                     trackRaw(ev)
                     vt?.computeCurrentVelocity(1000)
                     val vy = vt?.yVelocity ?: 0f
                     vt?.recycle()
                     vt = null
                     val wasSwipe = swipingUp
-                    val netDy = ev.rawY - downY
-                    val netDx = ev.rawX - downX
+                    val netDy = curRawY - downY
+                    val netDx = curRawX - downX
                     swipingUp = false
                     eligible = false
+                    activePointerId = MotionEvent.INVALID_POINTER_ID
                     if (wasSwipe) {
                         if (ev.actionMasked == MotionEvent.ACTION_CANCEL) {
                             passcodeOverlay.closeAnimated()
@@ -1791,8 +1979,10 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                         return true
                     }
                     if (ev.actionMasked == MotionEvent.ACTION_UP &&
+                        !isWallOrClockPulling && pullY <= 6f * dens &&
                         -vy > 280f * dens && -netDy > 12f * dens && abs(netDy) > abs(netDx) * 1.15f
                     ) {
+                        cancelActivePullForPasscode()
                         passcodeOverlay.openAnimated(vy)
                         return true
                     }

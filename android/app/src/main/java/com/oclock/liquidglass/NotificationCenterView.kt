@@ -89,11 +89,16 @@ class NotificationCenterView(
     private var deckCycleProg = 0f
     private var deckCycleCommitting = false
     private var deckCycleAnim: ValueAnimator? = null
+    private var deckSettleBounce = 0f
+    private var deckSettleAnim: ValueAnimator? = null
     private var expandGapShift = 0f
     private var expandGapStartIdx = Int.MAX_VALUE
     private var expandGapAnim: ValueAnimator? = null
     private var hidingOnEmpty = false
     private var rejectDownGesture = false
+
+    fun isActivelyInteracting(): Boolean =
+        deckCycleProg > 0.005f || deckCycleCommitting || expandAnim?.isRunning == true || scrollView.isActivelyDragging()
 
     var uiInk = Color.WHITE
     var uiDim = Color.argb(205, 255, 255, 255)
@@ -103,6 +108,7 @@ class NotificationCenterView(
         layoutDirection = LAYOUT_DIRECTION_LTR
         clipChildren = false
         clipToPadding = false
+        isMotionEventSplittingEnabled = false
         visibility = GONE
         alpha = 0f
 
@@ -110,6 +116,7 @@ class NotificationCenterView(
             orientation = LinearLayout.VERTICAL
             clipChildren = false
             clipToPadding = false
+            isMotionEventSplittingEnabled = false
             layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
         }
 
@@ -149,6 +156,7 @@ class NotificationCenterView(
 
         headerSpacer = View(context).apply {
             layoutParams = LinearLayout.LayoutParams(0, (34f * dens).roundToInt(), 1f)
+            var hPtrId = MotionEvent.INVALID_POINTER_ID
             var hDownX = 0f
             var hDownY = 0f
             var hLastY = 0f
@@ -156,12 +164,15 @@ class NotificationCenterView(
             var hStartExp = 0f
             var hVt: VelocityTracker? = null
             val hSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+            fun hRawX(ev: MotionEvent, idx: Int): Float = ev.getX(idx) + (ev.rawX - ev.x)
+            fun hRawY(ev: MotionEvent, idx: Int): Float = ev.getY(idx) + (ev.rawY - ev.y)
             @SuppressLint("ClickableViewAccessibility")
             setOnTouchListener { _, ev ->
                 val canExp = !isLandscapeCompact && currentItems.isNotEmpty() && restingOffsetPx > 14f * dens
                 when (ev.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
                         expandAnim?.cancel()
+                        hPtrId = ev.getPointerId(0)
                         hDownX = ev.rawX
                         hDownY = ev.rawY
                         hLastY = ev.rawY
@@ -176,30 +187,35 @@ class NotificationCenterView(
                         }
                         true
                     }
+                    MotionEvent.ACTION_POINTER_DOWN -> true
                     MotionEvent.ACTION_MOVE -> {
+                        val idx = ev.findPointerIndex(hPtrId)
+                        if (idx < 0) return@setOnTouchListener false
                         hVt?.let { tracker ->
                             val c = MotionEvent.obtain(ev)
                             c.offsetLocation(ev.rawX - ev.x, ev.rawY - ev.y)
                             tracker.addMovement(c)
                             c.recycle()
                         }
-                        val dx = ev.rawX - hDownX
-                        val dy = ev.rawY - hDownY
+                        val curRawX = hRawX(ev, idx)
+                        val curRawY = hRawY(ev, idx)
+                        val dx = curRawX - hDownX
+                        val dy = curRawY - hDownY
                         if (!hDragging && abs(dy) > hSlop && abs(dy) > abs(dx) * 1.05f) {
                             if (expandFrac <= 0.001f && dy > 0f && canCycleDeck()) {
                                 hDragging = true
                                 prepareDeckCycleForTouch()
-                                applyDeckCycleDelta(ev.rawY - hLastY)
-                                hLastY = ev.rawY
+                                applyDeckCycleDelta(curRawY - hLastY)
+                                hLastY = curRawY
                             } else if (canExp && ((dy < 0f && expandFrac < 0.999f) || (dy > 0f && expandFrac > 0.001f))) {
                                 hDragging = true
                                 val travel = max(220f * dens, restingOffsetPx)
                                 applyExpandProgress((expandFrac + (-dy) / travel).coerceIn(0f, 1f))
-                                hLastY = ev.rawY
+                                hLastY = curRawY
                             }
                         } else if (hDragging) {
-                            val stepDy = ev.rawY - hLastY
-                            hLastY = ev.rawY
+                            val stepDy = curRawY - hLastY
+                            hLastY = curRawY
                             if (deckCycleProg > 0.001f || (expandFrac <= 0.001f && stepDy > 0f && canCycleDeck())) {
                                 applyDeckCycleDelta(stepDy)
                             } else if (canExp) {
@@ -209,7 +225,29 @@ class NotificationCenterView(
                         }
                         true
                     }
+                    MotionEvent.ACTION_POINTER_UP -> {
+                        val upIdx = ev.actionIndex
+                        if (ev.getPointerId(upIdx) == hPtrId) {
+                            val curRawY = hRawY(ev, upIdx)
+                            hPtrId = MotionEvent.INVALID_POINTER_ID
+                            hVt?.computeCurrentVelocity(1000)
+                            val vy = hVt?.yVelocity ?: 0f
+                            hVt?.recycle()
+                            hVt = null
+                            val netDy = curRawY - hDownY
+                            if (deckCycleProg > 0.001f) {
+                                settleDeckCycle(netDy, vy, false)
+                            } else if (canExp && expandFrac > 0.002f && expandFrac < 0.995f) {
+                                settleExpandProgress(hStartExp, expandFrac, netDy, vy)
+                            }
+                            hDragging = false
+                        }
+                        true
+                    }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        val idx = ev.findPointerIndex(hPtrId).let { if (it >= 0) it else 0 }
+                        val curRawY = hRawY(ev, idx)
+                        hPtrId = MotionEvent.INVALID_POINTER_ID
                         hVt?.let { tracker ->
                             val c = MotionEvent.obtain(ev)
                             c.offsetLocation(ev.rawX - ev.x, ev.rawY - ev.y)
@@ -220,7 +258,7 @@ class NotificationCenterView(
                         val vy = hVt?.yVelocity ?: 0f
                         hVt?.recycle()
                         hVt = null
-                        val netDy = ev.rawY - hDownY
+                        val netDy = curRawY - hDownY
                         if (deckCycleProg > 0.001f || (canCycleDeck() && expandFrac <= 0.001f && vy > 110f * dens && netDy > 6f * dens)) {
                             settleDeckCycle(netDy, vy, ev.actionMasked == MotionEvent.ACTION_CANCEL)
                         } else if (canExp && (hDragging || (-vy > 110f * dens && -netDy > 6f * dens) || (vy > 110f * dens && netDy > 6f * dens))) {
@@ -253,6 +291,7 @@ class NotificationCenterView(
             overScrollMode = OVER_SCROLL_NEVER
             clipChildren = false
             clipToPadding = false
+            isMotionEventSplittingEnabled = false
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f)
             onPullOverscroll = { pullDy -> onDragMusicCoupling(pullDy) }
             onRubberChanged = { updateCard3DAndPeek() }
@@ -282,6 +321,7 @@ class NotificationCenterView(
             orientation = LinearLayout.VERTICAL
             clipChildren = false
             clipToPadding = false
+            isMotionEventSplittingEnabled = false
             setPadding(0, (2f * dens).roundToInt(), 0, (240f * dens).roundToInt())
             layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
         }
@@ -1004,7 +1044,7 @@ class NotificationCenterView(
         val firstBot = (if (firstRow != null && firstRow.height > 0) firstRow.bottom.toFloat() else (70f * dens)) + heightCompOffset
         val peekSpan = if (currentItems.size >= 3) 20f * dens else 11f * dens
         val stackBotInContainer = scrollView.top.toFloat() + firstBot + peekSpan
-        val cycleArcYield = sin(deckCycleProg.coerceIn(0f, 1f) * PI).toFloat() * 14f * dens
+        val cycleArcYield = sin(deckCycleProg.coerceIn(0f, 1f) * PI).toFloat() * 24f * dens
         moreHintPill.visibility = VISIBLE
         moreHintPill.translationY = containerCol.translationY + stackBotInContainer + 4f * dens + cycleArcYield
         moreHintPill.alpha = (1f - expandFrac * 4.5f).coerceIn(0f, 1f)
@@ -1016,6 +1056,8 @@ class NotificationCenterView(
         !isLandscapeCompact && expandFrac < 0.02f && currentItems.size > 1 && scrollView.scrollY <= 0
 
     private fun prepareDeckCycleForTouch() {
+        deckSettleAnim?.cancel()
+        deckSettleBounce = 0f
         if (deckCycleCommitting) {
             deckCycleAnim?.cancel()
             rotateFrontCardToBack()
@@ -1030,10 +1072,11 @@ class NotificationCenterView(
 
     private fun applyDeckCycleDelta(dyPx: Float) {
         if (!canCycleDeck()) return
-        val stride = max(64f * dens, 88f * dens)
-        deckCycleProg = (deckCycleProg + dyPx / stride).coerceIn(0f, 1.08f)
+        val stride = 96f * dens
+        val damp = if (deckCycleProg >= 0.96f && dyPx > 0f) 0.42f else 1f
+        deckCycleProg = (deckCycleProg + (dyPx * damp) / stride).coerceIn(0f, 1.12f)
         if (deckCycleProg > 0.001f) {
-            onDragMusicCoupling(sin(deckCycleProg.coerceIn(0f, 1f) * PI).toFloat() * 8f * dens)
+            onDragMusicCoupling(sin(deckCycleProg.coerceIn(0f, 1f) * PI).toFloat() * 9f * dens)
         } else {
             onDragMusicCoupling(0f)
         }
@@ -1055,6 +1098,26 @@ class NotificationCenterView(
         }
     }
 
+    private fun playFrontSettleBounce() {
+        deckSettleAnim?.cancel()
+        deckSettleBounce = 1f
+        deckSettleAnim = ValueAnimator.ofFloat(1f, 0f).apply {
+            duration = 280L
+            interpolator = OvershootInterpolator(1.35f)
+            addUpdateListener { a ->
+                deckSettleBounce = a.animatedValue as Float
+                updateCard3DAndPeek()
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    deckSettleBounce = 0f
+                    updateCard3DAndPeek()
+                }
+            })
+            start()
+        }
+    }
+
     private fun settleDeckCycle(netTotalDyPx: Float, vyPxPerSec: Float, cancelled: Boolean = false) {
         onDragMusicCoupling(0f)
         if (!canCycleDeck()) {
@@ -1065,20 +1128,21 @@ class NotificationCenterView(
             return
         }
         val shouldCommit = !cancelled && (
-            (vyPxPerSec > 110f * dens && netTotalDyPx > 6f * dens) ||
-                deckCycleProg >= 0.24f ||
-                netTotalDyPx >= 22f * dens
+            (vyPxPerSec > 105f * dens && netTotalDyPx > 6f * dens) ||
+                deckCycleProg >= 0.22f ||
+                netTotalDyPx >= 20f * dens
             )
         deckCycleAnim?.cancel()
-        val startP = deckCycleProg.coerceIn(0f, 1.08f)
+        val startP = deckCycleProg.coerceIn(0f, 1.12f)
         if (shouldCommit) {
             onHaptic("tick")
             deckCycleCommitting = true
             val speedBoost = (abs(vyPxPerSec) / (2600f * dens)).coerceIn(0f, 0.35f)
-            val dur = ((1f - startP.coerceAtMost(0.95f)) * 360f * (1f - speedBoost)).roundToInt().toLong().coerceIn(190L, 380L)
+            val dist = abs(1f - startP.coerceAtMost(0.95f))
+            val dur = ((190f + 220f * dist) * (1f - speedBoost)).roundToInt().toLong().coerceIn(200L, 420L)
             deckCycleAnim = ValueAnimator.ofFloat(startP, 1f).apply {
                 duration = dur
-                interpolator = iosEase
+                interpolator = PathInterpolator(0.18f, 1f, 0.28f, 1f)
                 addUpdateListener { a ->
                     deckCycleProg = a.animatedValue as Float
                     updateCard3DAndPeek()
@@ -1092,6 +1156,7 @@ class NotificationCenterView(
                             deckCycleCommitting = false
                             updateCard3DAndPeek()
                             updateMoreHintPill()
+                            playFrontSettleBounce()
                         }
                     }
                 })
@@ -1100,8 +1165,8 @@ class NotificationCenterView(
         } else {
             deckCycleCommitting = false
             deckCycleAnim = ValueAnimator.ofFloat(startP, 0f).apply {
-                duration = 280L
-                interpolator = OvershootInterpolator(1.25f)
+                duration = 320L
+                interpolator = OvershootInterpolator(1.35f)
                 addUpdateListener { a ->
                     deckCycleProg = a.animatedValue as Float
                     updateCard3DAndPeek()
@@ -1194,10 +1259,13 @@ class NotificationCenterView(
             if (!isLandscapeCompact) {
                 val cycling = count > 1 && expandFrac < 0.05f && deckCycleProg > 0.001f
                 if (cycling && i == 0) {
-                    // Front card smoothly swings down-and-back in 3D behind the advancing card into the back slot
-                    val p = deckCycleProg.coerceIn(0f, 1.08f)
-                    val easeP = p.coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
-                    val swing = sin(p.coerceIn(0f, 1f) * PI).toFloat()
+                    // Front card peels smoothly down-and-forward in 3D space, pivots out, and tucks gracefully behind the advancing card!
+                    val p = deckCycleProg.coerceIn(0f, 1.12f)
+                    val pUnit = p.coerceIn(0f, 1f)
+                    val easeP = pUnit * pUnit * (3f - 2f * pUnit)
+                    val swing = sin(pUnit * PI).toFloat()
+                    val flipPeak = sin((pUnit * 1.08f).coerceAtMost(1f) * PI).toFloat()
+                    val overPull = (p - 1f).coerceAtLeast(0f) * 28f * dens
                     val destSlot = min(count - 1, 3).toFloat()
                     val destVal = sampleDeckSlot(destSlot)
                     val destPeek = destVal[0]
@@ -1212,25 +1280,23 @@ class NotificationCenterView(
                     } else {
                         -row.cardHeightEstimate() * min(count - 1, 3) * 0.85f
                     }
-                    restSc = (1f + (destScale - 1f) * easeP) - 0.055f * swing
-                    restTy = destCollapsedTy * easeP + (26f * dens) * swing
-                    restRx = destRx * easeP - 17f * swing
-                    restAlpha = (1f + (destAlpha - 1f) * easeP) * (1f - 0.16f * swing)
+                    restSc = (1f + (destScale - 1f) * easeP) + 0.048f * flipPeak * (1f - easeP * 0.65f)
+                    restTy = destCollapsedTy * easeP + (52f * dens) * flipPeak + overPull
+                    restRx = destRx * easeP - 30f * flipPeak
+                    restAlpha = (1f + (destAlpha - 1f) * easeP) * (1f - 0.12f * swing)
                     restZ = when {
-                        p < 0.36f -> 34f * dens
-                        p < 0.52f -> {
-                            val zt = (p - 0.36f) / 0.16f
-                            (34f * (1f - zt) + 2f * zt) * dens
+                        pUnit < 0.42f -> (38f + 8f * flipPeak) * dens
+                        pUnit < 0.72f -> {
+                            val zt = ((pUnit - 0.42f) / 0.30f).let { it * it * (3f - 2f * it) }
+                            val startZ = 38f + 8f * sin(0.42f * 1.08f * PI).toFloat()
+                            (startZ * (1f - zt) + (destZ / dens) * zt) * dens
                         }
-                        else -> {
-                            val zt = (p - 0.52f) / 0.48f
-                            (2f + (destZ / dens - 2f) * zt) * dens
-                        }
+                        else -> destZ
                     }
-                    pivotRatioY = 0.42f
+                    pivotRatioY = 0.72f
                 } else {
                     val swipeBoost = if (activeSwipeIndex in 0 until i && expandFrac < 0.35f) swipePeekAdvance else 0f
-                    val cycleAdvance = if (cycling && i >= 1) deckCycleProg.coerceIn(0f, 1.05f) else 0f
+                    val cycleAdvance = if (cycling && i >= 1) deckCycleProg.coerceIn(0f, 1.0f).let { it * it * (3f - 2f * it) } else 0f
                     val effSlot = if (expandFrac < 0.35f) {
                         val shifted = when {
                             deckShift < -0.001f -> if (i == 0) 0f else max(0f, i.toFloat() + deckShift)
@@ -1282,6 +1348,19 @@ class NotificationCenterView(
                         if (closed > 0.08f && effSlot > 0.1f) pivotRatioY = 0.35f
                     } else {
                         restZ = 18f * dens
+                    }
+
+                    // 3D rise-forward arc on advancing card (i == 1) + silky landing cushion on new front card (i == 0)
+                    if (cycling && i == 1) {
+                        val riseArc = sin(deckCycleProg.coerceIn(0f, 1f) * PI).toFloat()
+                        restSc += 0.024f * riseArc
+                        restRx += 10.5f * riseArc
+                        restTy -= 6f * dens * riseArc
+                        restZ += 16f * dens * riseArc
+                        pivotRatioY = 0.35f
+                    } else if (!cycling && i == 0 && deckSettleBounce > 0.001f && expandFrac < 0.05f) {
+                        restSc += 0.016f * deckSettleBounce
+                        restRx += 2.2f * deckSettleBounce
                     }
 
                     if (expandFrac >= 0.35f && abs(expandGapShift) > 0.5f && i >= expandGapStartIdx) {
@@ -1336,7 +1415,7 @@ class NotificationCenterView(
             val finalAlpha = (min(restAlpha, scrAlpha) * enterAlpha).coerceIn(0f, 1f)
             val finalZ = if (ef < 0.995f && i == 0) 36f * dens else restZ
 
-            row.cameraDistance = 12500f * dens
+            row.cameraDistance = (if (deckCycleProg > 0.001f) 4800f else 12500f) * dens
             row.pivotX = row.width * 0.5f
             row.pivotY = row.height * pivotRatioY
             row.scaleX = finalSc
@@ -1393,6 +1472,7 @@ class NotificationCenterView(
         private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
         private val vertSlop = min(touchSlop, 8f * dens)
         private val scroller = OverScroller(context)
+        private var activePointerId = MotionEvent.INVALID_POINTER_ID
         private var startRawX = 0f
         private var startRawY = 0f
         private var lastRawY = 0f
@@ -1407,6 +1487,9 @@ class NotificationCenterView(
         var onPullOverscroll: ((Float) -> Unit)? = null
         var onRubberChanged: (() -> Unit)? = null
         var onInteractionStart: (() -> Unit)? = null
+        fun isActivelyDragging(): Boolean = dragActive || activePointerId != MotionEvent.INVALID_POINTER_ID
+        private fun ptrRawX(ev: MotionEvent, idx: Int): Float = ev.getX(idx) + (ev.rawX - ev.x)
+        private fun ptrRawY(ev: MotionEvent, idx: Int): Float = ev.getY(idx) + (ev.rawY - ev.y)
         var getExpandTravelPx: () -> Float = { 300f * dens }
         var canCycleDeckFn: () -> Boolean = { false }
         var isCyclingFn: () -> Boolean = { false }
@@ -1570,6 +1653,7 @@ class NotificationCenterView(
                 MotionEvent.ACTION_DOWN -> {
                     abortScrolling()
                     onInteractionStart?.invoke()
+                    activePointerId = ev.getPointerId(0)
                     startExpandFrac = getExpandFn()
                     startedExpanded = startExpandFrac >= 0.99f
                     startedAtTop = scrollY <= (4f * dens).roundToInt()
@@ -1581,10 +1665,15 @@ class NotificationCenterView(
                     vt = VelocityTracker.obtain()
                     trackRawMovement(ev)
                 }
+                MotionEvent.ACTION_POINTER_DOWN -> return false
                 MotionEvent.ACTION_MOVE -> {
+                    val idx = ev.findPointerIndex(activePointerId)
+                    if (idx < 0) return false
                     trackRawMovement(ev)
-                    val dx = ev.rawX - startRawX
-                    val dy = ev.rawY - startRawY
+                    val curRawX = ptrRawX(ev, idx)
+                    val curRawY = ptrRawY(ev, idx)
+                    val dx = curRawX - startRawX
+                    val dy = curRawY - startRawY
                     val curExp = getExpandFn()
                     val canExp = canExpandFn()
                     val cyclePossible = !startedExpanded && curExp <= 0.001f && dy > 0f && canCycleDeckFn()
@@ -1597,21 +1686,32 @@ class NotificationCenterView(
                             canScrollVertically(-1)
                         ) {
                             dragActive = true
-                            val initialDy = ev.rawY - lastRawY
-                            lastRawY = ev.rawY
-                            processVerticalDelta(initialDy, ev.rawY)
+                            val initialDy = curRawY - lastRawY
+                            lastRawY = curRawY
+                            processVerticalDelta(initialDy, curRawY)
                             return true
                         }
                     }
                 }
+                MotionEvent.ACTION_POINTER_UP -> {
+                    val upIdx = ev.actionIndex
+                    if (ev.getPointerId(upIdx) == activePointerId) {
+                        activePointerId = MotionEvent.INVALID_POINTER_ID
+                    }
+                    return false
+                }
                 MotionEvent.ACTION_UP -> {
+                    val idx = ev.findPointerIndex(activePointerId).let { if (it >= 0) it else 0 }
+                    val curRawX = ptrRawX(ev, idx)
+                    val curRawY = ptrRawY(ev, idx)
+                    activePointerId = MotionEvent.INVALID_POINTER_ID
                     trackRawMovement(ev)
                     vt?.computeCurrentVelocity(1000)
                     val vy = vt?.yVelocity ?: 0f
                     vt?.recycle()
                     vt = null
-                    val netDy = ev.rawY - startRawY
-                    val netDx = ev.rawX - startRawX
+                    val netDy = curRawY - startRawY
+                    val netDx = curRawX - startRawX
                     val curExp = getExpandFn()
                     val canExp = canExpandFn()
                     val downCycleFlick = !startedExpanded && curExp <= 0.001f && canCycleDeckFn() &&
@@ -1632,6 +1732,7 @@ class NotificationCenterView(
                     }
                 }
                 MotionEvent.ACTION_CANCEL -> {
+                    activePointerId = MotionEvent.INVALID_POINTER_ID
                     vt?.recycle()
                     vt = null
                     dragActive = false
@@ -1646,6 +1747,7 @@ class NotificationCenterView(
                 MotionEvent.ACTION_DOWN -> {
                     abortScrolling()
                     onInteractionStart?.invoke()
+                    activePointerId = ev.getPointerId(0)
                     startExpandFrac = getExpandFn()
                     startedExpanded = startExpandFrac >= 0.99f
                     startedAtTop = scrollY <= (4f * dens).roundToInt()
@@ -1658,29 +1760,61 @@ class NotificationCenterView(
                     trackRawMovement(ev)
                     return true
                 }
+                MotionEvent.ACTION_POINTER_DOWN -> return true
                 MotionEvent.ACTION_MOVE -> {
+                    val idx = ev.findPointerIndex(activePointerId)
+                    if (idx < 0) return true
                     trackRawMovement(ev)
+                    val curRawX = ptrRawX(ev, idx)
+                    val curRawY = ptrRawY(ev, idx)
                     if (!dragActive) {
-                        val totalDy = ev.rawY - startRawY
-                        val totalDx = ev.rawX - startRawX
+                        val totalDy = curRawY - startRawY
+                        val totalDx = curRawX - startRawX
                         val curExp = getExpandFn()
                         val cyclePossible = !startedExpanded && curExp <= 0.001f && totalDy > 0f && canCycleDeckFn()
                         val slopReq = if (cyclePossible || (canExpandFn() && curExp < 0.999f)) vertSlop else touchSlop
                         if (abs(totalDy) > slopReq && abs(totalDy) > abs(totalDx) * 1.05f) {
                             dragActive = true
-                            val initialDy = ev.rawY - lastRawY
-                            lastRawY = ev.rawY
-                            processVerticalDelta(initialDy, ev.rawY)
+                            val initialDy = curRawY - lastRawY
+                            lastRawY = curRawY
+                            processVerticalDelta(initialDy, curRawY)
                         }
                         return true
                     }
 
-                    val dy = ev.rawY - lastRawY
-                    lastRawY = ev.rawY
-                    processVerticalDelta(dy, ev.rawY)
+                    val dy = curRawY - lastRawY
+                    lastRawY = curRawY
+                    processVerticalDelta(dy, curRawY)
+                    return true
+                }
+                MotionEvent.ACTION_POINTER_UP -> {
+                    val upIdx = ev.actionIndex
+                    if (ev.getPointerId(upIdx) == activePointerId) {
+                        val curRawX = ptrRawX(ev, upIdx)
+                        val curRawY = ptrRawY(ev, upIdx)
+                        activePointerId = MotionEvent.INVALID_POINTER_ID
+                        vt?.computeCurrentVelocity(1000)
+                        val vy = vt?.yVelocity ?: 0f
+                        vt?.recycle()
+                        vt = null
+                        onPullOverscroll?.invoke(0f)
+                        val curExp = getExpandFn()
+                        val netTotalDy = curRawY - startRawY
+                        dragActive = false
+                        springBackRubber()
+                        if (!startedExpanded && curExp <= 0.001f && isCyclingFn()) {
+                            onDeckCycleReleaseFn(netTotalDy, vy, false)
+                        } else if (canExpandFn() && curExp > 0.002f && curExp < 0.995f) {
+                            onReleaseFn(startExpandFrac, curExp, netTotalDy, vy)
+                        }
+                    }
                     return true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    val idx = ev.findPointerIndex(activePointerId).let { if (it >= 0) it else 0 }
+                    val curRawX = ptrRawX(ev, idx)
+                    val curRawY = ptrRawY(ev, idx)
+                    activePointerId = MotionEvent.INVALID_POINTER_ID
                     trackRawMovement(ev)
                     vt?.computeCurrentVelocity(1000)
                     val vy = vt?.yVelocity ?: 0f
@@ -1690,8 +1824,8 @@ class NotificationCenterView(
                     val curExp = getExpandFn()
                     val canExp = canExpandFn()
                     val wasDrag = dragActive
-                    val netTotalDy = ev.rawY - startRawY
-                    val netTotalDx = ev.rawX - startRawX
+                    val netTotalDy = curRawY - startRawY
+                    val netTotalDx = curRawX - startRawX
                     dragActive = false
                     springBackRubber()
 

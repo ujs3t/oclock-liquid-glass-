@@ -89,6 +89,7 @@ class PasscodeOverlayView(
     private var isVerifying = false
 
     // Swipe-down to dismiss Passcode cleanly
+    private var activePointerId = MotionEvent.INVALID_POINTER_ID
     private var downRawX = 0f
     private var downRawY = 0f
     private var dragStartRawY = 0f
@@ -96,11 +97,15 @@ class PasscodeOverlayView(
     private var dismissingDrag = false
     private var vt: VelocityTracker? = null
 
+    private fun ptrRawX(ev: MotionEvent, idx: Int): Float = ev.getX(idx) + (ev.rawX - ev.x)
+    private fun ptrRawY(ev: MotionEvent, idx: Int): Float = ev.getY(idx) + (ev.rawY - ev.y)
+
     init {
         setWillNotDraw(false)
         layoutDirection = LAYOUT_DIRECTION_LTR
         clipChildren = false
         clipToPadding = false
+        isMotionEventSplittingEnabled = false
         visibility = GONE
         isClickable = true
         isFocusable = true
@@ -110,6 +115,7 @@ class PasscodeOverlayView(
             gravity = Gravity.CENTER_HORIZONTAL
             clipChildren = false
             clipToPadding = false
+            isMotionEventSplittingEnabled = false
             layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
         }
 
@@ -159,6 +165,7 @@ class PasscodeOverlayView(
             gravity = Gravity.CENTER_HORIZONTAL
             clipChildren = false
             clipToPadding = false
+            isMotionEventSplittingEnabled = false
             layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT)
         }
 
@@ -379,6 +386,9 @@ class PasscodeOverlayView(
         isClosing = false
         elasticCascade = false
         dismissingDrag = false
+        activePointerId = MotionEvent.INVALID_POINTER_ID
+        vt?.recycle()
+        vt = null
         mode = Mode.UNLOCK
         entered.clear()
         pendingNewPin = ""
@@ -755,6 +765,7 @@ class PasscodeOverlayView(
         if (isClosing || progress < 0.55f) return false
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                activePointerId = ev.getPointerId(0)
                 downRawX = ev.rawX
                 downRawY = ev.rawY
                 dragStartRawY = ev.rawY
@@ -763,10 +774,14 @@ class PasscodeOverlayView(
                 vt?.recycle()
                 vt = VelocityTracker.obtain().apply { addMovement(ev) }
             }
+            MotionEvent.ACTION_POINTER_DOWN -> return false
             MotionEvent.ACTION_MOVE -> {
+                val idx = ev.findPointerIndex(activePointerId)
+                if (idx < 0) return false
                 vt?.addMovement(ev)
-                val dx = ev.rawX - downRawX
-                val dy = ev.rawY - downRawY
+                val dx = ptrRawX(ev, idx) - downRawX
+                val curRawY = ptrRawY(ev, idx)
+                val dy = curRawY - downRawY
                 if (dy > touchSlop * 1.4f && abs(dy) > abs(dx) * 1.25f) {
                     animGen++
                     anim?.cancel()
@@ -774,11 +789,21 @@ class PasscodeOverlayView(
                     elasticCascade = false
                     startDragProg = progress
                     dismissingDrag = true
-                    dragStartRawY = ev.rawY
+                    dragStartRawY = curRawY
                     return true
                 }
             }
+            MotionEvent.ACTION_POINTER_UP -> {
+                if (ev.getPointerId(ev.actionIndex) == activePointerId) {
+                    activePointerId = MotionEvent.INVALID_POINTER_ID
+                    vt?.recycle()
+                    vt = null
+                    dismissingDrag = false
+                }
+                return false
+            }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                activePointerId = MotionEvent.INVALID_POINTER_ID
                 vt?.recycle()
                 vt = null
                 dismissingDrag = false
@@ -792,6 +817,7 @@ class PasscodeOverlayView(
         if (isClosing || visibility != VISIBLE) return false
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                activePointerId = ev.getPointerId(0)
                 downRawX = ev.rawX
                 downRawY = ev.rawY
                 dragStartRawY = ev.rawY
@@ -801,10 +827,15 @@ class PasscodeOverlayView(
                 vt = VelocityTracker.obtain().apply { addMovement(ev) }
                 return true
             }
+            MotionEvent.ACTION_POINTER_DOWN -> return true
             MotionEvent.ACTION_MOVE -> {
+                val idx = ev.findPointerIndex(activePointerId)
+                if (idx < 0) return true
                 vt?.addMovement(ev)
-                val dx = ev.rawX - downRawX
-                val dy = ev.rawY - downRawY
+                val curRawX = ptrRawX(ev, idx)
+                val curRawY = ptrRawY(ev, idx)
+                val dx = curRawX - downRawX
+                val dy = curRawY - downRawY
                 if (!dismissingDrag && dy > touchSlop * 1.3f && abs(dy) > abs(dx) * 1.2f) {
                     animGen++
                     anim?.cancel()
@@ -812,17 +843,35 @@ class PasscodeOverlayView(
                     elasticCascade = false
                     startDragProg = progress
                     dismissingDrag = true
-                    dragStartRawY = ev.rawY
+                    dragStartRawY = curRawY
                 }
                 if (dismissingDrag) {
                     val travel = max(240f * dens, height * 0.42f)
-                    val dragDy = max(0f, ev.rawY - dragStartRawY)
+                    val dragDy = max(0f, curRawY - dragStartRawY)
                     val p = (startDragProg - dragDy / travel).coerceIn(0f, 1f)
                     setInteractiveProgress(p)
                 }
                 return true
             }
+            MotionEvent.ACTION_POINTER_UP -> {
+                if (ev.getPointerId(ev.actionIndex) == activePointerId) {
+                    activePointerId = MotionEvent.INVALID_POINTER_ID
+                    vt?.computeCurrentVelocity(1000)
+                    val vy = vt?.yVelocity ?: 0f
+                    vt?.recycle()
+                    vt = null
+                    if (dismissingDrag) {
+                        dismissingDrag = false
+                        val shouldDismiss = vy > 190f * dens || progress < 0.72f
+                        if (shouldDismiss) closeAnimated(vy) else openAnimated(vy)
+                    } else if (progress < 0.99f && anim?.isRunning != true) {
+                        openAnimated()
+                    }
+                }
+                return true
+            }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                activePointerId = MotionEvent.INVALID_POINTER_ID
                 vt?.addMovement(ev)
                 vt?.computeCurrentVelocity(1000)
                 val vy = vt?.yVelocity ?: 0f
