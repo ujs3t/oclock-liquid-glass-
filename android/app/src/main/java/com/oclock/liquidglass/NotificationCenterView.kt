@@ -13,6 +13,7 @@ import android.graphics.drawable.GradientDrawable
 import android.os.SystemClock
 import android.text.TextUtils
 import android.util.TypedValue
+import android.view.Choreographer
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.VelocityTracker
@@ -94,10 +95,74 @@ class NotificationCenterView(
     private var expandGapShift = 0f
     private var expandGapStartIdx = Int.MAX_VALUE
     private var expandGapAnim: ValueAnimator? = null
+    private var gapSpringRunning = false
+    private var gapSpringLastNs = 0L
     private var hidingOnEmpty = false
     private var clearCascadeActive = false
     private var clearCascadeGen = 0
     private var rejectDownGesture = false
+
+    private val gapSpringFrame = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            if (!gapSpringRunning) return
+            val dt = if (gapSpringLastNs == 0L) 0.016f
+            else ((frameTimeNanos - gapSpringLastNs) / 1_000_000_000f).coerceIn(0.004f, 0.032f)
+            gapSpringLastNs = frameTimeNanos
+            val dtMs = (dt * 1000f).roundToInt().toLong().coerceAtLeast(1L)
+
+            var anyActive = false
+            for (i in 0 until listCol.childCount) {
+                val row = listCol.getChildAt(i) as? NotificationCardRow ?: continue
+                if (row.isDismissing) continue
+                if (abs(row.gapSpringY) < 0.25f && abs(row.gapSpringVel) < 4f && row.gapSpringDelayMs <= 0L) {
+                    row.gapSpringY = 0f
+                    row.gapSpringVel = 0f
+                    continue
+                }
+                anyActive = true
+                if (row.gapSpringDelayMs > 0L) {
+                    row.gapSpringDelayMs = (row.gapSpringDelayMs - dtMs).coerceAtLeast(0L)
+                    continue
+                }
+                val omega = row.gapSpringOmega
+                val zeta = row.gapSpringZeta
+                val acc = -(omega * omega) * row.gapSpringY - (2f * zeta * omega) * row.gapSpringVel
+                row.gapSpringVel += acc * dt
+                row.gapSpringY += row.gapSpringVel * dt
+                if (abs(row.gapSpringY) < 0.25f && abs(row.gapSpringVel) < 4f) {
+                    row.gapSpringY = 0f
+                    row.gapSpringVel = 0f
+                }
+            }
+
+            updateCard3DAndPeek()
+            if (anyActive) {
+                Choreographer.getInstance().postFrameCallback(this)
+            } else {
+                gapSpringRunning = false
+                gapSpringLastNs = 0L
+            }
+        }
+    }
+
+    private fun ensureGapSpringRunning() {
+        if (!gapSpringRunning) {
+            gapSpringRunning = true
+            gapSpringLastNs = 0L
+            Choreographer.getInstance().postFrameCallback(gapSpringFrame)
+        }
+    }
+
+    private fun stopGapSpring() {
+        gapSpringRunning = false
+        gapSpringLastNs = 0L
+        Choreographer.getInstance().removeFrameCallback(gapSpringFrame)
+    }
+
+    override fun onDetachedFromWindow() {
+        stopGapSpring()
+        super.onDetachedFromWindow()
+    }
 
     fun isActivelyInteracting(): Boolean =
         clearCascadeActive || deckCycleProg > 0.005f || deckCycleCommitting || expandAnim?.isRunning == true || scrollView.isActivelyDragging()
@@ -670,31 +735,23 @@ class NotificationCenterView(
                 swipePeekAdvance = 0f
                 activeSwipeIndex = -1
                 if (nextRow != null) {
-                    expandGapAnim?.cancel()
-                    val startGap = expandGapShift + curH.toFloat() + 8f * dens
-                    expandGapStartIdx = idx
-                    expandGapShift = startGap
-                    expandGapAnim = ValueAnimator.ofFloat(startGap, 0f).apply {
-                        duration = 340L
-                        interpolator = iosEase
-                        addUpdateListener { a ->
-                            expandGapShift = a.animatedValue as Float
-                            updateCard3DAndPeek()
-                        }
-                        addListener(object : AnimatorListenerAdapter() {
-                            override fun onAnimationEnd(animation: Animator) {
-                                expandGapShift = 0f
-                                expandGapStartIdx = Int.MAX_VALUE
-                                updateCard3DAndPeek()
-                            }
-                        })
-                        start()
+                    val gapStep = curH.toFloat() + 8f * dens
+                    for (k in (idx + 1) until listCol.childCount) {
+                        val below = listCol.getChildAt(k) as? NotificationCardRow ?: continue
+                        if (below.isDismissing) continue
+                        val relIdx = k - (idx + 1)
+                        below.gapSpringY += gapStep
+                        below.gapSpringDelayMs = (relIdx * 48L + relIdx * relIdx * 3L).coerceAtMost(260L)
+                        below.gapSpringOmega = (17.2f - relIdx * 0.95f).coerceAtLeast(11.8f)
+                        below.gapSpringZeta = (0.63f - relIdx * 0.015f).coerceAtLeast(0.53f)
                     }
+                    ensureGapSpringRunning()
                 }
             }
         }
 
         // Move dismissing card into unclipped dismissLayer at exact visual coordinates so cards behind never shift via lp.height!
+        row.clearGapSpring()
         cardViews.remove(cur.id)
         listCol.removeView(row)
         row.isDismissing = true
@@ -711,9 +768,9 @@ class NotificationCenterView(
         )
 
         val speedBoost = (abs(vx) / (3200f * dens)).coerceIn(0f, 0.35f)
-        val dur = (275f * (1f - speedBoost * 0.42f)).roundToInt().toLong().coerceIn(190L, 285L)
-        val targetTx = dir * max(280f, curW.toFloat()) * (0.50f + speedBoost * 0.14f)
-        val targetTy = if (stackedMode) -10f * dens else -4f * dens
+        val dur = (265f * (1f - speedBoost * 0.42f)).roundToInt().toLong().coerceIn(185L, 280L)
+        val targetTx = dir * max(320f, curW.toFloat()) * (0.76f + speedBoost * 0.16f)
+        val targetTy = if (stackedMode) -10f * dens else -8f * dens
 
         row.animate().cancel()
         row.pivotX = curW * 0.5f
@@ -721,10 +778,10 @@ class NotificationCenterView(
         row.animate()
             .translationX(targetTx)
             .translationY(targetTy)
-            .rotationY(dir * 16f)
-            .rotation(dir * 3.4f)
-            .scaleX(0.82f)
-            .scaleY(0.82f)
+            .rotationY(dir * 20f)
+            .rotation(dir * 4.5f)
+            .scaleX(0.76f)
+            .scaleY(0.76f)
             .alpha(0f)
             .setDuration(dur)
             .setInterpolator(iosEase)
@@ -744,6 +801,7 @@ class NotificationCenterView(
         targetItems.addAll(items)
 
         if (items.isEmpty()) {
+            stopGapSpring()
             removeCallbacks(burstRunnable)
             burstPending = false
             expandFrac = 0f
@@ -1417,6 +1475,14 @@ class NotificationCenterView(
                     if (expandFrac >= 0.35f && abs(expandGapShift) > 0.5f && i >= expandGapStartIdx) {
                         restTy += expandGapShift
                     }
+                    if (expandFrac >= 0.35f && (abs(row.gapSpringY) > 0.25f || abs(row.gapSpringVel) > 4f)) {
+                        restTy += row.gapSpringY
+                        val velUp = (-row.gapSpringVel / (860f * dens)).coerceIn(-0.6f, 1.15f)
+                        val stretchFrac = (row.gapSpringY / (72f * dens)).coerceIn(-0.4f, 1.2f)
+                        restRx += (velUp * -7.5f).coerceIn(-8.5f, 5.0f)
+                        restSc += (velUp * 0.022f - abs(stretchFrac) * 0.006f).coerceIn(-0.016f, 0.028f)
+                        pivotRatioY = 0.30f
+                    }
                 }
             }
 
@@ -1466,7 +1532,11 @@ class NotificationCenterView(
             val finalAlpha = (min(restAlpha, scrAlpha) * enterAlpha).coerceIn(0f, 1f)
             val finalZ = if (ef < 0.995f && i == 0) 36f * dens else restZ
 
-            row.cameraDistance = (if (deckCycleProg > 0.001f) 4800f else 12500f) * dens
+            row.cameraDistance = (when {
+                deckCycleProg > 0.001f -> 4800f
+                gapSpringRunning -> 5400f
+                else -> 12500f
+            }) * dens
             row.pivotX = row.width * 0.5f
             row.pivotY = row.height * pivotRatioY
             row.scaleX = finalSc
@@ -2221,6 +2291,17 @@ class NotificationCenterView(
         private fun cRawY(ev: MotionEvent, idx: Int): Float = ev.getY(idx) + (ev.rawY - ev.y)
         var enterFrac = 1f
             private set
+        var gapSpringY = 0f
+        var gapSpringVel = 0f
+        var gapSpringDelayMs = 0L
+        var gapSpringOmega = 16.5f
+        var gapSpringZeta = 0.62f
+
+        fun clearGapSpring() {
+            gapSpringY = 0f
+            gapSpringVel = 0f
+            gapSpringDelayMs = 0L
+        }
 
         init {
             setWillNotDraw(false)
