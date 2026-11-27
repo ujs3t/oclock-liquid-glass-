@@ -1138,13 +1138,7 @@ class ShortcutCircleButton(
 
         if (kind == "flash") {
             val t = activeFrac.coerceIn(0f, 1f)
-            val inkLum = 0.2126f * Color.red(uiInk) + 0.7152f * Color.green(uiInk) + 0.0722f * Color.blue(uiInk)
-            val offCol = if (inkLum > 165f) {
-                Color.argb(128, 165, 174, 190)
-            } else {
-                Color.argb(185, Color.red(uiInk), Color.green(uiInk), Color.blue(uiInk))
-            }
-            val iconCol = lerpArgb(offCol, Color.WHITE, t)
+            val iconCol = lerpArgb(uiInk, Color.WHITE, t)
             val iconScale = 1f + 0.11f * activeFrac
 
             canvas.save()

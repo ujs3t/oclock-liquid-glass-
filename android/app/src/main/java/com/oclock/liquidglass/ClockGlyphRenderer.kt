@@ -168,7 +168,7 @@ class ClockGlyphRenderer(private val context: Context) {
             glyphCache[key]?.let { return it }
         }
 
-        val vSub = if (sy > 1.75f) 3 else if (sy > 1.2f) 2 else 1
+        val vSub = max(2, ceil(sy * 1.6f).toInt().coerceAtMost(4))
         val srcPx = fontPx * ss
         val sw = ceil(srcPx * sx * 1.25f).toInt() + 16
         val sh = ceil(srcPx * vSub * 1.55f).toInt() + 16
@@ -215,29 +215,42 @@ class ClockGlyphRenderer(private val context: Context) {
         val g0 = g.toFloat() / vSub
         val targetG = max(4, (g0 * sy).roundToInt())
 
-        val cov = FloatArray(g)
+        // Measure max continuous horizontal run per row (two vertical walls stay ~0.33, true horizontal bars reach ~0.60..0.96)
+        val run = FloatArray(g)
         for (r in 0 until g) {
             val row = (yMin + r) * sw
-            var sum = 0
-            for (x in xMin..xMax) sum += (sData[row + x].toInt() and 0xFF)
-            cov[r] = sum / (255f * w)
+            var cur = 0f
+            var best = 0f
+            for (x in xMin..xMax) {
+                val a = (sData[row + x].toInt() and 0xFF) / 255f
+                if (a >= 0.45f) {
+                    cur += a
+                    if (cur > best) best = cur
+                } else {
+                    cur = 0f
+                }
+            }
+            run[r] = best / w
         }
 
         val bodyStart = floor(0.16f * g).toInt()
         val bodyEnd = max(bodyStart + 1, ceil(0.84f * g).toInt()).coerceAtMost(g)
-        val bodyCov = FloatArray(bodyEnd - bodyStart) { cov[bodyStart + it] }
-        bodyCov.sort()
-        val stemCov = if (bodyCov.isNotEmpty()) bodyCov[(bodyCov.size * 0.30f).toInt().coerceIn(0, bodyCov.lastIndex)] else 0.35f
-        val barThresh = (stemCov * 1.45f).coerceIn(0.54f, 0.80f)
+        val bodyRun = FloatArray(bodyEnd - bodyStart) { run[bodyStart + it] }
+        bodyRun.sort()
+        val stemRun = if (bodyRun.isNotEmpty()) bodyRun[(bodyRun.size * 0.25f).toInt().coerceIn(0, bodyRun.lastIndex)] else 0.32f
+        val barThresh = (stemRun * 1.48f).coerceIn(0.48f, 0.74f)
 
-        var bar = FloatArray(g) { r -> if (cov[r] >= barThresh) 1f else 0f }
+        var bar = FloatArray(g) { r ->
+            val inValidBand = r < (0.16f * g) || r > (0.84f * g) || (r >= (0.32f * g) && r <= (0.82f * g))
+            if (inValidBand && run[r] >= barThresh) 1f else 0f
+        }
 
-        val topEnd = floor(0.17f * g).toInt().coerceAtMost(g - 1)
+        val topEnd = floor(0.15f * g).toInt().coerceAtMost(g - 1)
         var lastTop = -1
         for (r in 0..topEnd) if (bar[r] > 0.5f) lastTop = r
         if (lastTop >= 0) for (r in 0..lastTop) bar[r] = 1f
 
-        val botStart = floor(0.83f * g).toInt().coerceAtLeast(0)
+        val botStart = floor(0.85f * g).toInt().coerceAtLeast(0)
         var firstBot = -1
         for (r in botStart until g) {
             if (bar[r] > 0.5f) {
@@ -247,8 +260,24 @@ class ClockGlyphRenderer(private val context: Context) {
         }
         if (firstBot >= 0) for (r in firstBot until g) bar[r] = 1f
 
-        val rad = max(2, (0.032f * g).roundToInt())
-        repeat(2) {
+        // Bridge small inner curve dips inside a horizontal bar (e.g. middle waist of '3') so bar never oscillates 1->0->1
+        val gapMax = max(2, (0.075f * g).roundToInt())
+        var ri = 0
+        while (ri < g) {
+            if (bar[ri] < 0.5f && ri > 0 && bar[ri - 1] > 0.5f) {
+                var j = ri
+                while (j < g && bar[j] < 0.5f && (j - ri) <= gapMax) j++
+                if (j < g && bar[j] > 0.5f) {
+                    for (k in ri until j) bar[k] = 1f
+                }
+                ri = j
+            } else {
+                ri++
+            }
+        }
+
+        val rad = max(3, (0.060f * g).roundToInt())
+        repeat(4) {
             val next = FloatArray(g)
             for (r in 0 until g) {
                 var s = 0f
@@ -263,6 +292,9 @@ class ClockGlyphRenderer(private val context: Context) {
             }
             bar = next
         }
+
+        val maxBar = if (sy > 1.35f) 0.86f else 1.0f
+        for (r in 0 until g) bar[r] *= maxBar
 
         var barMass = 0f
         var stemMass = 0f

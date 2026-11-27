@@ -163,9 +163,12 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(notifKt.includes('deckCycleProg'));
   assert.ok(notifKt.includes('rotateFrontCardToBack'));
   assert.ok(notifKt.includes('settleDeckCycle'));
+  assert.ok(glyphKt.includes('inValidBand'));
   assert.ok(shadersKt.includes('0.75 * rg.x'));
-  assert.ok(shadersKt.includes('255.0 / 2.5 - 1.0'));
-  assert.ok(jniCpp.includes('ddSmooth'));
+  assert.ok(shadersKt.includes('255.0 / 1.5 - 1.0'));
+  assert.ok(!shadersKt.includes('tLip'));
+  assert.ok(jniCpp.includes('blurR'));
+  assert.ok(!viewsKt.includes('165, 174, 190'));
   assert.ok(mainKt.includes('hadNotifsInLayout'));
   assert.ok(mainKt.includes('appearingFromEmpty'));
   assert.ok(mainKt.includes('94f * dens'));

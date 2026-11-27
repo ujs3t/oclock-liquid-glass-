@@ -128,18 +128,36 @@ Java_com_oclock_liquidglass_NativeGlass_computeClockField(
             if (!inside.empty()) {
                 double maxInside = 0.0;
                 const size_t count = size_t(w) * h;
-                for (size_t i = 0; i < count; i++) {
-                    double s = sdf[i] > 0.f ? double(sdf[i]) - 0.5 : -(double(inside[i]) - 0.5);
-                    maxInside = std::max(maxInside, -s);
-                    // Subpixel contour correction on the edge band eliminates binary EDT staircasing
-                    if (std::abs(s) <= 0.65) {
-                        s = (127.5 - double(alpha[i])) / 255.0;
+                auto sampleAlpha = [&](int sx, int sy) -> double {
+                    const int cx = std::max(0, std::min(w - 1, sx));
+                    const int cy = std::max(0, std::min(h - 1, sy));
+                    return double(alpha[size_t(cy) * w + cx]) / 255.0;
+                };
+                for (int y = 0; y < h; y++) {
+                    for (int x = 0; x < w; x++) {
+                        const size_t i = size_t(y) * w + x;
+                        double s = sdf[i] > 0.f ? double(sdf[i]) - 0.5 : -(double(inside[i]) - 0.5);
+                        maxInside = std::max(maxInside, -s);
+                        if (std::abs(s) <= 1.35) {
+                            const double agx = (sampleAlpha(x + 1, y - 1) + 2.0 * sampleAlpha(x + 1, y) + sampleAlpha(x + 1, y + 1)
+                                              - sampleAlpha(x - 1, y - 1) - 2.0 * sampleAlpha(x - 1, y) - sampleAlpha(x - 1, y + 1)) * 0.25;
+                            const double agy = (sampleAlpha(x - 1, y + 1) + 2.0 * sampleAlpha(x, y + 1) + sampleAlpha(x + 1, y + 1)
+                                              - sampleAlpha(x - 1, y - 1) - 2.0 * sampleAlpha(x, y - 1) - sampleAlpha(x + 1, y - 1)) * 0.25;
+                            const double alen = std::hypot(agx, agy);
+                            if (alen > 0.12) {
+                                const double edgeS = (0.5 - double(alpha[i]) / 255.0) / std::max(0.45, alen);
+                                const double blend = clamp01f(float((1.35 - std::abs(s)) / 0.65));
+                                s = s * (1.0 - blend) + edgeS * blend;
+                            } else if (std::abs(s) <= 0.65) {
+                                s = (127.5 - double(alpha[i])) / 255.0;
+                            }
+                        }
+                        sdf[i] = float(s);
                     }
-                    sdf[i] = float(s);
                 }
                 std::vector<float>().swap(inside);
 
-                // 1 gentle [1,2,1]/4 pass preserves exact zero-contour alignment on convex arches without inward shift
+                // 1 gentle [1,2,1]/4 pass keeps crisp edge distance without shifting contour
                 std::vector<float> depthSdf(count);
                 std::vector<float> tmpSdf(count);
                 bool cancelled = false;
@@ -160,9 +178,12 @@ Java_com_oclock_liquidglass_NativeGlass_computeClockField(
                     }
                 }
 
-                // 4 separable 5-tap Gaussian passes [1,4,6,4,1]/16 eliminate diagonal/curve normal ripples
+                // O(1) 3-pass separable sliding-window box blur approximates wide Gaussian (sigma ~ 5.5..7.5 texels)
+                // completely eliminating binary EDT staircase ripples along curved digit flanks
+                const int blurR = std::max(3, std::min(9, int(std::round(ss * 1.45))));
+                const double invWin = 1.0 / double(2 * blurR + 1);
                 std::vector<float> smoothSdf = std::move(sdf);
-                for (int pass = 0; pass < 4 && !cancelled; pass++) {
+                for (int pass = 0; pass < 3 && !cancelled; pass++) {
                     for (int y = 0; y < h; y++) {
                         if ((y & 63) == 0 && glass::isCancelled(&g_latest_version, expected)) {
                             cancelled = true;
@@ -170,26 +191,26 @@ Java_com_oclock_liquidglass_NativeGlass_computeClockField(
                         }
                         const float* src = smoothSdf.data() + size_t(y) * w;
                         float* dst = tmpSdf.data() + size_t(y) * w;
+                        double acc = double(src[0]) * (blurR + 1);
+                        for (int k = 1; k <= blurR; k++) acc += src[std::min(w - 1, k)];
                         for (int x = 0; x < w; x++) {
-                            const int xm2 = std::max(0, x - 2), xm1 = std::max(0, x - 1);
-                            const int xp1 = std::min(w - 1, x + 1), xp2 = std::min(w - 1, x + 2);
-                            dst[x] = (src[xm2] + 4.f * src[xm1] + 6.f * src[x] + 4.f * src[xp1] + src[xp2]) * 0.0625f;
+                            dst[x] = float(acc * invWin);
+                            acc += double(src[std::min(w - 1, x + blurR + 1)]) - double(src[std::max(0, x - blurR)]);
                         }
                     }
                     if (cancelled) break;
-                    for (int y = 0; y < h; y++) {
-                        if ((y & 63) == 0 && glass::isCancelled(&g_latest_version, expected)) {
+                    for (int x = 0; x < w; x++) {
+                        if ((x & 63) == 0 && glass::isCancelled(&g_latest_version, expected)) {
                             cancelled = true;
                             break;
                         }
-                        const float* rm2 = tmpSdf.data() + size_t(std::max(0, y - 2)) * w;
-                        const float* rm1 = tmpSdf.data() + size_t(std::max(0, y - 1)) * w;
-                        const float* r0  = tmpSdf.data() + size_t(y) * w;
-                        const float* rp1 = tmpSdf.data() + size_t(std::min(h - 1, y + 1)) * w;
-                        const float* rp2 = tmpSdf.data() + size_t(std::min(h - 1, y + 2)) * w;
-                        float* dst = smoothSdf.data() + size_t(y) * w;
-                        for (int x = 0; x < w; x++) {
-                            dst[x] = (rm2[x] + 4.f * rm1[x] + 6.f * r0[x] + 4.f * rp1[x] + rp2[x]) * 0.0625f;
+                        double acc = double(tmpSdf[x]) * (blurR + 1);
+                        for (int k = 1; k <= blurR; k++) acc += tmpSdf[size_t(std::min(h - 1, k)) * w + x];
+                        for (int y = 0; y < h; y++) {
+                            smoothSdf[size_t(y) * w + x] = float(acc * invWin);
+                            const int addY = std::min(h - 1, y + blurR + 1);
+                            const int subY = std::max(0, y - blurR);
+                            acc += double(tmpSdf[size_t(addY) * w + x]) - double(tmpSdf[size_t(subY) * w + x]);
                         }
                     }
                 }
@@ -235,7 +256,7 @@ Java_com_oclock_liquidglass_NativeGlass_computeClockField(
                         for (int x = 0; x < w; x++) {
                             const int xm = std::max(0, x - 1), xp = std::min(w - 1, x + 1);
                             const double dd = dc[x];
-                            const double wSmooth = clamp01f(float(-dd) * 0.45f);
+                            const double wSmooth = clamp01f(float(-dd) / std::max(1.5f, float(ss) * 1.1f));
                             const double ddSmooth = dd * (1.0 - wSmooth) + double(sc[x]) * wSmooth;
                             const double gx = (double(sc[xp]) - sc[xm]) * 0.5;
                             const double gy = (double(sp[x]) - sm[x]) * 0.5;
@@ -253,8 +274,8 @@ Java_com_oclock_liquidglass_NativeGlass_computeClockField(
 
                             uint8_t* d = outRow + size_t(x) * 4;
                             d[0] = 128; d[1] = 128;
-                            // Wide smooth unclipped depth (0..101 texels) blending contour-accurate edge into Gaussian SDF
-                            d[2] = glass::byte((-ddSmooth + 1.0) * 2.5);
+                            // Wide unclipped depth (0..169 texels) blending subpixel contour into Gaussian SDF
+                            d[2] = glass::byte((-ddSmooth + 1.0) * 1.5);
                             d[3] = 255;
                             if (dd > 0.0) continue;
                             if (flatCenter && dd <= -effBezel) continue;
@@ -314,8 +335,7 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
     const float shR = float((shadowTopColor >> 16) & 0xff), shG = float((shadowTopColor >> 8) & 0xff), shB = float(shadowTopColor & 0xff);
     const float inR = float((innerColor >> 16) & 0xff), inG = float((innerColor >> 8) & 0xff), inB = float(innerColor & 0xff);
     const float rad = innerAngleDeg * 3.14159265f / 180.f, ax = std::cos(rad), ay = std::sin(rad);
-    const float fallLimit = innerThick > 0.01f ? std::max(3.5f, innerThick * ss * 3.1f + 1.4f * ss) : 2.0f;
-    const float lipSpan = std::max(1.6f, ss * 1.45f);
+    const float fallLimit = innerThick > 0.01f ? std::max(6.f * ss, (innerThick * 12.f + 4.8f) * ss) : 2.0f;
     const float scaleX = dstW / std::max(1.f, float(w)), scaleY = dstH / std::max(1.f, float(h));
 
     for (int y = 0; y < h; y++) {
@@ -357,25 +377,22 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
                 g = g * (1.f - shadowOp) + shG * shadowOp;
                 b = b * (1.f - shadowOp) + shB * shadowOp;
             }
-            // Smooth 2-stage iOS-grade inner glass bevel layered cleanly ON TOP of any fill opacity (0%..100%)
-            float depthPx = std::max(0.f, float(fd[2]) / 2.5f - 1.f);
+            // Pure silky wide iOS 26 inner white glass shadow (no harsh border stroke)
+            float depthPx = std::max(0.f, float(fd[2]) / 1.5f - 1.f);
             if (innerOp > 0.001f && innerThick > 0.01f && depthPx < fallLimit) {
                 float gx = (float(aRow[size_t(x) * 4 + 1]) - 128.f) / 127.f;
                 float gy = (float(aRow[size_t(x) * 4 + 2]) - 128.f) / 127.f;
                 float gl = std::hypot(gx, gy);
                 if (gl > 0.01f) {
-                    float ridgeFade = clamp01f(gl * 1.35f);
+                    float ridgeFade = clamp01f(gl * 1.40f);
                     float k = std::fabs((gx / gl) * ax + (gy / gl) * ay);
-                    float tLip = clamp01f(depthPx / lipSpan);
-                    float lip = std::pow(1.f - tLip, 2.05f) * 0.88f;
-                    float tGlow = clamp01f(depthPx / fallLimit);
-                    float glow = std::pow(1.f - tGlow, 2.25f) * 0.54f;
-                    float profile = clamp01f(lip * 0.72f + glow * 0.60f);
+                    float t = clamp01f(depthPx / fallLimit);
+                    float decay = std::pow(1.f - t, 2.15f) * (0.68f + 0.32f * std::cos(t * 1.5707963f));
                     float fadeAmt = clamp01f(innerFade);
-                    float lit = std::pow(k, 1.55f);
-                    float dirTerm = (1.f - fadeAmt) + fadeAmt * (0.22f + 0.78f * lit);
-                    float rimA = clamp01f(dirTerm * profile * ridgeFade * innerOp);
-                    rimA = std::min(rimA, 0.96f);
+                    float lit = std::pow(k, 1.45f);
+                    float dirTerm = (1.f - fadeAmt) + fadeAmt * (0.32f + 0.68f * lit);
+                    float rimA = clamp01f(dirTerm * decay * ridgeFade * innerOp * 0.78f);
+                    rimA = std::min(rimA, 0.86f);
                     r = r * (1.f - rimA) + inR * rimA;
                     g = g * (1.f - rimA) + inG * rimA;
                     b = b * (1.f - rimA) + inB * rimA;
