@@ -194,7 +194,9 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(passcodeKt.includes('useBlurredBackdrop = false'));
   assert.ok(passcodeKt.includes('shadowInt = 0.0f'));
   assert.ok(passcodeKt.includes('innerShadow = 0.46f'));
-  assert.ok(shadersKt.includes('clamp(uBezel * 0.095, 4.0, 9.5)'));
+  assert.ok(shadersKt.includes('clamp(uBezel * 0.095, 4.2, 9.5)'));
+  assert.ok(shadersKt.includes('smoothstep(0.65, -0.65, d0)'));
+  assert.ok(mainKt.includes('shellH * 0.35f'));
   assert.ok(passcodeKt.includes('Choreographer.FrameCallback'));
   assert.ok(passcodeKt.includes('applyCascadeTransforms'));
   assert.ok(passcodeKt.includes('setInteractiveProgress'));

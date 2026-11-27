@@ -976,7 +976,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val cardW = min((400f * dens).roundToInt(), max(220, shellW - (28f * dens).roundToInt()))
         val shortcutsReserve = safeBottomPx + (84f * dens).roundToInt()
         val shortcutsTop = shellH - shortcutsReserve
-        val expandedTop = safeTopPx + (54f * dens).roundToInt()
+        val minExpandedTop = safeTopPx + (54f * dens).roundToInt()
+        val maxExpandedTop = max(minExpandedTop, shortcutsTop - (280f * dens).roundToInt())
+        val expandedTop = (shellH * 0.35f).roundToInt().coerceIn(minExpandedTop, maxExpandedTop)
         val npBaseBottom = safeBottomPx + (94f * dens).roundToInt()
         val npH = npCard.height.takeIf { it > 0 } ?: (110f * dens).roundToInt()
         val headerH = (40f * dens).roundToInt()

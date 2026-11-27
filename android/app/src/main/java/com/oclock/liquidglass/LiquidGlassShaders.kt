@@ -42,10 +42,26 @@ object LiquidGlassShaders {
             float r = min(uRadius, min(halfSz.x, halfSz.y));
             float2 p = fragCoord - halfSz;
             float dd = sdRoundBox(p, halfSz, r);
-            if (dd > 1.0) return half4(0.0);
-            float maskA = clamp(0.5 - dd, 0.0, 1.0);
+            if (dd > 1.2) return half4(0.0);
 
-            float e = 0.75;
+            // 4-tap Rotated-Grid Supersampling (RGSS) for glass edge & inner white shadow — eliminates curved stair-steps
+            float2 o0 = float2( 0.375,  0.125);
+            float2 o1 = float2(-0.375, -0.125);
+            float2 o2 = float2( 0.125, -0.375);
+            float2 o3 = float2(-0.125,  0.375);
+            float d0 = sdRoundBox(p + o0, halfSz, r);
+            float d1 = sdRoundBox(p + o1, halfSz, r);
+            float d2 = sdRoundBox(p + o2, halfSz, r);
+            float d3 = sdRoundBox(p + o3, halfSz, r);
+            float m0 = smoothstep(0.65, -0.65, d0);
+            float m1 = smoothstep(0.65, -0.65, d1);
+            float m2 = smoothstep(0.65, -0.65, d2);
+            float m3 = smoothstep(0.65, -0.65, d3);
+            float mSum = m0 + m1 + m2 + m3;
+            float maskA = mSum * 0.25;
+            if (maskA <= 0.0005) return half4(0.0);
+
+            float e = 1.0;
             float2 grad = float2(
                 sdRoundBox(p + float2(e, 0.0), halfSz, r) - sdRoundBox(p - float2(e, 0.0), halfSz, r),
                 sdRoundBox(p + float2(0.0, e), halfSz, r) - sdRoundBox(p - float2(0.0, e), halfSz, r)
@@ -88,28 +104,32 @@ object LiquidGlassShaders {
             // glass-bg tint
             col = mix(col, uGlassBg.rgb, uGlassBg.a);
 
-            // Balanced silky white inner shadow ONLY (slightly fuller rim on large keys while staying crisp & stroke-free)
-            if (uInnerShadow > 0.001 && dd <= 0.15) {
-                float depthPx = max(0.0, -dd);
-                float span = clamp(uBezel * 0.095, 4.0, 9.5);
-                if (depthPx < span) {
-                    float edgeAA = clamp((0.15 - dd) / 0.65, 0.0, 1.0);
-                    float td = clamp(depthPx / span, 0.0, 1.0);
-                    float fall = pow(1.0 - td, 2.25);
-                    float k = abs(dot(n, uLightDir));
-                    float lit = pow(max(0.0, k), 1.8);
-                    float innerGlow = clamp(lit * fall * edgeAA * uInnerShadow, 0.0, 0.78);
-                    col = mix(col, float3(1.0), innerGlow);
-                }
+            // 4x supersampled silky white inner shadow ONLY (zero dark edge teeth, zero pixelation, zero outer stroke)
+            if (uInnerShadow > 0.001) {
+                float span = clamp(uBezel * 0.095, 4.2, 9.5);
+                float f0 = pow(1.0 - clamp(max(0.0, -d0) / span, 0.0, 1.0), 2.15) * m0;
+                float f1 = pow(1.0 - clamp(max(0.0, -d1) / span, 0.0, 1.0), 2.15) * m1;
+                float f2 = pow(1.0 - clamp(max(0.0, -d2) / span, 0.0, 1.0), 2.15) * m2;
+                float f3 = pow(1.0 - clamp(max(0.0, -d3) / span, 0.0, 1.0), 2.15) * m3;
+                float fall = (f0 + f1 + f2 + f3) / max(0.001, mSum);
+                float k = abs(dot(n, uLightDir));
+                float lit = pow(max(0.0, k), 1.8);
+                float innerGlow = clamp(lit * fall * uInnerShadow, 0.0, 0.78);
+                col = mix(col, float3(1.0), innerGlow);
             }
 
-            // Fresnel specular rim shadow
-            if (uShadowInt > 0.001 && dd <= 0.45 && -dd <= 1.8) {
-                float band = clamp((1.5 + dd) / 1.5, 0.0, 1.0);
-                float edgeAA = clamp((0.45 - dd) / 0.9, 0.0, 1.0);
-                float k = abs(dot(n, uLightDir));
-                float rim = pow(band, 0.6) * edgeAA * pow(max(0.0, k), 1.8) * uShadowInt;
-                col = mix(col, float3(1.0), clamp(rim, 0.0, 1.0));
+            // 4x supersampled Fresnel specular rim shadow
+            if (uShadowInt > 0.001) {
+                float b0 = clamp((1.5 + d0) / 1.5, 0.0, 1.0) * m0;
+                float b1 = clamp((1.5 + d1) / 1.5, 0.0, 1.0) * m1;
+                float b2 = clamp((1.5 + d2) / 1.5, 0.0, 1.0) * m2;
+                float b3 = clamp((1.5 + d3) / 1.5, 0.0, 1.0) * m3;
+                float band = (b0 + b1 + b2 + b3) / max(0.001, mSum);
+                if (band > 0.001) {
+                    float k = abs(dot(n, uLightDir));
+                    float rim = pow(band, 0.6) * pow(max(0.0, k), 1.8) * uShadowInt;
+                    col = mix(col, float3(1.0), clamp(rim, 0.0, 1.0));
+                }
             }
             return half4(half3(col * maskA), half(maskA));
         }
@@ -256,18 +276,19 @@ object LiquidGlassShaders {
                     ?: Bitmap.createBitmap(cw, ch, Bitmap.Config.ARGB_8888).also { compositedBitmap = it }
                 val c = android.graphics.Canvas(comp)
                 c.drawColor(Color.BLACK)
+                val filterPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG or android.graphics.Paint.FILTER_BITMAP_FLAG)
                 val m = Matrix()
                 val s = max(cw / bw, ch / bh)
                 m.setScale(s, s)
                 m.postTranslate((cw - bw * s) * 0.5f, (ch - bh * s) * 0.5f)
-                c.drawBitmap(wall, m, null)
+                c.drawBitmap(wall, m, filterPaint)
                 val sw = subject.width.toFloat().coerceAtLeast(1f)
                 val sh = subject.height.toFloat().coerceAtLeast(1f)
                 val ss = max(cw / sw, ch / sh)
                 m.reset()
                 m.setScale(ss, ss)
                 m.postTranslate((cw - sw * ss) * 0.5f, (ch - sh * ss) * 0.5f)
-                c.drawBitmap(subject, m, null)
+                c.drawBitmap(subject, m, filterPaint)
                 if (compositedShader == null) {
                     compositedShader = BitmapShader(comp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).also {
                         if (Build.VERSION.SDK_INT >= 33) it.filterMode = BitmapShader.FILTER_MODE_LINEAR
