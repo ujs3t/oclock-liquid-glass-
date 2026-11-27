@@ -1352,7 +1352,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
     private fun applyDepthAndLayerTransforms() {
         val dens = resources.displayMetrics.density
-        val passFadeT = (passcodeProgress / 0.62f).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
+        val passFadeT = (passcodeProgress / 0.30f).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
         val pullEff = pullY * (1f - passFadeT)
         val yDp = pullEff / dens
         val exp = notifExpandFrac.coerceIn(0f, 1f)
@@ -1367,7 +1367,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val lockOverlayAlpha = if (isUnlocked) 0f else (1f - passFadeT) * (1f - unlockedFrac)
         val lockScaleMult = 1f - 0.055f * passcodeProgress - 0.04f * unlockedFrac
         val fullyUnlocked = isUnlocked || unlockedFrac >= 0.995f
-        val hideLockChrome = if (fullyUnlocked) View.INVISIBLE else View.VISIBLE
+        val hideLockChrome = if (fullyUnlocked || passFadeT >= 0.995f) View.INVISIBLE else View.VISIBLE
 
         // Keep wallpaper & foreground depth subject 100% locked together during notification scroll so depth cutout stays intact!
         val wallZoom = 1f + yDp * 0.00028f + passcodeProgress * 0.015f
@@ -1407,17 +1407,23 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         npCard.scaleX = mScale
         npCard.scaleY = mScale
         npCard.alpha = ((1f - fastFade) * lockOverlayAlpha).coerceIn(0f, 1f)
+        if (npCard.visibility != View.GONE) {
+            npCard.visibility = if (hideLockChrome == View.INVISIBLE || !cfg.music) View.INVISIBLE else View.VISIBLE
+        }
         npCard.isClickable = cfg.music && exp < 0.12f && !isUnlocked && passcodeProgress < 0.1f
         npCard.isFocusable = npCard.isClickable
 
         if (::notificationCenter.isInitialized) {
-            notificationCenter.translationY = pullY * 0.52f
+            notificationCenter.translationY = pullEff * 0.52f
             notificationCenter.scaleX = lockScaleMult
             notificationCenter.scaleY = lockScaleMult
             notificationCenter.alpha = lockOverlayAlpha.coerceIn(0f, 1f)
+            if (notificationCenter.visibility != View.GONE) {
+                notificationCenter.visibility = if (hideLockChrome == View.INVISIBLE) View.INVISIBLE else View.VISIBLE
+            }
         }
         bottomRow.visibility = hideLockChrome
-        bottomRow.translationY = pullY * 0.4f
+        bottomRow.translationY = pullEff * 0.4f
         bottomRow.scaleX = lockScaleMult
         bottomRow.scaleY = lockScaleMult
         bottomRow.alpha = lockOverlayAlpha.coerceIn(0f, 1f)

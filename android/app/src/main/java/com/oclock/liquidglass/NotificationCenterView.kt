@@ -95,10 +95,12 @@ class NotificationCenterView(
     private var expandGapStartIdx = Int.MAX_VALUE
     private var expandGapAnim: ValueAnimator? = null
     private var hidingOnEmpty = false
+    private var clearCascadeActive = false
+    private var clearCascadeGen = 0
     private var rejectDownGesture = false
 
     fun isActivelyInteracting(): Boolean =
-        deckCycleProg > 0.005f || deckCycleCommitting || expandAnim?.isRunning == true || scrollView.isActivelyDragging()
+        clearCascadeActive || deckCycleProg > 0.005f || deckCycleCommitting || expandAnim?.isRunning == true || scrollView.isActivelyDragging()
 
     var uiInk = Color.WHITE
     var uiDim = Color.argb(205, 255, 255, 255)
@@ -762,28 +764,66 @@ class NotificationCenterView(
             currentItems = emptyList()
             cardViews.clear()
             listCol.removeAllViews()
+            val wasClearCascade = clearCascadeActive
+            clearCascadeActive = false
             if (visibility == VISIBLE) {
                 hidingOnEmpty = true
                 val baseTy = restingOffsetPx * (1f - expandFrac)
                 containerCol.animate().cancel()
-                containerCol.animate()
-                    .alpha(0f)
-                    .translationY(baseTy + 18f * dens)
-                    .scaleX(0.95f)
-                    .scaleY(0.95f)
-                    .setDuration(240L)
-                    .setInterpolator(iosEase)
-                    .withEndAction {
-                        hidingOnEmpty = false
-                        if (currentItems.isEmpty()) {
-                            containerCol.translationY = restingOffsetPx * (1f - expandFrac)
-                            containerCol.scaleX = 1f
-                            containerCol.scaleY = 1f
-                            containerCol.alpha = 1f
-                            checkHideWhenEmpty()
+                if (wasClearCascade) {
+                    containerCol.animate()
+                        .alpha(0f)
+                        .translationY(baseTy - 8f * dens)
+                        .scaleX(0.97f)
+                        .scaleY(0.97f)
+                        .setDuration(150L)
+                        .setInterpolator(iosEase)
+                        .withEndAction {
+                            hidingOnEmpty = false
+                            if (currentItems.isEmpty()) {
+                                headerRow.animate().cancel()
+                                headerRow.alpha = 1f
+                                headerRow.translationY = 0f
+                                headerRow.scaleX = 1f
+                                headerRow.scaleY = 1f
+                                clearBtn.animate().cancel()
+                                clearBtn.rotation = 0f
+                                clearBtn.scaleX = 1f
+                                clearBtn.scaleY = 1f
+                                containerCol.translationY = restingOffsetPx * (1f - expandFrac)
+                                containerCol.scaleX = 1f
+                                containerCol.scaleY = 1f
+                                containerCol.alpha = 1f
+                                checkHideWhenEmpty()
+                            }
                         }
-                    }
-                    .start()
+                        .start()
+                } else {
+                    containerCol.animate()
+                        .alpha(0f)
+                        .translationY(baseTy + 18f * dens)
+                        .scaleX(0.95f)
+                        .scaleY(0.95f)
+                        .setDuration(240L)
+                        .setInterpolator(iosEase)
+                        .withEndAction {
+                            hidingOnEmpty = false
+                            if (currentItems.isEmpty()) {
+                                containerCol.translationY = restingOffsetPx * (1f - expandFrac)
+                                containerCol.scaleX = 1f
+                                containerCol.scaleY = 1f
+                                containerCol.alpha = 1f
+                                checkHideWhenEmpty()
+                            }
+                        }
+                        .start()
+                }
+            } else {
+                headerRow.alpha = 1f
+                headerRow.translationY = 0f
+                headerRow.scaleX = 1f
+                headerRow.scaleY = 1f
+                clearBtn.rotation = 0f
             }
             return
         }
@@ -904,6 +944,17 @@ class NotificationCenterView(
 
         if (visibility != VISIBLE || prevCount == 0 || hidingOnEmpty) {
             hidingOnEmpty = false
+            clearCascadeActive = false
+            clearCascadeGen++
+            headerRow.animate().cancel()
+            headerRow.alpha = 1f
+            headerRow.translationY = 0f
+            headerRow.scaleX = 1f
+            headerRow.scaleY = 1f
+            clearBtn.animate().cancel()
+            clearBtn.rotation = 0f
+            clearBtn.scaleX = 1f
+            clearBtn.scaleY = 1f
             visibility = VISIBLE
             containerCol.animate().cancel()
             containerCol.alpha = 1f
@@ -1431,40 +1482,127 @@ class NotificationCenterView(
     }
 
     private fun animateClearCascade() {
-        if (hidingOnEmpty) return
+        if (hidingOnEmpty || clearCascadeActive) return
         val count = listCol.childCount
         if (count == 0) {
             onClearAll()
             return
         }
-        moreHintPill.animate().alpha(0f).setDuration(140L).withEndAction {
-            moreHintPill.visibility = GONE
-            moreHintPill.alpha = 1f
-        }.start()
+        clearCascadeActive = true
+        val myGen = ++clearCascadeGen
+        deckPromoteAnim?.cancel()
+        deckCycleAnim?.cancel()
+        deckSettleAnim?.cancel()
+        swipePeekAnim?.cancel()
+        deckCycleProg = 0f
+        deckCycleCommitting = false
+        deckSettleBounce = 0f
+
+        moreHintPill.animate().cancel()
+        moreHintPill.animate()
+            .alpha(0f)
+            .translationY(moreHintPill.translationY - 12f * dens)
+            .scaleX(0.86f)
+            .scaleY(0.86f)
+            .setDuration(170L)
+            .setInterpolator(iosEase)
+            .withEndAction {
+                moreHintPill.visibility = GONE
+                moreHintPill.alpha = 1f
+                moreHintPill.scaleX = 1f
+                moreHintPill.scaleY = 1f
+            }
+            .start()
+
+        clearBtn.animate().cancel()
+        clearBtn.animate()
+            .rotation(90f)
+            .scaleX(0.86f)
+            .scaleY(0.86f)
+            .setDuration(240L)
+            .setInterpolator(iosEase)
+            .start()
+
         val rows = ArrayList<NotificationCardRow>(count)
         for (i in 0 until count) {
             (listCol.getChildAt(i) as? NotificationCardRow)?.let { rows.add(it) }
         }
-        rows.forEachIndexed { idx, row ->
+
+        val visH = max(1f, scrollView.height.toFloat())
+        val scrollY = scrollView.scrollY.toFloat()
+        var animIdx = 0
+        var maxDelayMs = 0L
+
+        rows.forEach { row ->
             row.isDismissing = true
             row.animate().cancel()
-            val dir = if (idx % 2 == 0) 1f else -1f
-            val w = max(280f, row.width.toFloat())
-            row.animate()
-                .translationX(dir * w * 0.42f)
-                .rotationY(dir * 14f)
-                .alpha(0f)
-                .scaleX(0.84f)
-                .scaleY(0.84f)
-                .setStartDelay((idx * 28L).coerceAtMost(112L))
-                .setDuration(220L)
-                .setInterpolator(iosEase)
-                .setUpdateListener { row.invalidate() }
-                .start()
+            val cardTop = row.top - scrollY
+            val cardBot = row.bottom - scrollY
+            val onScreen = cardBot >= -40f * dens && cardTop <= visH + 60f * dens
+            if (!onScreen && animIdx >= 4) {
+                row.alpha = 0f
+                return@forEach
+            }
+
+            val delayMs = (animIdx * 42L).coerceAtMost(168L)
+            if (delayMs > maxDelayMs) maxDelayMs = delayMs
+
+            val startTy = row.translationY
+            val startTx = row.translationX
+            val startSc = row.scaleX
+            val startRx = row.rotationX
+            val startAlpha = row.alpha
+            val startZ = row.translationZ
+            val liftDp = (26f + animIdx * 5f).coerceAtMost(50f) * dens
+            val pullX = 14f * dens
+            val targetTiltRx = 26f
+            val targetTurnRy = 6.5f
+
+            ValueAnimator.ofFloat(0f, 1f).apply {
+                startDelay = delayMs
+                duration = 285L
+                interpolator = iosEase
+                addUpdateListener { a ->
+                    if (myGen != clearCascadeGen) return@addUpdateListener
+                    val t = (a.animatedValue as Float).coerceIn(0f, 1f)
+                    val ease = t * t * (3f - 2f * t)
+                    val fadeT = (t / 0.88f).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
+
+                    row.cameraDistance = 5200f * dens
+                    row.pivotX = row.width * 0.68f
+                    row.pivotY = row.height * 0.20f
+                    row.translationY = startTy - liftDp * ease
+                    row.translationX = startTx + pullX * ease
+                    val sc = startSc * (1f - 0.34f * ease)
+                    row.scaleX = sc
+                    row.scaleY = sc
+                    row.rotationX = startRx + targetTiltRx * ease
+                    row.rotationY = targetTurnRy * ease
+                    row.translationZ = startZ * (1f - 0.85f * ease)
+                    row.alpha = (startAlpha * (1f - fadeT)).coerceIn(0f, 1f)
+                    row.invalidate()
+                }
+                start()
+            }
+            animIdx++
         }
+
+        headerRow.animate().cancel()
+        headerRow.animate()
+            .alpha(0f)
+            .translationY(-10f * dens)
+            .scaleX(0.95f)
+            .scaleY(0.95f)
+            .setStartDelay((maxDelayMs + 70L).coerceAtMost(210L))
+            .setDuration(190L)
+            .setInterpolator(iosEase)
+            .start()
+
         postDelayed({
-            onClearAll()
-        }, (min(rows.size, 3) * 28L + 150L))
+            if (myGen == clearCascadeGen) {
+                onClearAll()
+            }
+        }, maxDelayMs + 275L)
     }
 
     private class RubberScrollView(context: Context) : ScrollView(context) {
@@ -1968,20 +2106,46 @@ class NotificationCenterView(
 
         init {
             setWillNotDraw(false)
+            val cSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+            var cPtrId = MotionEvent.INVALID_POINTER_ID
+            var cDownX = 0f
+            var cDownY = 0f
+            fun cRawX(ev: MotionEvent, idx: Int): Float = ev.getX(idx) + (ev.rawX - ev.x)
+            fun cRawY(ev: MotionEvent, idx: Int): Float = ev.getY(idx) + (ev.rawY - ev.y)
             setOnTouchListener { _, ev ->
                 when (ev.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
+                        cPtrId = ev.getPointerId(0)
+                        cDownX = ev.rawX
+                        cDownY = ev.rawY
                         animate().cancel()
                         animate().scaleX(0.84f).scaleY(0.84f).setDuration(90L).start()
                         true
                     }
+                    MotionEvent.ACTION_POINTER_DOWN -> true
+                    MotionEvent.ACTION_POINTER_UP -> {
+                        if (ev.getPointerId(ev.actionIndex) == cPtrId) {
+                            cPtrId = MotionEvent.INVALID_POINTER_ID
+                            animate().cancel()
+                            animate().scaleX(1f).scaleY(1f).setDuration(240L).start()
+                        }
+                        true
+                    }
                     MotionEvent.ACTION_UP -> {
+                        val idx = ev.findPointerIndex(cPtrId)
+                        val isTap = idx >= 0 && abs(cRawX(ev, idx) - cDownX) <= cSlop && abs(cRawY(ev, idx) - cDownY) <= cSlop
+                        cPtrId = MotionEvent.INVALID_POINTER_ID
                         animate().cancel()
-                        animate().scaleX(1f).scaleY(1f).setDuration(360L).setInterpolator(OvershootInterpolator(2.0f)).start()
-                        onClick()
+                        if (isTap) {
+                            animate().scaleX(1f).scaleY(1f).setDuration(320L).setInterpolator(OvershootInterpolator(2.0f)).start()
+                            onClick()
+                        } else {
+                            animate().scaleX(1f).scaleY(1f).setDuration(240L).start()
+                        }
                         true
                     }
                     MotionEvent.ACTION_CANCEL -> {
+                        cPtrId = MotionEvent.INVALID_POINTER_ID
                         animate().cancel()
                         animate().scaleX(1f).scaleY(1f).setDuration(240L).start()
                         true
@@ -2043,6 +2207,7 @@ class NotificationCenterView(
         private var glassBg = Color.argb(26, 18, 22, 30)
 
         private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+        private var cardPtrId = MotionEvent.INVALID_POINTER_ID
         private var downRawX = 0f
         private var downRawY = 0f
         private var basePressSc = 1f
@@ -2052,6 +2217,8 @@ class NotificationCenterView(
         var isDragging = false
             private set
         var isDismissing = false
+        private fun cRawX(ev: MotionEvent, idx: Int): Float = ev.getX(idx) + (ev.rawX - ev.x)
+        private fun cRawY(ev: MotionEvent, idx: Int): Float = ev.getY(idx) + (ev.rawY - ev.y)
         var enterFrac = 1f
             private set
 
@@ -2205,6 +2372,7 @@ class NotificationCenterView(
                 MotionEvent.ACTION_DOWN -> {
                     enterAnim?.cancel()
                     enterFrac = 1f
+                    cardPtrId = ev.getPointerId(0)
                     downRawX = ev.rawX
                     downRawY = ev.rawY
                     isDragging = false
@@ -2218,10 +2386,15 @@ class NotificationCenterView(
                     animate().scaleX(basePressSc * 0.978f).scaleY(basePressSc * 0.972f).setDuration(105L).start()
                     return true
                 }
+                MotionEvent.ACTION_POINTER_DOWN -> return true
                 MotionEvent.ACTION_MOVE -> {
+                    val idx = ev.findPointerIndex(cardPtrId)
+                    if (idx < 0) return true
                     vt?.addMovement(ev)
-                    val dx = ev.rawX - downRawX
-                    val dy = ev.rawY - downRawY
+                    val curRawX = cRawX(ev, idx)
+                    val curRawY = cRawY(ev, idx)
+                    val dx = curRawX - downRawX
+                    val dy = curRawY - downRawY
                     if (!isDragging && abs(dx) > touchSlop && abs(dx) > abs(dy) * 1.1f) {
                         isDragging = true
                         parent?.requestDisallowInterceptTouchEvent(true)
@@ -2249,7 +2422,36 @@ class NotificationCenterView(
                     }
                     return true
                 }
+                MotionEvent.ACTION_POINTER_UP -> {
+                    if (ev.getPointerId(ev.actionIndex) == cardPtrId) {
+                        cardPtrId = MotionEvent.INVALID_POINTER_ID
+                        vt?.computeCurrentVelocity(1000)
+                        val vx = vt?.xVelocity ?: 0f
+                        vt?.recycle()
+                        vt = null
+                        if (isDragging) {
+                            isDragging = false
+                            val w = max(1f, width.toFloat())
+                            val shouldDismiss = cur.isDismissible && (abs(translationX) >= w * 0.28f || abs(vx) >= 800f * dens)
+                            if (shouldDismiss) {
+                                dismissWithSpring3D(cur, dir = if (translationX >= 0f || vx > 0f) 1f else -1f, vx = vx)
+                            } else {
+                                onSwipeCancel(this)
+                                snapBackRubbery()
+                            }
+                        } else {
+                            animate().cancel()
+                            onSwipeCancel(this)
+                            onPressCancelled()
+                        }
+                    }
+                    return true
+                }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    val idx = ev.findPointerIndex(cardPtrId).let { if (it >= 0) it else 0 }
+                    val curRawX = cRawX(ev, idx)
+                    val curRawY = cRawY(ev, idx)
+                    cardPtrId = MotionEvent.INVALID_POINTER_ID
                     vt?.addMovement(ev)
                     vt?.computeCurrentVelocity(1000)
                     val vx = vt?.xVelocity ?: 0f
@@ -2272,8 +2474,8 @@ class NotificationCenterView(
                         animate().cancel()
                         onSwipeCancel(this)
                         if (ev.actionMasked == MotionEvent.ACTION_UP &&
-                            abs(ev.rawX - downRawX) < touchSlop &&
-                            abs(ev.rawY - downRawY) < touchSlop
+                            abs(curRawX - downRawX) < touchSlop &&
+                            abs(curRawY - downRawY) < touchSlop
                         ) {
                             onHaptic("pop")
                             pivotX = width * 0.5f

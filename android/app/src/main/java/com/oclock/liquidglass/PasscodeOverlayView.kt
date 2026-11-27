@@ -457,7 +457,7 @@ class PasscodeOverlayView(
         val headEase = headT * headT * (3f - 2f * headT)
         val headTy = (1f - headEase) * 44f * dens
         val headSc = 0.90f + 0.10f * headEase
-        val headA = ((clamped - 0.04f) / 0.55f).coerceIn(0f, 1f)
+        val headA = ((clamped - 0.14f) / 0.48f).coerceIn(0f, 1f)
 
         for (v in listOf(lenSwitchRow, titleLabel, dotsView, hintLabel)) {
             v.translationY = headTy
@@ -466,21 +466,21 @@ class PasscodeOverlayView(
             v.alpha = headA
         }
 
-        // Staggered rubbery wave across each keypad row (1-2-3 -> 4-5-6 -> 7-8-9 -> 0)
+        // Staggered rubbery wave across each keypad row (1-2-3 -> 4-5-6 -> 7-8-9 -> 0), entering after lock chrome fades
         for ((idx, row) in keypadRows.withIndex()) {
-            val start = 0.04f + idx * 0.055f
-            val span = 0.78f - idx * 0.03f
+            val start = 0.12f + idx * 0.052f
+            val span = 0.72f - idx * 0.03f
             val t = ((clamped - start) / span).coerceIn(0f, 1f)
             val curve = if (elastic) bounceEase.getInterpolation(t) else (t * t * (3f - 2f * t))
             row.translationY = (1f - curve) * (64f + idx * 8f) * dens
             val sc = 0.80f + 0.20f * curve
             row.scaleX = sc
             row.scaleY = sc
-            row.alpha = (t / 0.65f).coerceIn(0f, 1f)
+            row.alpha = (t / 0.58f).coerceIn(0f, 1f)
         }
 
         // Bottom Cancel / Delete bar
-        val botT = ((clamped - 0.18f) / 0.75f).coerceIn(0f, 1f)
+        val botT = ((clamped - 0.20f) / 0.72f).coerceIn(0f, 1f)
         val botEase = botT * botT * (3f - 2f * botT)
         bottomBar.translationY = (1f - botEase) * 48f * dens
         bottomBar.alpha = botEase
@@ -491,14 +491,7 @@ class PasscodeOverlayView(
         contentCol.scaleY = 1f
     }
 
-    fun setInteractiveProgress(p: Float) {
-        val clamped = p.coerceIn(0f, 1f)
-        if (clamped > 0.001f && (isClosing || anim?.isRunning == true)) {
-            animGen++
-            anim?.cancel()
-            anim = null
-            isClosing = false
-        }
+    private fun applyProgressFrame(clamped: Float) {
         if (clamped > 0.001f && visibility != VISIBLE) {
             prepareUnlockSession()
             visibility = VISIBLE
@@ -512,6 +505,17 @@ class PasscodeOverlayView(
         if (clamped <= 0.001f && anim?.isRunning != true) {
             resetToClosedState(notify = false)
         }
+    }
+
+    fun setInteractiveProgress(p: Float) {
+        val clamped = p.coerceIn(0f, 1f)
+        if (clamped > 0.001f && (isClosing || anim?.isRunning == true)) {
+            animGen++
+            anim?.cancel()
+            anim = null
+            isClosing = false
+        }
+        applyProgressFrame(clamped)
     }
 
     fun settleInteractive(vyPxPerSec: Float, draggedUpPx: Float = 0f) {
@@ -541,7 +545,7 @@ class PasscodeOverlayView(
         val dist = abs(1f - start)
         if (dist < 0.005f) {
             elasticCascade = false
-            setInteractiveProgress(1f)
+            applyProgressFrame(1f)
             return
         }
         elasticCascade = true
@@ -553,7 +557,7 @@ class PasscodeOverlayView(
             interpolator = iosEase
             addUpdateListener { a ->
                 if (myGen == animGen && !cancelled) {
-                    setInteractiveProgress((a.animatedValue as Float).coerceIn(0f, 1f))
+                    applyProgressFrame((a.animatedValue as Float).coerceIn(0f, 1f))
                 }
             }
             addListener(object : AnimatorListenerAdapter() {
@@ -762,7 +766,7 @@ class PasscodeOverlayView(
     }
 
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
-        if (isClosing || progress < 0.55f) return false
+        if (isClosing || progress < 0.35f) return false
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 activePointerId = ev.getPointerId(0)
@@ -1140,27 +1144,46 @@ class PasscodeOverlayView(
 
         init {
             setWillNotDraw(false)
+            var btnPtrId = MotionEvent.INVALID_POINTER_ID
+            fun bRawX(ev: MotionEvent, idx: Int): Float = ev.getX(idx) + (ev.rawX - ev.x)
+            fun bRawY(ev: MotionEvent, idx: Int): Float = ev.getY(idx) + (ev.rawY - ev.y)
             setOnTouchListener { _, ev ->
                 when (ev.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
+                        btnPtrId = ev.getPointerId(0)
                         downX = ev.rawX
                         downY = ev.rawY
                         driveSpring(targetSc = 0.84f, targetGl = 1.0f)
                         true
                     }
+                    MotionEvent.ACTION_POINTER_DOWN -> true
                     MotionEvent.ACTION_MOVE -> {
-                        if (abs(ev.rawX - downX) > slop || abs(ev.rawY - downY) > slop) {
+                        val idx = ev.findPointerIndex(btnPtrId)
+                        if (idx >= 0 && (abs(bRawX(ev, idx) - downX) > slop || abs(bRawY(ev, idx) - downY) > slop)) {
                             driveSpring(targetSc = 1.0f, targetGl = 0.0f)
                         }
                         true
                     }
+                    MotionEvent.ACTION_POINTER_UP -> {
+                        val upIdx = ev.actionIndex
+                        if (ev.getPointerId(upIdx) == btnPtrId) {
+                            val isTap = abs(bRawX(ev, upIdx) - downX) <= slop && abs(bRawY(ev, upIdx) - downY) <= slop
+                            btnPtrId = MotionEvent.INVALID_POINTER_ID
+                            driveSpring(targetSc = 1.0f, targetGl = 0.0f, kickVel = if (isTap) 1.65f else 0f)
+                            if (isTap) onPress()
+                        }
+                        true
+                    }
                     MotionEvent.ACTION_UP -> {
-                        val isTap = abs(ev.rawX - downX) <= slop && abs(ev.rawY - downY) <= slop
+                        val idx = ev.findPointerIndex(btnPtrId)
+                        val isTap = idx >= 0 && abs(bRawX(ev, idx) - downX) <= slop && abs(bRawY(ev, idx) - downY) <= slop
+                        btnPtrId = MotionEvent.INVALID_POINTER_ID
                         driveSpring(targetSc = 1.0f, targetGl = 0.0f, kickVel = if (isTap) 1.65f else 0f)
                         if (isTap) onPress()
                         true
                     }
                     MotionEvent.ACTION_CANCEL -> {
+                        btnPtrId = MotionEvent.INVALID_POINTER_ID
                         driveSpring(targetSc = 1.0f, targetGl = 0.0f)
                         true
                     }
