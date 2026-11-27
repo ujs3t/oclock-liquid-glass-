@@ -12,18 +12,19 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
+import android.view.Choreographer
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewConfiguration
-import android.view.animation.OvershootInterpolator
 import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
@@ -47,6 +48,7 @@ class PasscodeOverlayView(
 
     private val dens = resources.displayMetrics.density
     private val iosEase = PathInterpolator(0.22f, 1f, 0.36f, 1f)
+    private val bounceEase = PathInterpolator(0.22f, 1.12f, 0.36f, 1f)
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
 
     private val wallMatrix = Matrix()
@@ -60,6 +62,7 @@ class PasscodeOverlayView(
     private val dotsView: PasscodeDotsView
     private val hintLabel: TextView
     private val keypadGrid: LinearLayout
+    private val keypadRows = ArrayList<LinearLayout>(4)
     private val keypadButtons = ArrayList<GlassKeypadButton>(10)
     private val cancelBtn: TextView
     private val deleteBtn: TextView
@@ -76,6 +79,7 @@ class PasscodeOverlayView(
         get() = progress > 0.002f || anim?.isRunning == true
 
     private var anim: ValueAnimator? = null
+    private var elasticCascade = false
     private var safeTopPx = 0
     private var safeBottomPx = 0
     private var uiInk = Color.WHITE
@@ -131,14 +135,14 @@ class PasscodeOverlayView(
         }
 
         dotsView = PasscodeDotsView(context).apply {
-            layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, (24f * dens).roundToInt()).apply {
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, (26f * dens).roundToInt()).apply {
                 topMargin = (18f * dens).roundToInt()
             }
         }
 
         hintLabel = TextView(context).apply {
             text = "الرمز الافتراضي: 000000"
-            setTextColor(Color.argb(165, 255, 255, 255))
+            setTextColor(Color.argb(175, 255, 255, 255))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
             gravity = Gravity.CENTER
             setShadowLayer(4f * dens, 0f, 1f * dens, Color.argb(55, 0, 0, 0))
@@ -201,6 +205,7 @@ class PasscodeOverlayView(
                     rowLl.addView(keyBtn)
                 }
             }
+            keypadRows.add(rowLl)
             keypadGrid.addView(rowLl)
         }
 
@@ -308,7 +313,6 @@ class PasscodeOverlayView(
 
     fun applyTheme(ink: Int) {
         uiInk = ink
-        // Passcode always sits above softly darkened blurred wallpaper so crisp white typography pops best
         invalidateAllKeys()
     }
 
@@ -386,6 +390,49 @@ class PasscodeOverlayView(
         openAnimated()
     }
 
+    private fun applyCascadeTransforms(rawP: Float, elastic: Boolean) {
+        val clamped = rawP.coerceIn(0f, 1f)
+        val ease = clamped * clamped * (3f - 2f * clamped)
+
+        // Header & dots glide in slightly ahead of keypad
+        val headT = (clamped / 0.72f).coerceIn(0f, 1f)
+        val headEase = headT * headT * (3f - 2f * headT)
+        val headTy = (1f - headEase) * 44f * dens
+        val headSc = 0.90f + 0.10f * headEase
+        val headA = ((clamped - 0.04f) / 0.55f).coerceIn(0f, 1f)
+
+        for (v in listOf(lenSwitchRow, titleLabel, dotsView, hintLabel)) {
+            v.translationY = headTy
+            v.scaleX = headSc
+            v.scaleY = headSc
+            v.alpha = headA
+        }
+
+        // Staggered rubbery wave across each keypad row (1-2-3 -> 4-5-6 -> 7-8-9 -> 0)
+        for ((idx, row) in keypadRows.withIndex()) {
+            val start = 0.04f + idx * 0.055f
+            val span = 0.78f - idx * 0.03f
+            val t = ((clamped - start) / span).coerceIn(0f, 1f)
+            val curve = if (elastic) bounceEase.getInterpolation(t) else (t * t * (3f - 2f * t))
+            row.translationY = (1f - curve) * (64f + idx * 8f) * dens
+            val sc = 0.80f + 0.20f * curve
+            row.scaleX = sc
+            row.scaleY = sc
+            row.alpha = (t / 0.65f).coerceIn(0f, 1f)
+        }
+
+        // Bottom Cancel / Delete bar
+        val botT = ((clamped - 0.18f) / 0.75f).coerceIn(0f, 1f)
+        val botEase = botT * botT * (3f - 2f * botT)
+        bottomBar.translationY = (1f - botEase) * 48f * dens
+        bottomBar.alpha = botEase
+
+        contentCol.translationY = (1f - ease) * 26f * dens
+        contentCol.alpha = 1f
+        contentCol.scaleX = 1f
+        contentCol.scaleY = 1f
+    }
+
     fun setInteractiveProgress(p: Float) {
         val clamped = p.coerceIn(0f, 1f)
         if (clamped > 0.001f && visibility != VISIBLE) {
@@ -394,16 +441,12 @@ class PasscodeOverlayView(
             relayoutResponsive()
         }
         progress = clamped
-        val ease = clamped * clamped * (3f - 2f * clamped)
-        contentCol.translationY = (1f - ease) * 92f * dens
-        val sc = 0.94f + 0.06f * ease
-        contentCol.scaleX = sc
-        contentCol.scaleY = sc
-        contentCol.alpha = ((clamped - 0.06f) / 0.72f).coerceIn(0f, 1f)
+        applyCascadeTransforms(clamped, elastic = elasticCascade)
         onProgressChanged(clamped)
         invalidate()
         invalidateAllKeys()
         if (clamped <= 0.001f && anim?.isRunning != true) {
+            elasticCascade = false
             visibility = GONE
         }
     }
@@ -427,23 +470,33 @@ class PasscodeOverlayView(
         val start = progress
         val dist = abs(1f - start)
         if (dist < 0.005f) {
+            elasticCascade = false
             setInteractiveProgress(1f)
             return
         }
-        val speedBoost = (abs(vyPxPerSec) / (3000f * dens)).coerceIn(0f, 0.35f)
-        val dur = ((260f + 160f * dist) * (1f - speedBoost)).roundToInt().toLong().coerceIn(210L, 420L)
+        elasticCascade = true
+        val speedBoost = (abs(vyPxPerSec) / (3000f * dens)).coerceIn(0f, 0.32f)
+        val dur = ((320f + 190f * dist) * (1f - speedBoost)).roundToInt().toLong().coerceIn(260L, 480L)
         anim = ValueAnimator.ofFloat(start, 1f).apply {
             duration = dur
             interpolator = iosEase
             addUpdateListener { a ->
                 setInteractiveProgress((a.animatedValue as Float).coerceIn(0f, 1f))
             }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    elasticCascade = false
+                    applyCascadeTransforms(progress, elastic = false)
+                    invalidateAllKeys()
+                }
+            })
             start()
         }
     }
 
     fun closeAnimated(vyPxPerSec: Float = 0f, afterClose: (() -> Unit)? = null) {
         anim?.cancel()
+        elasticCascade = false
         val start = progress
         if (start <= 0.005f) {
             mode = Mode.UNLOCK
@@ -454,7 +507,7 @@ class PasscodeOverlayView(
             return
         }
         val speedBoost = (abs(vyPxPerSec) / (3000f * dens)).coerceIn(0f, 0.35f)
-        val dur = ((240f + 140f * start) * (1f - speedBoost)).roundToInt().toLong().coerceIn(190L, 380L)
+        val dur = ((250f + 150f * start) * (1f - speedBoost)).roundToInt().toLong().coerceIn(190L, 380L)
         anim = ValueAnimator.ofFloat(start, 0f).apply {
             duration = dur
             interpolator = iosEase
@@ -476,7 +529,7 @@ class PasscodeOverlayView(
     }
 
     private fun onDigitTapped(digit: String) {
-        if (isVerifying || progress < 0.85f || entered.length >= targetLen) return
+        if (isVerifying || progress < 0.55f || entered.length >= targetLen) return
         onHaptic("tick")
         entered.append(digit)
         dotsView.configure(targetLen, entered.length, animateLast = true)
@@ -485,7 +538,7 @@ class PasscodeOverlayView(
         if (entered.length == targetLen) {
             isVerifying = true
             val code = entered.toString()
-            postDelayed({ handleCompleteEntry(code) }, 115L)
+            postDelayed({ handleCompleteEntry(code) }, 135L)
         }
     }
 
@@ -497,13 +550,13 @@ class PasscodeOverlayView(
                     anim?.cancel()
                     val start = progress
                     anim = ValueAnimator.ofFloat(start, 0f).apply {
-                        duration = 280L
+                        duration = 320L
                         interpolator = iosEase
                         addUpdateListener { a ->
                             val p = (a.animatedValue as Float).coerceIn(0f, 1f)
                             progress = p
                             contentCol.alpha = p
-                            val sc = 1f + (1f - p) * 0.08f
+                            val sc = 1f + (1f - p) * 0.09f
                             contentCol.scaleX = sc
                             contentCol.scaleY = sc
                             invalidate()
@@ -515,7 +568,8 @@ class PasscodeOverlayView(
                                 isVerifying = false
                                 contentCol.scaleX = 1f
                                 contentCol.scaleY = 1f
-                                contentCol.translationY = 0f
+                                contentCol.alpha = 1f
+                                applyCascadeTransforms(0f, elastic = false)
                                 visibility = GONE
                                 onUnlocked()
                             }
@@ -536,9 +590,9 @@ class PasscodeOverlayView(
                 dotsView.configure(targetLen, 0, animateLast = false)
                 updateDeleteVisibility(immediate = true)
                 titleLabel.animate().cancel()
-                titleLabel.translationX = 22f * dens
+                titleLabel.translationX = 24f * dens
                 titleLabel.alpha = 0.25f
-                titleLabel.animate().translationX(0f).alpha(1f).setDuration(260L).setInterpolator(iosEase).start()
+                titleLabel.animate().translationX(0f).alpha(1f).setDuration(280L).setInterpolator(iosEase).start()
             }
             Mode.SETUP_CONFIRM -> {
                 if (code == pendingNewPin) {
@@ -594,7 +648,7 @@ class PasscodeOverlayView(
     }
 
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
-        if (progress < 0.85f) return false
+        if (progress < 0.80f) return false
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 anim?.cancel()
@@ -676,7 +730,8 @@ class PasscodeOverlayView(
     override fun onDraw(canvas: Canvas) {
         if (progress <= 0.002f || width <= 0 || height <= 0) return
         val ease = progress * progress * (3f - 2f * progress)
-        val blurBmp = backdrop.blurredBitmap ?: backdrop.wallBitmap
+        // Subtle light-bokeh frosted glaze keeps wallpaper vibrant so transparent Liquid Glass keys pop just like Flashlight/Camera!
+        val blurBmp = backdrop.blurredBitmap
         if (blurBmp != null) {
             val bw = blurBmp.width.toFloat().coerceAtLeast(1f)
             val bh = blurBmp.height.toFloat().coerceAtLeast(1f)
@@ -684,12 +739,11 @@ class PasscodeOverlayView(
             wallMatrix.reset()
             wallMatrix.setScale(sc, sc)
             wallMatrix.postTranslate((width - bw * sc) * 0.5f, (height - bh * sc) * 0.5f)
-            bgPaint.alpha = (ease * 255f).roundToInt().coerceIn(0, 255)
+            bgPaint.alpha = (ease * 112f).roundToInt().coerceIn(0, 255)
             canvas.drawBitmap(blurBmp, wallMatrix, bgPaint)
             bgPaint.alpha = 255
         }
-        // Soft adaptive darkened veil so glass circles & typography read effortlessly on bright wallpapers
-        val scrimA = ((if (backdrop.blurredBitmap != null) 58f else 118f) * ease).roundToInt().coerceIn(0, 220)
+        val scrimA = (38f * ease).roundToInt().coerceIn(0, 140)
         canvas.drawColor(Color.argb(scrimA, 8, 10, 16))
     }
 
@@ -722,11 +776,12 @@ class PasscodeOverlayView(
                 val idx = filledCount - 1
                 popAnim?.cancel()
                 popAnim = ValueAnimator.ofFloat(0f, 1f).apply {
-                    duration = 260L
-                    interpolator = OvershootInterpolator(2.4f)
+                    duration = 440L
                     addUpdateListener { a ->
                         val t = a.animatedValue as Float
-                        dotScales[idx] = 0.72f + 0.28f * t
+                        // Rubbery multi-bounce jelly pop (0.55 -> 1.32 -> 0.94 -> 1.0)
+                        val spring = 1f - exp(-6.5f * t) * cos(12.5f * t) * 0.48f
+                        dotScales[idx] = spring.coerceIn(0.45f, 1.40f)
                         invalidate()
                     }
                     addListener(object : AnimatorListenerAdapter() {
@@ -746,7 +801,7 @@ class PasscodeOverlayView(
         fun playShake(onDone: () -> Unit) {
             shakeAnim?.cancel()
             shakeAnim = ValueAnimator.ofFloat(0f, 1f).apply {
-                duration = 460L
+                duration = 480L
                 addUpdateListener { a ->
                     val t = a.animatedValue as Float
                     val env = exp(-4.8f * t)
@@ -765,8 +820,8 @@ class PasscodeOverlayView(
         }
 
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-            val totalW = ((count - 1) * (dotRadius * 2f + dotGap) + dotRadius * 2f + 42f * dens).roundToInt()
-            val totalH = (24f * dens).roundToInt()
+            val totalW = ((count - 1) * (dotRadius * 2f + dotGap) + dotRadius * 2f + 46f * dens).roundToInt()
+            val totalH = (26f * dens).roundToInt()
             setMeasuredDimension(totalW, totalH)
         }
 
@@ -800,16 +855,17 @@ class PasscodeOverlayView(
 
         private val dens = resources.displayMetrics.density
         private var btnDp = 76f
+        private var baseThickDp = 26f
         private var glassHelper = LiquidGlassCardHelper(
             backdrop = backdrop,
             perf = perf,
             radiusDp = 38f,
-            bezelDp = 26f,
-            thickDp = 22f,
-            ior = 1.50f,
-            shadowInt = 0.50f,
-            innerShadow = 0.44f,
-            useBlurredBackdrop = true
+            bezelDp = 30f,
+            thickDp = 26f,
+            ior = 1.54f,
+            shadowInt = 0.0f,
+            innerShadow = 0.88f,
+            useBlurredBackdrop = false
         )
         private val helperBackdrop = backdrop
         private val helperPerf = perf
@@ -831,11 +887,78 @@ class PasscodeOverlayView(
             setShadowLayer(2f * dens, 0f, 0.6f * dens, Color.argb(42, 0, 0, 0))
         }
 
-        private var pressFrac = 0f
-        private var pressAnim: ValueAnimator? = null
+        // Real 60/120fps Choreographer damped spring physics for rubbery liquid compression & bounce!
+        private var scaleCur = 1f
+        private var scaleVel = 0f
+        private var scaleTarget = 1f
+        private var glowCur = 0f
+        private var glowVel = 0f
+        private var glowTarget = 0f
+        private var springRunning = false
+        private var lastFrameNs = 0L
+
         private var downX = 0f
         private var downY = 0f
         private val slop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+
+        private val springFrame = object : Choreographer.FrameCallback {
+            override fun doFrame(frameTimeNanos: Long) {
+                if (!springRunning) return
+                val dt = if (lastFrameNs == 0L) 0.016f
+                else ((frameTimeNanos - lastFrameNs) / 1_000_000_000f).coerceIn(0.004f, 0.032f)
+                lastFrameNs = frameTimeNanos
+
+                val pressing = scaleTarget < 0.95f
+                val omegaS = if (pressing) 30f else 19.5f
+                val zetaS = if (pressing) 0.68f else 0.42f
+                val fS = (scaleTarget - scaleCur) * (omegaS * omegaS) - scaleVel * (2f * zetaS * omegaS)
+                scaleVel += fS * dt
+                scaleCur = (scaleCur + scaleVel * dt).coerceIn(0.74f, 1.16f)
+
+                val omegaG = if (glowTarget > 0.5f) 32f else 13.5f
+                val zetaG = if (glowTarget > 0.5f) 0.82f else 0.66f
+                val fG = (glowTarget - glowCur) * (omegaG * omegaG) - glowVel * (2f * zetaG * omegaG)
+                glowVel += fG * dt
+                glowCur = (glowCur + glowVel * dt).coerceIn(-0.08f, 1.35f)
+
+                scaleX = scaleCur
+                scaleY = scaleCur
+                invalidate()
+
+                val settled = abs(scaleTarget - scaleCur) < 0.0015f && abs(scaleVel) < 0.012f &&
+                    abs(glowTarget - glowCur) < 0.003f && abs(glowVel) < 0.02f
+                if (settled) {
+                    scaleCur = scaleTarget
+                    glowCur = glowTarget.coerceIn(0f, 1f)
+                    scaleVel = 0f
+                    glowVel = 0f
+                    scaleX = scaleCur
+                    scaleY = scaleCur
+                    springRunning = false
+                    lastFrameNs = 0L
+                    invalidate()
+                } else {
+                    Choreographer.getInstance().postFrameCallback(this)
+                }
+            }
+        }
+
+        private fun driveSpring(targetSc: Float, targetGl: Float, kickVel: Float = 0f) {
+            scaleTarget = targetSc
+            glowTarget = targetGl
+            if (kickVel != 0f) scaleVel = max(scaleVel, kickVel)
+            if (!springRunning) {
+                springRunning = true
+                lastFrameNs = 0L
+                Choreographer.getInstance().postFrameCallback(springFrame)
+            }
+        }
+
+        override fun onDetachedFromWindow() {
+            springRunning = false
+            Choreographer.getInstance().removeFrameCallback(springFrame)
+            super.onDetachedFromWindow()
+        }
 
         init {
             setWillNotDraw(false)
@@ -844,23 +967,23 @@ class PasscodeOverlayView(
                     MotionEvent.ACTION_DOWN -> {
                         downX = ev.rawX
                         downY = ev.rawY
-                        animatePress(1f, 75L)
+                        driveSpring(targetSc = 0.84f, targetGl = 1.0f)
                         true
                     }
                     MotionEvent.ACTION_MOVE -> {
                         if (abs(ev.rawX - downX) > slop || abs(ev.rawY - downY) > slop) {
-                            animatePress(0f, 220L)
+                            driveSpring(targetSc = 1.0f, targetGl = 0.0f)
                         }
                         true
                     }
                     MotionEvent.ACTION_UP -> {
                         val isTap = abs(ev.rawX - downX) <= slop && abs(ev.rawY - downY) <= slop
-                        animatePress(0f, 300L, bouncy = true)
+                        driveSpring(targetSc = 1.0f, targetGl = 0.0f, kickVel = if (isTap) 1.65f else 0f)
                         if (isTap) onPress()
                         true
                     }
                     MotionEvent.ACTION_CANCEL -> {
-                        animatePress(0f, 220L)
+                        driveSpring(targetSc = 1.0f, targetGl = 0.0f)
                         true
                     }
                     else -> false
@@ -872,37 +995,21 @@ class PasscodeOverlayView(
             if (abs(newDp - btnDp) < 0.5f) return
             btnDp = newDp
             val ratio = (btnDp / 76f).coerceIn(0.68f, 1.12f)
+            baseThickDp = 26f * ratio
             digitPaint.textSize = 33f * ratio * dens
             subPaint.textSize = 9.2f * ratio * dens
             glassHelper = LiquidGlassCardHelper(
                 backdrop = helperBackdrop,
                 perf = helperPerf,
                 radiusDp = btnDp * 0.5f,
-                bezelDp = 26f * ratio,
-                thickDp = 22f * ratio,
-                ior = 1.50f,
-                shadowInt = 0.50f,
-                innerShadow = 0.44f,
-                useBlurredBackdrop = true
+                bezelDp = 30f * ratio,
+                thickDp = baseThickDp,
+                ior = 1.54f,
+                shadowInt = 0.0f,
+                innerShadow = 0.88f,
+                useBlurredBackdrop = false
             )
             invalidate()
-        }
-
-        private fun animatePress(target: Float, dur: Long, bouncy: Boolean = false) {
-            pressAnim?.cancel()
-            val start = pressFrac
-            pressAnim = ValueAnimator.ofFloat(start, target).apply {
-                duration = dur
-                if (bouncy) interpolator = OvershootInterpolator(1.6f)
-                addUpdateListener { a ->
-                    pressFrac = (a.animatedValue as Float).coerceIn(0f, 1f)
-                    val sc = 1f - 0.055f * pressFrac
-                    scaleX = sc
-                    scaleY = sc
-                    invalidate()
-                }
-                start()
-            }
         }
 
         override fun onDraw(canvas: Canvas) {
@@ -920,17 +1027,19 @@ class PasscodeOverlayView(
                 p = p.parent as? View
             }
 
-            // Glass circle lens + press flare
-            val tintA = (32f + pressFrac * 82f).roundToInt().coerceIn(0, 200)
-            val glassTint = Color.argb(tintA, 245, 247, 252)
+            // Ultra-transparent pure Liquid Glass + white inner shadow ONLY (mirrors Flashlight/Camera crystal lens)
+            val glow = glowCur.coerceIn(0f, 1.25f)
+            val tintA = (8f + glow * 52f).roundToInt().coerceIn(0, 140)
+            val glassTint = Color.argb(tintA, 255, 255, 255)
             glassHelper.draw(
                 view = this,
                 canvas = canvas,
                 glassBgColor = glassTint,
                 originX = ox,
                 originY = oy,
-                shadowOverride = 0.50f + pressFrac * 0.28f,
-                innerOverride = 0.44f + pressFrac * 0.34f
+                shadowOverride = 0.0f,
+                innerOverride = 0.88f + glow * 0.42f,
+                thickOverride = baseThickDp * (1f + 0.24f * glow)
             )
 
             val cx = w * 0.5f
@@ -940,10 +1049,8 @@ class PasscodeOverlayView(
             val dHalfHeight = (dFm.ascent + dFm.descent) * 0.5f
 
             if (digit == "0") {
-                // Zero sits vertically centered cleanly inside its circle (matches reference photo)
                 canvas.drawText(digit, cx, cy - dHalfHeight, digitPaint)
             } else {
-                // 1..9 share identical upper digit baseline; 2..9 show tracked uppercase sublabel below
                 val digitCenterY = cy - 6.8f * ratio * dens
                 canvas.drawText(digit, cx, digitCenterY - dHalfHeight, digitPaint)
                 if (letters.isNotEmpty()) {

@@ -61,7 +61,8 @@ class LiquidGlassCardHelper(
         originX: Float,
         originY: Float,
         shadowOverride: Float = shadowInt,
-        innerOverride: Float = innerShadow
+        innerOverride: Float = innerShadow,
+        thickOverride: Float = thickDp
     ) {
         val w = view.width.toFloat()
         val h = view.height.toFloat()
@@ -69,7 +70,7 @@ class LiquidGlassCardHelper(
         val dens = view.resources.displayMetrics.density
         val radPx = radiusDp * dens
         val bzPx = bezelDp * dens
-        val thPx = thickDp * dens
+        val thPx = thickOverride * dens
 
         val shaderSrc = if (useBlurredBackdrop) {
             backdrop.blurredShader ?: backdrop.compositedShader ?: backdrop.wallShader
@@ -91,8 +92,9 @@ class LiquidGlassCardHelper(
             val wall = blurBmp ?: backdrop.compositedBitmap ?: backdrop.wallBitmap ?: return
             val bw = max(16, (w / 2f).roundToInt())
             val bh = max(16, (h / 2f).roundToInt())
+            val cpuShadow = max(shadowOverride, innerOverride * 0.36f)
             val srcId = if (blurBmp != null) 2 else if (backdrop.compositedBitmap != null) 1 else 0
-            val key = "$srcId|${originX.roundToInt()}|${originY.roundToInt()}|$bw|$bh|$glassBgColor|${(shadowOverride * 100).roundToInt()}|${(backdrop.wallScaleX * 100).roundToInt()}"
+            val key = "$srcId|${originX.roundToInt()}|${originY.roundToInt()}|$bw|$bh|$glassBgColor|${(cpuShadow * 100).roundToInt()}|${(thickOverride * 10).roundToInt()}|${(backdrop.wallScaleX * 100).roundToInt()}"
             var out = cpuBmp?.takeIf { it.width == bw && it.height == bh }
             if (out == null || cpuKey != key) {
                 if (out == null) {
@@ -116,7 +118,7 @@ class LiquidGlassCardHelper(
                 NativeGlass.renderCardCpuFallback(
                     wall, out, originX, originY, w, h, radPx,
                     wLeft, wTop, scX, scY,
-                    bzPx, thPx, ior, glassBgColor, shadowOverride
+                    bzPx, thPx, ior, glassBgColor, cpuShadow
                 )
                 cpuKey = key
             }

@@ -190,7 +190,10 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   const passcodeKt = readFileSync(ktDir + 'PasscodeOverlayView.kt','utf8');
   assert.ok(passcodeKt.includes('GlassKeypadButton'));
   assert.ok(passcodeKt.includes('PasscodeDotsView'));
-  assert.ok(passcodeKt.includes('useBlurredBackdrop = true'));
+  assert.ok(passcodeKt.includes('useBlurredBackdrop = false'));
+  assert.ok(passcodeKt.includes('shadowInt = 0.0f'));
+  assert.ok(passcodeKt.includes('Choreographer.FrameCallback'));
+  assert.ok(passcodeKt.includes('applyCascadeTransforms'));
   assert.ok(passcodeKt.includes('setInteractiveProgress'));
   assert.ok(passcodeKt.includes('openForSetup'));
 

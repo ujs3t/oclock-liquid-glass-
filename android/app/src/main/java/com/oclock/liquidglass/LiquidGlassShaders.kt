@@ -88,17 +88,16 @@ object LiquidGlassShaders {
             // glass-bg tint
             col = mix(col, uGlassBg.rgb, uGlassBg.a);
 
-            // Soft fading directional white inner shadow (no full border stroke)
+            // Silky fading white inner shadow ONLY (clean directional curve, zero outer stroke or cloudy fill)
             if (uInnerShadow > 0.001 && dd < 0.0) {
                 float depthPx = -dd;
-                float span = max(14.0, uBezel * 1.35);
+                float span = max(10.0, uBezel * 0.44);
                 if (depthPx < span) {
                     float td = clamp(depthPx / span, 0.0, 1.0);
-                    float fall = pow(1.0 - td, 2.45);
-                    float2 lDir = normalize(float2(-0.32, -0.95));
-                    float topLit = pow(clamp(dot(n, lDir) * 0.5 + 0.5, 0.0, 1.0), 2.35);
-                    float botLit = pow(clamp(dot(n, -lDir) * 0.5 + 0.5, 0.0, 1.0), 3.6) * 0.22;
-                    float innerGlow = clamp((topLit + botLit) * fall * uInnerShadow * 0.50, 0.0, 0.56);
+                    float fall = pow(1.0 - td, 2.75);
+                    float k = abs(dot(n, uLightDir));
+                    float lit = pow(clamp((k - 0.18) / 0.82, 0.0, 1.0), 1.75);
+                    float innerGlow = clamp(lit * fall * uInnerShadow * 0.78, 0.0, 0.84);
                     col = mix(col, float3(1.0), innerGlow);
                 }
             }
