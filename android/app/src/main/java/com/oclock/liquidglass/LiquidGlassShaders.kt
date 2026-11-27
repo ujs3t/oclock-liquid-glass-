@@ -203,12 +203,18 @@ object LiquidGlassShaders {
     class BackdropState {
         var wallBitmap: Bitmap? = null
         var compositedBitmap: Bitmap? = null
+        var blurredBitmap: Bitmap? = null
         var wallShader: BitmapShader? = null
         var compositedShader: BitmapShader? = null
+        var blurredShader: BitmapShader? = null
         var wallLeft = 0f
         var wallTop = 0f
         var wallScaleX = 1f
         var wallScaleY = 1f
+        var blurredLeft = 0f
+        var blurredTop = 0f
+        var blurredScaleX = 1f
+        var blurredScaleY = 1f
         private val matrix = Matrix()
 
         fun updateWallAndSubject(
@@ -277,6 +283,32 @@ object LiquidGlassShaders {
                 compositedBitmap = null
                 compositedShader = null
             }
+
+            blurredBitmap?.let { updateBlurredMatrix(it, screenW, screenH, pullZoom) }
+        }
+
+        fun updateBlurredBackdrop(blurBmp: Bitmap, screenW: Int, screenH: Int, pullZoom: Float) {
+            if (screenW <= 0 || screenH <= 0) return
+            if (blurredBitmap !== blurBmp || blurredShader == null) {
+                blurredBitmap = blurBmp
+                blurredShader = BitmapShader(blurBmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).also {
+                    if (Build.VERSION.SDK_INT >= 33) it.filterMode = BitmapShader.FILTER_MODE_LINEAR
+                }
+            }
+            updateBlurredMatrix(blurBmp, screenW, screenH, pullZoom)
+        }
+
+        private fun updateBlurredMatrix(blurBmp: Bitmap, screenW: Int, screenH: Int, pullZoom: Float) {
+            val gw = blurBmp.width.toFloat().coerceAtLeast(1f)
+            val gh = blurBmp.height.toFloat().coerceAtLeast(1f)
+            blurredScaleX = (screenW / gw) * pullZoom
+            blurredScaleY = (screenH / gh) * pullZoom
+            blurredLeft = (screenW - gw * blurredScaleX) * 0.5f
+            blurredTop = (screenH - gh * blurredScaleY) * 0.5f
+            matrix.reset()
+            matrix.setScale(blurredScaleX, blurredScaleY)
+            matrix.postTranslate(blurredLeft, blurredTop)
+            blurredShader?.setLocalMatrix(matrix)
         }
 
         fun updateZoomOnly(screenW: Int, screenH: Int, pullZoom: Float) {
@@ -304,7 +336,91 @@ object LiquidGlassShaders {
                 matrix.postTranslate((screenW - cw * scX) * 0.5f, (screenH - ch * scY) * 0.5f)
                 compositedShader?.setLocalMatrix(matrix)
             }
+
+            blurredBitmap?.let { updateBlurredMatrix(it, screenW, screenH, pullZoom) }
         }
+    }
+
+    fun createSoftBlurredBackdrop(
+        wall: Bitmap,
+        subject: Bitmap?,
+        depthEnabled: Boolean,
+        screenW: Int,
+        screenH: Int
+    ): Bitmap {
+        val safeW = max(1, screenW)
+        val safeH = max(1, screenH)
+        val targetW = 240
+        val targetH = ((targetW.toFloat() * safeH / safeW).toInt()).coerceIn(140, 560)
+        val bmp = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
+        val c = android.graphics.Canvas(bmp)
+        c.drawColor(Color.BLACK)
+
+        val bw = wall.width.toFloat().coerceAtLeast(1f)
+        val bh = wall.height.toFloat().coerceAtLeast(1f)
+        val sc = max(targetW / bw, targetH / bh)
+        val m = Matrix().apply {
+            setScale(sc, sc)
+            postTranslate((targetW - bw * sc) * 0.5f, (targetH - bh * sc) * 0.5f)
+        }
+        c.drawBitmap(wall, m, android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
+
+        if (depthEnabled && subject != null) {
+            val sw = subject.width.toFloat().coerceAtLeast(1f)
+            val sh = subject.height.toFloat().coerceAtLeast(1f)
+            val ss = max(targetW / sw, targetH / sh)
+            m.reset()
+            m.setScale(ss, ss)
+            m.postTranslate((targetW - sw * ss) * 0.5f, (targetH - sh * ss) * 0.5f)
+            c.drawBitmap(subject, m, android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
+        }
+
+        // Fast 3-pass separable sliding box blur (smooth medium iOS 26 bokeh with zero banding)
+        val n = targetW * targetH
+        val px = IntArray(n)
+        val tmp = IntArray(n)
+        bmp.getPixels(px, 0, targetW, 0, 0, targetW, targetH)
+        val rad = 5
+        val win = rad * 2 + 1
+        repeat(3) {
+            for (y in 0 until targetH) {
+                val off = y * targetW
+                var sr = 0; var sg = 0; var sb = 0
+                for (dx in -rad..rad) {
+                    val col = px[off + dx.coerceIn(0, targetW - 1)]
+                    sr += (col ushr 16) and 0xff
+                    sg += (col ushr 8) and 0xff
+                    sb += col and 0xff
+                }
+                for (x in 0 until targetW) {
+                    tmp[off + x] = (0xff shl 24) or ((sr / win) shl 16) or ((sg / win) shl 8) or (sb / win)
+                    val outCol = px[off + (x - rad).coerceIn(0, targetW - 1)]
+                    val inCol = px[off + (x + rad + 1).coerceIn(0, targetW - 1)]
+                    sr += ((inCol ushr 16) and 0xff) - ((outCol ushr 16) and 0xff)
+                    sg += ((inCol ushr 8) and 0xff) - ((outCol ushr 8) and 0xff)
+                    sb += (inCol and 0xff) - (outCol and 0xff)
+                }
+            }
+            for (x in 0 until targetW) {
+                var sr = 0; var sg = 0; var sb = 0
+                for (dy in -rad..rad) {
+                    val col = tmp[dy.coerceIn(0, targetH - 1) * targetW + x]
+                    sr += (col ushr 16) and 0xff
+                    sg += (col ushr 8) and 0xff
+                    sb += col and 0xff
+                }
+                for (y in 0 until targetH) {
+                    px[y * targetW + x] = (0xff shl 24) or ((sr / win) shl 16) or ((sg / win) shl 8) or (sb / win)
+                    val outCol = tmp[(y - rad).coerceIn(0, targetH - 1) * targetW + x]
+                    val inCol = tmp[(y + rad + 1).coerceIn(0, targetH - 1) * targetW + x]
+                    sr += ((inCol ushr 16) and 0xff) - ((outCol ushr 16) and 0xff)
+                    sg += ((inCol ushr 8) and 0xff) - ((outCol ushr 8) and 0xff)
+                    sb += (inCol and 0xff) - (outCol and 0xff)
+                }
+            }
+        }
+        bmp.setPixels(px, 0, targetW, 0, 0, targetW, targetH)
+        return bmp
     }
 
     @RequiresApi(33)

@@ -173,6 +173,26 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(mainKt.includes('hadNotifsInLayout'));
   assert.ok(mainKt.includes('appearingFromEmpty'));
   assert.ok(mainKt.includes('94f * dens'));
+  assert.ok(mainKt.includes('UnlockSwipeShell'));
+  assert.ok(mainKt.includes('isEligibleForUnlockSwipe'));
+  assert.ok(mainKt.includes('passcodeOverlay'));
+  assert.ok(mainKt.includes('onTogglePasscode'));
+  assert.ok(mainKt.includes('onChangePasscodePin'));
+  assert.ok(notifKt.includes('isPointInsideInteractiveDeck'));
+  assert.ok(notifKt.includes('rejectDownGesture'));
+  assert.ok(stateKt.includes('passcodeEnabled'));
+  assert.ok(stateKt.includes('passcodePin'));
+  assert.ok(shadersKt.includes('createSoftBlurredBackdrop'));
+  assert.ok(shadersKt.includes('blurredShader'));
+  assert.ok(viewsKt.includes('useBlurredBackdrop'));
+  assert.ok(sheetKt.includes('onTogglePasscode'));
+  assert.ok(sheetKt.includes('onChangePasscodePin'));
+  const passcodeKt = readFileSync(ktDir + 'PasscodeOverlayView.kt','utf8');
+  assert.ok(passcodeKt.includes('GlassKeypadButton'));
+  assert.ok(passcodeKt.includes('PasscodeDotsView'));
+  assert.ok(passcodeKt.includes('useBlurredBackdrop = true'));
+  assert.ok(passcodeKt.includes('setInteractiveProgress'));
+  assert.ok(passcodeKt.includes('openForSetup'));
 
   const aiKt = readFileSync(ktDir + 'AIDepthManager.kt','utf8');
   assert.ok(aiKt.includes('SubjectSegmentation'));

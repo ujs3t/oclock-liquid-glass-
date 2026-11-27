@@ -51,6 +51,8 @@ class EditorSheetView(
         fun onToggleNotifications()
         fun onToggleDepth()
         fun onToggleDnd()
+        fun onTogglePasscode()
+        fun onChangePasscodePin()
         fun onTestNotification()
         fun onOpenNotificationAccess()
         fun onPickAudio()
@@ -104,6 +106,7 @@ class EditorSheetView(
     private lateinit var togNotif: TextView
     private lateinit var togDepth: TextView
     private lateinit var togDnd: TextView
+    private lateinit var togPasscode: TextView
 
     private lateinit var perfMeta: TextView
     private lateinit var perfStatus: TextView
@@ -603,7 +606,18 @@ class EditorSheetView(
         val testNotifBtn = makeTogglePill("+ إشعار تجريبي") { callbacks.onTestNotification() }
         val sysNotifBtn = makeTogglePill("إشعارات النظام") { callbacks.onOpenNotificationAccess() }
         r3.addView(artBtn); r3.addView(testNotifBtn); r3.addView(sysNotifBtn)
-        togGrid.addView(r1); togGrid.addView(r2); togGrid.addView(r3)
+
+        val r4 = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                topMargin = (8f * dens).roundToInt()
+            }
+        }
+        togPasscode = makeTogglePill("رمز القفل PIN") { callbacks.onTogglePasscode(); syncFromConfig() }
+        val changePinBtn = makeTogglePill("تغيير الرمز…") { callbacks.onChangePasscodePin() }
+        r4.addView(togPasscode); r4.addView(changePinBtn)
+
+        togGrid.addView(r1); togGrid.addView(r2); togGrid.addView(r3); togGrid.addView(r4)
         body.addView(togGrid)
 
         // 10. Continuous Performance Monitor Card
@@ -791,6 +805,7 @@ class EditorSheetView(
         styleToggle(togNotif, cfg.notifications)
         styleToggle(togDepth, cfg.depth)
         styleToggle(togDnd, cfg.dnd)
+        styleToggle(togPasscode, cfg.passcodeEnabled)
         suppressSeek = false
     }
 

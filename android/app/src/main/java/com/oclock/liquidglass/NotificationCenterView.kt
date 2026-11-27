@@ -93,6 +93,7 @@ class NotificationCenterView(
     private var expandGapStartIdx = Int.MAX_VALUE
     private var expandGapAnim: ValueAnimator? = null
     private var hidingOnEmpty = false
+    private var rejectDownGesture = false
 
     var uiInk = Color.WHITE
     var uiDim = Color.argb(205, 255, 255, 255)
@@ -314,6 +315,70 @@ class NotificationCenterView(
     }
 
     fun displayedCount(): Int = currentItems.size
+
+    private fun isInsideViewOnScreen(v: View, rawX: Float, rawY: Float, padPx: Float = 0f): Boolean {
+        if (v.visibility != VISIBLE || v.width <= 0 || v.height <= 0) return false
+        val loc = IntArray(2)
+        v.getLocationOnScreen(loc)
+        return rawX >= loc[0] - padPx && rawX <= loc[0] + v.width + padPx &&
+            rawY >= loc[1] - padPx && rawY <= loc[1] + v.height + padPx
+    }
+
+    fun isPointInsideInteractiveDeck(rawX: Float, rawY: Float): Boolean {
+        if (visibility != VISIBLE || alpha <= 0.05f || currentItems.isEmpty()) return false
+        val loc = IntArray(2)
+        getLocationOnScreen(loc)
+        val lx = rawX - loc[0]
+        val ly = rawY - loc[1]
+
+        if (isLandscapeCompact || expandFrac > 0.05f) {
+            val topY = containerCol.translationY
+            val botY = height.toFloat()
+            return lx in 0f..width.toFloat() && ly in topY..botY
+        }
+
+        if (isInsideViewOnScreen(accessPill, rawX, rawY, padPx = 4f * dens)) return true
+        if (isInsideViewOnScreen(clearBtn, rawX, rawY, padPx = 4f * dens)) return true
+
+        val firstRow = listCol.getChildAt(0) as? NotificationCardRow
+        if (firstRow != null && firstRow.width > 0 && firstRow.height > 0) {
+            val rLoc = IntArray(2)
+            firstRow.getLocationOnScreen(rLoc)
+            val peekExtra = when {
+                currentItems.size >= 3 -> 20f * dens
+                currentItems.size == 2 -> 11f * dens
+                else -> 0f
+            }
+            val cardTop = rLoc[1].toFloat() - 2f * dens
+            val cardBot = rLoc[1].toFloat() + firstRow.height + peekExtra
+            if (rawX >= rLoc[0].toFloat() && rawX <= rLoc[0].toFloat() + firstRow.width &&
+                rawY >= cardTop && rawY <= cardBot
+            ) {
+                return true
+            }
+        }
+
+        if (isInsideViewOnScreen(moreHintPill, rawX, rawY, padPx = 0f)) return true
+        return false
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                rejectDownGesture = !isLandscapeCompact && expandFrac <= 0.05f && !isPointInsideInteractiveDeck(ev.rawX, ev.rawY)
+                if (rejectDownGesture) return false
+            }
+            else -> {
+                if (rejectDownGesture) {
+                    if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
+                        rejectDownGesture = false
+                    }
+                    return false
+                }
+            }
+        }
+        return super.dispatchTouchEvent(ev)
+    }
 
     fun configureLayoutBounds(
         expandedTopPx: Int,

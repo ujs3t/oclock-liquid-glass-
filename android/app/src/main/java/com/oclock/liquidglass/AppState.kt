@@ -83,7 +83,9 @@ data class LockConfig(
     var weather: Boolean = true,
     var music: Boolean = true,
     var notifications: Boolean = true,
-    var dnd: Boolean = false
+    var dnd: Boolean = false,
+    var passcodeEnabled: Boolean = true,
+    var passcodePin: String = "000000"
 ) {
     fun clamp() {
         size = size.coerceIn(56f, 420f)
@@ -95,6 +97,9 @@ data class LockConfig(
         innerThickness = innerThickness.coerceIn(0f, 8f)
         innerAngle = innerAngle.coerceIn(0f, 360f)
         innerFade = innerFade.coerceIn(0, 100)
+        if ((passcodePin.length != 4 && passcodePin.length != 6) || !passcodePin.all { it in '0'..'9' }) {
+            passcodePin = "000000"
+        }
     }
 
     fun snapshotForUndo() = UndoSnapshot(size, sx, sy)
@@ -214,6 +219,8 @@ class StateStore(context: Context) {
             cfg.music = j.optBoolean("music", cfg.music)
             cfg.notifications = j.optBoolean("notifications", cfg.notifications)
             cfg.dnd = j.optBoolean("dnd", cfg.dnd)
+            cfg.passcodeEnabled = j.optBoolean("passcodeEnabled", cfg.passcodeEnabled)
+            cfg.passcodePin = j.optString("passcodePin", cfg.passcodePin)
             cfg.clamp()
             cfg
         } catch (_: Throwable) {
@@ -247,6 +254,8 @@ class StateStore(context: Context) {
             put("music", cfg.music)
             put("notifications", cfg.notifications)
             put("dnd", cfg.dnd)
+            put("passcodeEnabled", cfg.passcodeEnabled)
+            put("passcodePin", cfg.passcodePin)
         }
         prefs.edit().putString("config", j.toString()).apply()
     }
