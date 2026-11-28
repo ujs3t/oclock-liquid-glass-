@@ -270,6 +270,16 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(sheetKt.includes('fun setLabel'));
   assert.ok(viewsKt.includes('drawTopOffsetPx'));
   assert.ok(mainKt.includes('editorStageSpringCallback'));
+  const horizIdx = sheetKt.indexOf('private inner class RubberHorizontalScrollView');
+  const horizEnd = sheetKt.indexOf('private inner class GlassPillButton', horizIdx);
+  const horizSlice = sheetKt.slice(horizIdx, horizEnd);
+  assert.ok(horizSlice.includes('scrollTo(maxScroll, 0)'));
+  assert.ok(!horizSlice.includes('scrollTo(0, maxScroll)'));
+  assert.ok(horizSlice.includes('computeScrollDeltaToGetChildRectOnScreen'));
+  assert.ok(horizSlice.includes('userInteracted'));
+  assert.ok(glyphKt.includes('bestGapStart'));
+  assert.ok(glyphKt.includes('GlyphDrawOp'));
+  assert.ok(glyphKt.includes("for (d in '0'..'9')"));
   assert.ok(sheetKt.includes('widthSeek'));
   assert.ok(sheetKt.includes('العرض'));
   assert.ok(!sheetKt.includes('مجاني'));

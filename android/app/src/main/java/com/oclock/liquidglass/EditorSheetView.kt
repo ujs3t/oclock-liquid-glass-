@@ -562,6 +562,11 @@ class EditorSheetView(
             return sign(raw) * mapped
         }
 
+        private fun rubberToPull(r: Float): Float {
+            val a = abs(r).coerceAtMost(maxPullPx * 0.96f)
+            return sign(r) * (maxPullPx * 1.25f * a / max(1f, maxPullPx - a))
+        }
+
         private fun startRubberSpring(initVel: Float = 0f) {
             velRubber = initVel
             if (abs(rubberY) < 0.4f && abs(velRubber) < 12f) {
@@ -589,6 +594,33 @@ class EditorSheetView(
             }
         }
 
+        private fun maxScrollY(): Int {
+            val c = getChildAt(0) ?: return 0
+            return max(0, c.height - (height - paddingTop - paddingBottom))
+        }
+
+        private fun isOverHorizScroller(v: View, rawX: Float, rawY: Float): Boolean {
+            if (v.visibility != View.VISIBLE) return false
+            if (v is RubberHorizontalScrollView) {
+                val loc = IntArray(2)
+                v.getLocationOnScreen(loc)
+                if (rawX >= loc[0] && rawX <= loc[0] + v.width && rawY >= loc[1] && rawY <= loc[1] + v.height) {
+                    val c = v.getChildAt(0)
+                    if (c != null && c.width > v.width) return true
+                }
+            }
+            if (v is ViewGroup) {
+                for (i in 0 until v.childCount) {
+                    if (isOverHorizScroller(v.getChildAt(i), rawX, rawY)) return true
+                }
+            }
+            return false
+        }
+
+        private var downOverHoriz = false
+
+        override fun computeScrollDeltaToGetChildRectOnScreen(rect: Rect): Int = 0
+
         override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
             disallowFromChild = disallowIntercept
             if (disallowIntercept) {
@@ -604,9 +636,11 @@ class EditorSheetView(
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     disallowFromChild = false
+                    downOverHoriz = isOverHorizScroller(this, ev.rawX, ev.rawY)
                     if (!scroller.isFinished) scroller.abortAnimation()
                     springReboundRunning = false
                     Choreographer.getInstance().removeFrameCallback(reboundCallback)
+                    rawPull = if (abs(rubberY) > 0.5f) rubberToPull(rubberY) else 0f
                     activePtrId = ev.getPointerId(0)
                     startRawX = ev.rawX
                     startRawY = ev.rawY
@@ -625,7 +659,9 @@ class EditorSheetView(
                     val curY = ptrRawY(ev, idx)
                     val dx = curX - startRawX
                     val dy = curY - startRawY
-                    if (abs(dy) > vertSlop && abs(dy) > abs(dx) * 1.25f) {
+                    val slopReq = if (downOverHoriz) vertSlop * 1.4f else vertSlop
+                    val ratioReq = if (downOverHoriz) 1.55f else 1.25f
+                    if (abs(dy) > slopReq && abs(dy) > abs(dx) * ratioReq) {
                         dragging = true
                         lastRawY = curY
                         parent?.requestDisallowInterceptTouchEvent(true)
@@ -636,6 +672,7 @@ class EditorSheetView(
                     activePtrId = MotionEvent.INVALID_POINTER_ID
                     dragging = false
                     disallowFromChild = false
+                    downOverHoriz = false
                     vt?.recycle()
                     vt = null
                     if (abs(rubberY) > 0.5f) startRubberSpring()
@@ -646,13 +683,13 @@ class EditorSheetView(
 
         @SuppressLint("ClickableViewAccessibility")
         override fun onTouchEvent(ev: MotionEvent): Boolean {
-            val child = getChildAt(0)
-            val maxScroll = max(0, (child?.height ?: 0) - height)
+            val maxScroll = maxScrollY()
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     if (!scroller.isFinished) scroller.abortAnimation()
                     springReboundRunning = false
                     Choreographer.getInstance().removeFrameCallback(reboundCallback)
+                    rawPull = if (abs(rubberY) > 0.5f) rubberToPull(rubberY) else 0f
                     activePtrId = ev.getPointerId(0)
                     startRawX = ev.rawX
                     startRawY = ev.rawY
@@ -781,6 +818,7 @@ class EditorSheetView(
         private var velRubber = 0f
         private var springReboundRunning = false
         private var reboundLastNs = 0L
+        var userInteracted = false
         var onScrollOrRubber: (() -> Unit)? = null
 
         private val reboundCallback = object : Choreographer.FrameCallback {
@@ -813,6 +851,13 @@ class EditorSheetView(
             setOnScrollChangeListener { _, _, _, _, _ -> onScrollOrRubber?.invoke() }
         }
 
+        override fun computeScrollDeltaToGetChildRectOnScreen(rect: Rect): Int = 0
+
+        private fun maxScrollX(): Int {
+            val c = getChildAt(0) ?: return 0
+            return max(0, c.width - (width - paddingLeft - paddingRight))
+        }
+
         private fun ptrRawX(ev: MotionEvent, idx: Int): Float = ev.getX(idx) + (ev.rawX - ev.x)
         private fun ptrRawY(ev: MotionEvent, idx: Int): Float = ev.getY(idx) + (ev.rawY - ev.y)
 
@@ -835,6 +880,11 @@ class EditorSheetView(
             return sign(raw) * mapped
         }
 
+        private fun rubberToPull(r: Float): Float {
+            val a = abs(r).coerceAtMost(maxPullPx * 0.96f)
+            return sign(r) * (maxPullPx * 1.25f * a / max(1f, maxPullPx - a))
+        }
+
         private fun startRubberSpring(initVel: Float = 0f) {
             velRubber = initVel
             if (abs(rubberX) < 0.4f && abs(velRubber) < 12f) {
@@ -852,9 +902,9 @@ class EditorSheetView(
         }
 
         fun smoothScrollToX(targetX: Int) {
+            if (userInteracted) return
             if (!scroller.isFinished) scroller.abortAnimation()
-            val maxScroll = max(0, (getChildAt(0)?.width ?: 0) - width)
-            val clamped = targetX.coerceIn(0, maxScroll)
+            val clamped = targetX.coerceIn(0, maxScrollX())
             if (clamped != scrollX) {
                 scroller.startScroll(scrollX, 0, clamped - scrollX, 0, 320)
                 postInvalidateOnAnimation()
@@ -864,9 +914,11 @@ class EditorSheetView(
         override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    userInteracted = true
                     if (!scroller.isFinished) scroller.abortAnimation()
                     springReboundRunning = false
                     Choreographer.getInstance().removeFrameCallback(reboundCallback)
+                    rawPull = if (abs(rubberX) > 0.5f) rubberToPull(rubberX) else 0f
                     activePtrId = ev.getPointerId(0)
                     startRawX = ev.rawX
                     startRawY = ev.rawY
@@ -884,7 +936,7 @@ class EditorSheetView(
                     val curY = ptrRawY(ev, idx)
                     val dx = curX - startRawX
                     val dy = curY - startRawY
-                    if (abs(dx) > horizSlop && abs(dx) >= abs(dy) * 0.9f) {
+                    if (abs(dx) > horizSlop && abs(dx) >= abs(dy) * 0.72f) {
                         dragging = true
                         lastRawX = curX
                         parent?.requestDisallowInterceptTouchEvent(true)
@@ -904,13 +956,14 @@ class EditorSheetView(
 
         @SuppressLint("ClickableViewAccessibility")
         override fun onTouchEvent(ev: MotionEvent): Boolean {
-            val child = getChildAt(0)
-            val maxScroll = max(0, (child?.width ?: 0) - width)
+            val maxScroll = maxScrollX()
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    userInteracted = true
                     if (!scroller.isFinished) scroller.abortAnimation()
                     springReboundRunning = false
                     Choreographer.getInstance().removeFrameCallback(reboundCallback)
+                    rawPull = if (abs(rubberX) > 0.5f) rubberToPull(rubberX) else 0f
                     activePtrId = ev.getPointerId(0)
                     startRawX = ev.rawX
                     startRawY = ev.rawY
@@ -962,7 +1015,7 @@ class EditorSheetView(
                         }
                         targetScroll > maxScroll -> {
                             val overflow = (targetScroll - maxScroll).toFloat()
-                            if (scrollX != maxScroll) scrollTo(0, maxScroll)
+                            if (scrollX != maxScroll) scrollTo(maxScroll, 0)
                             rawPull -= overflow
                             setRubberX(pullToRubber(rawPull))
                         }
@@ -1002,7 +1055,7 @@ class EditorSheetView(
 
         override fun computeScroll() {
             if (scroller.computeScrollOffset()) {
-                val maxScroll = max(0, (getChildAt(0)?.width ?: 0) - width)
+                val maxScroll = maxScrollX()
                 val cx = scroller.currX
                 when {
                     cx < 0 -> {
@@ -1015,7 +1068,7 @@ class EditorSheetView(
                     cx > maxScroll -> {
                         val currVel = scroller.currVelocity
                         scroller.abortAnimation()
-                        if (scrollX != maxScroll) scrollTo(0, maxScroll)
+                        if (scrollX != maxScroll) scrollTo(maxScroll, 0)
                         startRubberSpring(-min(currVel * 0.42f, 800f * dens))
                         return
                     }
@@ -2213,6 +2266,7 @@ class EditorSheetView(
         body.addView(secHeader("الخلفية والعمق"))
         val wallCard = GlassSectionCard(context, padHdp = 12f, padVdp = 10f)
         val wallScroll = RubberHorizontalScrollView(context).apply {
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
             onScrollOrRubber = { invalidateVisibleGlass(this@EditorSheetView.sheetCard) }
         }
         val wallRow = LinearLayout(context).apply {
@@ -2592,6 +2646,7 @@ class EditorSheetView(
 
         clockScrollView.scrollTo(0, 0)
         wallScrollView.scrollTo(0, 0)
+        fontScroll.userInteracted = false
         syncFromConfig()
         updatePerfUi(perf.snapshot())
         if (mode == Mode.CLOCK) {
@@ -2683,6 +2738,7 @@ class EditorSheetView(
             .start()
 
         if (toClock) {
+            fontScroll.userInteracted = false
             fontScroll.post {
                 val activeChip = fontBtns[cfg.font]
                 if (activeChip != null) {

@@ -120,7 +120,9 @@ class ClockGlyphRenderer(private val context: Context) {
         synchronized(metricsCache) {
             metricsCache[fontId]?.let { return it }
             val tf = getTypeface(fontId)
-            val bmp = Bitmap.createBitmap(160, 160, Bitmap.Config.ALPHA_8)
+            val sz = 256
+            val baseY = 172f
+            val bmp = Bitmap.createBitmap(sz, sz, Bitmap.Config.ALPHA_8)
             val c = Canvas(bmp)
             val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 typeface = tf
@@ -128,19 +130,19 @@ class ClockGlyphRenderer(private val context: Context) {
                 textAlign = Paint.Align.CENTER
                 color = Color.WHITE
             }
-            val buf = ByteArray(160 * 160)
-            var yMin = 160
+            val buf = ByteArray(sz * sz)
+            var yMin = sz
             var yMax = -1
-            for (sample in arrayOf("0", "8", "6")) {
+            for (d in '0'..'9') {
                 bmp.eraseColor(Color.TRANSPARENT)
-                c.drawText(sample, 80f, 80f, p)
+                c.drawText(d.toString(), sz * 0.5f, baseY, p)
                 ByteBuffer.wrap(buf).also {
                     it.rewind()
                     bmp.copyPixelsToBuffer(it)
                 }
-                for (y in 0 until 160) {
-                    val row = y * 160
-                    for (x in 0 until 160) {
+                for (y in 0 until sz) {
+                    val row = y * sz
+                    for (x in 0 until sz) {
                         if ((buf[row + x].toInt() and 0xFF) > 10) {
                             if (y < yMin) yMin = y
                             if (y > yMax) yMax = y
@@ -149,9 +151,9 @@ class ClockGlyphRenderer(private val context: Context) {
                 }
             }
             bmp.recycle()
-            val capRatio = if (yMax >= yMin) ((yMax - yMin + 1) / 100f).coerceIn(0.55f, 0.92f) else 0.74f
-            // Baseline offset relative to 100px so optical numeral center lands at 80f
-            val refMidRel = if (yMax >= yMin) (((yMin + yMax + 1) * 0.5f) - 80f) / 100f else 0f
+            val capRatio = if (yMax >= yMin) ((yMax - yMin + 1) / 100f).coerceIn(0.50f, 1.25f) else 0.74f
+            // Baseline offset relative to 100px so optical numeral center lands at centerY
+            val refMidRel = if (yMax >= yMin) (((yMin + yMax + 1) * 0.5f) - baseY) / 100f else 0f
             return NumeralMetrics(capRatio, refMidRel).also { metricsCache[fontId] = it }
         }
     }
@@ -172,8 +174,8 @@ class ClockGlyphRenderer(private val context: Context) {
 
         val vSub = max(2, ceil(sy * 1.6f).toInt().coerceAtMost(4))
         val srcPx = fontPx * ss
-        val sw = ceil(srcPx * sx * 1.25f).toInt() + 16
-        val sh = ceil(srcPx * vSub * 1.55f).toInt() + 16
+        val sw = ceil(srcPx * sx * 1.65f).toInt() + 32
+        val sh = ceil(srcPx * vSub * 1.95f).toInt() + 32
         val src = Bitmap.createBitmap(sw, sh, Bitmap.Config.ALPHA_8)
         val sc = Canvas(src)
         sc.save()
@@ -368,8 +370,8 @@ class ClockGlyphRenderer(private val context: Context) {
             colonCache[key]?.let { return it }
         }
         val srcPx = fontPx * ss
-        val sw = ceil(srcPx * 0.8f).toInt() + 16
-        val sh = ceil(srcPx * 1.35f).toInt() + 16
+        val sw = ceil(srcPx * 1.5f).toInt() + 32
+        val sh = ceil(srcPx * 1.8f).toInt() + 32
         val src = Bitmap.createBitmap(sw, sh, Bitmap.Config.ALPHA_8)
         val sc = Canvas(src)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -387,7 +389,56 @@ class ClockGlyphRenderer(private val context: Context) {
         }
         src.recycle()
 
-        val mid = sh / 2
+        // Locate actual vertical gap between upper & lower colon dots (never slice a dot at sh/2)
+        val rowPeak = IntArray(sh)
+        var firstInkY = -1
+        var lastInkY = -1
+        for (y in 0 until sh) {
+            val row = y * sw
+            var mx = 0
+            for (x in 0 until sw) {
+                val a = sData[row + x].toInt() and 0xFF
+                if (a > mx) mx = a
+            }
+            rowPeak[y] = mx
+            if (mx > 8) {
+                if (firstInkY < 0) firstInkY = y
+                lastInkY = y
+            }
+        }
+
+        var splitY = sh / 2
+        if (firstInkY >= 0 && lastInkY > firstInkY + 4) {
+            var bestGapStart = -1
+            var bestGapLen = 0
+            var curGapStart = -1
+            for (y in firstInkY..lastInkY) {
+                if (rowPeak[y] <= 8) {
+                    if (curGapStart < 0) curGapStart = y
+                } else if (curGapStart >= 0) {
+                    val len = y - curGapStart
+                    if (len > bestGapLen) {
+                        bestGapLen = len
+                        bestGapStart = curGapStart
+                    }
+                    curGapStart = -1
+                }
+            }
+            if (bestGapLen > 0) {
+                splitY = bestGapStart + bestGapLen / 2
+            } else {
+                val lo = firstInkY + ((lastInkY - firstInkY) * 0.25f).roundToInt()
+                val hi = lastInkY - ((lastInkY - firstInkY) * 0.25f).roundToInt()
+                var minA = Int.MAX_VALUE
+                for (y in lo..hi) {
+                    if (rowPeak[y] < minA) {
+                        minA = rowPeak[y]
+                        splitY = y
+                    }
+                }
+            }
+        }
+
         fun crop(yA: Int, yB: Int): Triple<Bitmap, Int, Float>? {
             var x0 = sw
             var x1 = -1
@@ -416,8 +467,8 @@ class ClockGlyphRenderer(private val context: Context) {
             return Triple(b, cw, (y0 + y1 + 1) * 0.5f)
         }
 
-        val top = crop(0, mid)
-        val bot = crop(mid, sh)
+        val top = crop(0, splitY)
+        val bot = crop(splitY, sh)
         val natSep = if (top != null && bot != null) (bot.third - top.third) * 0.5f else srcPx * 0.14f
         val res = ColonDots(
             topBmp = top?.first,
@@ -430,6 +481,12 @@ class ClockGlyphRenderer(private val context: Context) {
         )
         synchronized(colonCache) { colonCache[key] = res }
         return res
+    }
+
+    private sealed class GlyphDrawOp {
+        class ColonOp(val topBmp: Bitmap, val topRect: RectF, val botBmp: Bitmap, val botRect: RectF) : GlyphDrawOp()
+        class BitmapOp(val bmp: Bitmap, val x: Float, val y: Float) : GlyphDrawOp()
+        class TextOp(val ch: String, val cx: Float, val cy: Float, val baseOffset: Float) : GlyphDrawOp()
     }
 
     fun buildArtifact(
@@ -460,7 +517,7 @@ class ClockGlyphRenderer(private val context: Context) {
         var maxLineW = 0f
         for (ln in lines) maxLineW = max(maxLineW, measureLineW(ln))
 
-        val pad = 18f
+        val pad = 20f
         val rawW = max(40f, maxLineW * cfg.sx)
         val rawH = max(40f, lines.size * size * capRatio * cfg.sy)
         val fit = min(1f, min((maxW - pad * 2f) / rawW, (availableHDp - pad * 2f) / rawH))
@@ -471,26 +528,109 @@ class ClockGlyphRenderer(private val context: Context) {
         for (ln in lines) maxLineW = max(maxLineW, measureLineW(ln))
 
         val capH = size * capRatio
-        val wDp = ceil(max(40f, maxLineW * cfg.sx) + pad * 2f)
-        val hDp = ceil(max(40f, lines.size * capH * cfg.sy) + pad * 2f)
+        val estWDp = ceil(max(40f, maxLineW * cfg.sx) + pad * 2f)
+        val estHDp = ceil(max(40f, lines.size * capH * cfg.sy) + pad * 2f)
 
-        val rawArea = max(1f, wDp * hDp)
+        val rawArea = max(1f, estWDp * estHDp)
         val maxArea = 2_600_000f
         if (rawArea * ss * ss > maxArea) {
             ss = max(1.8f, floor(sqrt(maxArea / rawArea) * 10f) / 10f)
         }
-        val longSide = max(wDp, hDp)
+        val longSide = max(estWDp, estHDp)
         if (longSide * ss > 2200f) ss = max(1.8f, floor((2200f / longSide) * 10f) / 10f)
 
-        val wPx = max(4, (wDp * ss).roundToInt())
-        val hPx = max(4, (hDp * ss).roundToInt())
-
         val minuteKey = lines.joinToString("|")
-        val maskKey = "${"%.2f".format(size)}|$wPx|$hPx|${cfg.font}|${cfg.sx}|${cfg.sy}|${cfg.tracking}|$minuteKey"
-
+        val estKey = "${"%.2f".format(size)}|${"%.2f".format(ss)}|${cfg.font}|${cfg.sx}|${cfg.sy}|${cfg.tracking}|$minuteKey"
         synchronized(artifactCache) {
-            artifactCache[maskKey]?.let { return it }
+            artifactCache[estKey]?.let { return it }
         }
+
+        // Phase 1: collect all draw ops & measure true ink bounding box so NO ascender/edge can ever clip
+        val digitTargetH = capH * cfg.sy * ss
+        val lineStep = digitTargetH * 1.06f
+        val ops = ArrayList<GlyphDrawOp>(8)
+        var rawMinX = Float.POSITIVE_INFINITY
+        var rawMinY = Float.POSITIVE_INFINITY
+        var rawMaxX = Float.NEGATIVE_INFINITY
+        var rawMaxY = Float.NEGATIVE_INFINITY
+        val tb = android.graphics.Rect()
+        fun expandRaw(l: Float, t: Float, r: Float, b: Float) {
+            if (r > l && b > t) {
+                if (l < rawMinX) rawMinX = l
+                if (t < rawMinY) rawMinY = t
+                if (r > rawMaxX) rawMaxX = r
+                if (b > rawMaxY) rawMaxY = b
+            }
+        }
+
+        for ((li, ln) in lines.withIndex()) {
+            val advs = FloatArray(ln.length) { i -> probe.measureText(ln[i].toString()) }
+            val totalW = advs.sum() + max(0, ln.length - 1) * cfg.tracking
+            val lineCenterY = (li - (lines.size - 1) * 0.5f) * lineStep
+            var curX = -totalW * 0.5f
+
+            for (i in ln.indices) {
+                val ch = ln[i]
+                val adv = advs[i]
+                val charCenterX = (curX + adv * 0.5f) * cfg.sx * ss
+                curX += adv + cfg.tracking
+
+                if (ch == ':') {
+                    val dots = getColonDots(size, cfg.font, ss, refMidRel)
+                    if (dots.topBmp != null && dots.botBmp != null) {
+                        val dotScale = (min(1.28f, 1f + max(0f, cfg.sy - 1f) * 0.14f) * (0.58f + 0.42f * cfg.sx)).coerceIn(0.76f, 1.28f)
+                        val sep = max(max(dots.natSep, (dots.topH + dots.botH) * 0.52f * dotScale), digitTargetH * 0.158f)
+                        val tw = dots.topW * dotScale
+                        val th = dots.topH * dotScale
+                        val bw = dots.botW * dotScale
+                        val bh = dots.botH * dotScale
+                        val topRect = RectF(charCenterX - tw * 0.5f, lineCenterY - sep - th * 0.5f, charCenterX + tw * 0.5f, lineCenterY - sep + th * 0.5f)
+                        val botRect = RectF(charCenterX - bw * 0.5f, lineCenterY + sep - bh * 0.5f, charCenterX + bw * 0.5f, lineCenterY + sep + bh * 0.5f)
+                        ops.add(GlyphDrawOp.ColonOp(dots.topBmp, topRect, dots.botBmp, botRect))
+                        expandRaw(topRect.left, topRect.top, topRect.right, topRect.bottom)
+                        expandRaw(botRect.left, botRect.top, botRect.right, botRect.bottom)
+                        continue
+                    }
+                }
+
+                if (ch in '0'..'9' && cfg.sy >= 1.03f) {
+                    val g = stretchDigitBitmap(ch, size, cfg.font, cfg.sx, cfg.sy, ss, refMidRel)
+                    if (g != null) {
+                        val gl = charCenterX - g.w * 0.5f + g.xCenterOffset
+                        val gt = lineCenterY - g.h * 0.5f + g.yCenterRel
+                        ops.add(GlyphDrawOp.BitmapOp(g.alphaBmp, gl, gt))
+                        expandRaw(gl, gt, gl + g.w, gt + g.h)
+                        continue
+                    }
+                }
+
+                probe.getTextBounds(ch.toString(), 0, 1, tb)
+                val baseOffset = -refMidRel * size
+                if (!tb.isEmpty) {
+                    val gl = charCenterX + (tb.left - adv * 0.5f - 2f) * ss * cfg.sx
+                    val gr = charCenterX + (tb.right - adv * 0.5f + 2f) * ss * cfg.sx
+                    val gt = lineCenterY + (baseOffset + tb.top - 2f) * ss * cfg.sy
+                    val gb = lineCenterY + (baseOffset + tb.bottom + 2f) * ss * cfg.sy
+                    expandRaw(gl, gt, gr, gb)
+                }
+                ops.add(GlyphDrawOp.TextOp(ch.toString(), charCenterX, lineCenterY, baseOffset))
+            }
+        }
+
+        if (!rawMaxX.isFinite() || rawMaxX <= rawMinX) {
+            rawMinX = -estWDp * 0.4f * ss
+            rawMaxX = estWDp * 0.4f * ss
+            rawMinY = -estHDp * 0.4f * ss
+            rawMaxY = estHDp * 0.4f * ss
+        }
+
+        val padPx = pad * ss
+        val wPx = max(4, ceil(rawMaxX - rawMinX + padPx * 2f).toInt())
+        val hPx = max(4, ceil(rawMaxY - rawMinY + padPx * 2f).toInt())
+        val wDp = wPx / ss
+        val hDp = hPx / ss
+        val shiftX = padPx - rawMinX
+        val shiftY = padPx - rawMinY
 
         val alphaBmp = Bitmap.createBitmap(wPx, hPx, Bitmap.Config.ARGB_8888).apply {
             setHasAlpha(false)
@@ -504,87 +644,31 @@ class ClockGlyphRenderer(private val context: Context) {
             color = Color.WHITE
         }
 
-        val digitTargetH = capH * cfg.sy * ss
-        val lineStep = digitTargetH * 1.06f
-        val startY = ((hDp * ss) - (lines.size - 1) * lineStep) * 0.5f
-
-        var inkMinX = Float.POSITIVE_INFINITY
-        var inkMinY = Float.POSITIVE_INFINITY
-        var inkMaxX = Float.NEGATIVE_INFINITY
-        var inkMaxY = Float.NEGATIVE_INFINITY
-        val tb = android.graphics.Rect()
-        fun includeInk(l: Float, t: Float, r: Float, b: Float) {
-            if (r > l && b > t) {
-                if (l < inkMinX) inkMinX = l
-                if (t < inkMinY) inkMinY = t
-                if (r > inkMaxX) inkMaxX = r
-                if (b > inkMaxY) inkMaxY = b
+        for (op in ops) {
+            when (op) {
+                is GlyphDrawOp.ColonOp -> {
+                    val tr = RectF(op.topRect).apply { offset(shiftX, shiftY) }
+                    val br = RectF(op.botRect).apply { offset(shiftX, shiftY) }
+                    c.drawBitmap(op.topBmp, null, tr, paint)
+                    c.drawBitmap(op.botBmp, null, br, paint)
+                }
+                is GlyphDrawOp.BitmapOp -> {
+                    c.drawBitmap(op.bmp, op.x + shiftX, op.y + shiftY, paint)
+                }
+                is GlyphDrawOp.TextOp -> {
+                    c.save()
+                    c.translate(op.cx + shiftX, op.cy + shiftY)
+                    c.scale(ss * cfg.sx, ss * cfg.sy)
+                    c.drawText(op.ch, 0f, op.baseOffset, paint)
+                    c.restore()
+                }
             }
         }
 
-        for ((li, ln) in lines.withIndex()) {
-            val advs = FloatArray(ln.length) { i -> probe.measureText(ln[i].toString()) }
-            val totalW = advs.sum() + max(0, ln.length - 1) * cfg.tracking
-            val lineCenterPx = startY + li * lineStep
-            var curX = -totalW * 0.5f
-
-            for (i in ln.indices) {
-                val ch = ln[i]
-                val adv = advs[i]
-                val charCenterPx = (wDp * 0.5f + (curX + adv * 0.5f) * cfg.sx) * ss
-                curX += adv + cfg.tracking
-
-                if (ch == ':') {
-                    val dots = getColonDots(size, cfg.font, ss, refMidRel)
-                    if (dots.topBmp != null && dots.botBmp != null) {
-                        val dotScale = min(1.28f, 1f + max(0f, cfg.sy - 1f) * 0.16f) * (0.5f + 0.5f * cfg.sx)
-                        val sep = max(dots.natSep, digitTargetH * 0.158f)
-                        val tw = dots.topW * dotScale
-                        val th = dots.topH * dotScale
-                        val bw = dots.botW * dotScale
-                        val bh = dots.botH * dotScale
-                        val topRect = RectF(charCenterPx - tw * 0.5f, lineCenterPx - sep - th * 0.5f, charCenterPx + tw * 0.5f, lineCenterPx - sep + th * 0.5f)
-                        val botRect = RectF(charCenterPx - bw * 0.5f, lineCenterPx + sep - bh * 0.5f, charCenterPx + bw * 0.5f, lineCenterPx + sep + bh * 0.5f)
-                        c.drawBitmap(dots.topBmp, null, topRect, paint)
-                        c.drawBitmap(dots.botBmp, null, botRect, paint)
-                        includeInk(topRect.left, topRect.top, topRect.right, topRect.bottom)
-                        includeInk(botRect.left, botRect.top, botRect.right, botRect.bottom)
-                    }
-                    continue
-                }
-
-                if (ch in '0'..'9' && cfg.sy >= 1.03f) {
-                    val g = stretchDigitBitmap(ch, size, cfg.font, cfg.sx, cfg.sy, ss, refMidRel)
-                    if (g != null) {
-                        val gl = charCenterPx - g.w * 0.5f + g.xCenterOffset
-                        val gt = lineCenterPx - g.h * 0.5f + g.yCenterRel
-                        c.drawBitmap(g.alphaBmp, gl, gt, paint)
-                        includeInk(gl + 1f, gt + 1f, gl + g.w - 1f, gt + g.h - 1f)
-                        continue
-                    }
-                }
-
-                probe.getTextBounds(ch.toString(), 0, 1, tb)
-                if (!tb.isEmpty) {
-                    val gl = charCenterPx + (tb.left - adv * 0.5f) * ss * cfg.sx
-                    val gr = charCenterPx + (tb.right - adv * 0.5f) * ss * cfg.sx
-                    val gt = lineCenterPx + (-refMidRel * size + tb.top) * ss * cfg.sy
-                    val gb = lineCenterPx + (-refMidRel * size + tb.bottom) * ss * cfg.sy
-                    includeInk(gl, gt, gr, gb)
-                }
-
-                c.save()
-                c.translate(charCenterPx, lineCenterPx)
-                c.scale(ss * cfg.sx, ss * cfg.sy)
-                c.drawText(ch.toString(), 0f, -refMidRel * size, paint)
-                c.restore()
-            }
-        }
-
-        val inkLeftDp = if (inkMaxX > inkMinX) (inkMinX / ss).coerceIn(0f, wDp * 0.45f) else pad
-        val inkTopDp = if (inkMaxY > inkMinY) (inkMinY / ss).coerceIn(0f, hDp * 0.45f) else pad
-        val inkRightDp = if (inkMaxX > inkMinX) (inkMaxX / ss).coerceIn(inkLeftDp + 20f, wDp) else (wDp - pad)
-        val inkBottomDp = if (inkMaxY > inkMinY) (inkMaxY / ss).coerceIn(inkTopDp + 20f, hDp) else (hDp - pad)
+        val inkLeftDp = ((rawMinX + shiftX) / ss).coerceIn(0f, wDp * 0.45f)
+        val inkTopDp = ((rawMinY + shiftY) / ss).coerceIn(0f, hDp * 0.45f)
+        val inkRightDp = ((rawMaxX + shiftX) / ss).coerceIn(inkLeftDp + 20f, wDp)
+        val inkBottomDp = ((rawMaxY + shiftY) / ss).coerceIn(inkTopDp + 20f, hDp)
 
         val fieldBmp = Bitmap.createBitmap(wPx, hPx, Bitmap.Config.ARGB_8888).apply {
             setHasAlpha(false)
@@ -637,10 +721,10 @@ class ClockGlyphRenderer(private val context: Context) {
             sx = cfg.sx,
             sy = cfg.sy,
             minuteKey = minuteKey,
-            maskKey = maskKey
+            maskKey = estKey
         )
 
-        synchronized(artifactCache) { artifactCache[maskKey] = artifact }
+        synchronized(artifactCache) { artifactCache[estKey] = artifact }
         return artifact
     }
 }
