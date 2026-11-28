@@ -1873,7 +1873,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 cfg.clockOpacity = style.clockOpacity
                 cfg.innerColor = style.innerColorHex
                 cfg.innerOpacity = style.innerOpacity
+                cfg.innerThickness = style.innerThickness
                 cfg.innerAngle = style.innerAngle
+                cfg.innerFade = style.innerFade
                 cfg.clockGlass = style.clockGlass
                 cfg.clockRefraction = style.clockRefraction
                 cfg.clockBevel = style.clockBevel
@@ -2935,45 +2937,53 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val prevCfg = cfg.copy(clockGlassPreset = !enabled)
         cfg.clockGlassPreset = enabled
         val bmp = currentWallBmp
-        if (enabled && bmp != null) {
-            store.save(cfg)
-            runSmartWallpaperHarmony(
-                bmp = bmp,
-                animated = true,
-                playEffect = true,
-                prevColorsOverride = currentColors,
-                prevConfigOverride = prevCfg
-            )
-            return
-        }
-        if (!enabled) {
+        if (enabled) {
+            cfg.clockOpacity = 8
+            cfg.clockGlass = 45
+            cfg.clockRefraction = 150
+            cfg.clockBevel = 0
+            cfg.innerOpacity = 100
+            cfg.innerThickness = 0.3f
+            cfg.innerFade = 100
+            cfg.innerColor = "#ffffff"
+            if (bmp != null) {
+                store.save(cfg)
+                runSmartWallpaperHarmony(
+                    bmp = bmp,
+                    animated = true,
+                    playEffect = true,
+                    prevColorsOverride = currentColors,
+                    prevConfigOverride = prevCfg
+                )
+                return
+            }
+            cfg.innerAngle = 36f
+        } else {
             cfg.clockGlass = 0
             cfg.clockRefraction = 127
             cfg.clockBevel = 124
-        }
-        if (!enabled && cfg.smartWallTheme && bmp != null) {
-            store.save(cfg)
-            runSmartWallpaperHarmony(
-                bmp = bmp,
-                animated = true,
-                playEffect = false,
-                prevColorsOverride = currentColors,
-                prevConfigOverride = prevCfg
-            )
-            return
+            cfg.innerOpacity = 100
+            cfg.innerThickness = 0.3f
+            cfg.innerFade = 100
+            if (cfg.smartWallTheme && bmp != null) {
+                store.save(cfg)
+                runSmartWallpaperHarmony(
+                    bmp = bmp,
+                    animated = true,
+                    playEffect = false,
+                    prevColorsOverride = currentColors,
+                    prevConfigOverride = prevCfg
+                )
+                return
+            }
+            cfg.color = "auto"
+            cfg.clockOpacity = 14
+            cfg.innerAngle = 76f
+            cfg.innerColor = "#e2e8f0"
         }
         smartWallToken++
         smartMorphAnim?.cancel()
         smartBreathScale = 1f
-        if (!enabled) {
-            cfg.color = "auto"
-            cfg.clockOpacity = 14
-            cfg.innerOpacity = 100
-            cfg.innerThickness = 0.3f
-            cfg.innerAngle = 76f
-            cfg.innerFade = 100
-            cfg.innerColor = "#e2e8f0"
-        }
         store.save(cfg)
         if (::editorSheet.isInitialized) editorSheet.syncFromConfig()
         if (bmp == null) {
@@ -3008,6 +3018,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 interpCfg.clockGlass = (prevCfg.clockGlass + (cfg.clockGlass - prevCfg.clockGlass) * t).roundToInt()
                 interpCfg.clockRefraction = (prevCfg.clockRefraction + (cfg.clockRefraction - prevCfg.clockRefraction) * t).roundToInt()
                 interpCfg.clockBevel = (prevCfg.clockBevel + (cfg.clockBevel - prevCfg.clockBevel) * t).roundToInt()
+                interpCfg.innerOpacity = (prevCfg.innerOpacity + (cfg.innerOpacity - prevCfg.innerOpacity) * t).roundToInt()
+                interpCfg.innerThickness = prevCfg.innerThickness + (cfg.innerThickness - prevCfg.innerThickness) * t
+                interpCfg.innerFade = (prevCfg.innerFade + (cfg.innerFade - prevCfg.innerFade) * t).roundToInt()
                 interpCfg.innerAngle = WallpaperThemeAI.lerpAngleDeg(prevCfg.innerAngle, cfg.innerAngle, t)
                 interpCfg.innerColor = AppConstants.toHex(WallpaperThemeAI.lerpArgb(fromInnerInt, toInnerInt, t))
                 clockView.liveGlassModeOverride = fromMode + (toMode - fromMode) * t

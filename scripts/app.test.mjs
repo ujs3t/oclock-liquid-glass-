@@ -368,13 +368,17 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(shadersKt.includes('outerDarkLip'));
   assert.ok(shadersKt.includes('glassBevelMod'));
   assert.ok(shadersKt.includes('blurBlend'));
-  assert.ok(shadersKt.includes('wallGlint'));
+  assert.ok(!shadersKt.includes('wallGlint'));
+  assert.ok(!shadersKt.includes('float fresnel'));
+  assert.ok(shadersKt.includes('glassMode * fadeAmt'));
   assert.ok(jniCpp.includes('glassMode'));
   assert.ok(jniCpp.includes('bevelWidth'));
   assert.ok(jniCpp.includes('bevelSpan'));
   assert.ok(jniCpp.includes('outerDarkLip'));
   assert.ok(jniCpp.includes('glassBevelMod'));
-  assert.ok(jniCpp.includes('wallGlint'));
+  assert.ok(!jniCpp.includes('wallGlint'));
+  assert.ok(!jniCpp.includes('float fresnel'));
+  assert.ok(jniCpp.includes('gMode * fadeAmt'));
   assert.ok(layerKt.includes('uBlurBackdrop'));
   assert.ok(layerKt.includes('uGlassMode'));
   assert.ok(layerKt.includes('uBevelWidth'));
@@ -411,6 +415,8 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(mainKt.includes('cfg.clockBevel = 124'));
   assert.ok(mainKt.includes('cfg.innerAngle = 76f'));
   assert.ok(mainKt.includes('cfg.innerColor = "#e2e8f0"'));
+  assert.ok(mainKt.includes('cfg.innerThickness = style.innerThickness'));
+  assert.ok(mainKt.includes('cfg.innerFade = style.innerFade'));
 
   const perfKt = readFileSync(ktDir + 'PerfMonitor.kt','utf8');
   assert.ok(perfKt.includes('Choreographer'));

@@ -436,17 +436,7 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
                     r *= (1.f - shadowUndercut);
                     g *= (1.f - shadowUndercut);
                     b *= (1.f - shadowUndercut);
-                    float wallGlint = std::min(0.70f, (std::pow(wallBand, 1.35f) * std::pow(std::max(0.0001f, litStrength), 1.35f) * 0.50f + std::pow(outerDarkLip, 2.0f) * std::pow(std::max(0.0001f, kLit), 1.6f) * 0.26f) * gMode);
-                    r = r * (1.f - wallGlint) + 255.f * wallGlint;
-                    g = g * (1.f - wallGlint) + 255.f * wallGlint;
-                    b = b * (1.f - wallGlint) + 255.f * wallGlint;
                 }
-            } else if (gAmt > 0.01f) {
-                float edgeBand = std::max(0.0001f, 1.f - clamp01f(depthPx / std::max(1.f, (2.2f + (10.5f - 2.2f) * bevelNorm) * ss)));
-                float fresnel = std::pow(edgeBand, 2.1f) * gAmt * 0.18f;
-                r = r * (1.f - fresnel) + 255.f * fresnel;
-                g = g * (1.f - fresnel) + 255.f * fresnel;
-                b = b * (1.f - fresnel) + 255.f * fresnel;
             }
 
             // clock tint + shadow-op top tint
@@ -458,7 +448,7 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
                 g = g * (1.f - shadowOp) + shG * shadowOp;
                 b = b * (1.f - shadowOp) + shB * shadowOp;
             }
-            // TOPMOST LAYER: Silky white inner glass shadow strictly ABOVE tint, glaze, and glass layers
+            // TOPMOST LAYER: Single unified inner shadow strictly driven by user Inner Shadow controls (both Glass & standard modes)
             if (innerOp > 0.001f && innerThick > 0.01f && depthPx < fallLimit) {
                 if (gl > 0.01f) {
                     float ridgeFade = clamp01f(gl * 1.40f);
@@ -470,10 +460,10 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
                     float fadeAmt = clamp01f(innerFade);
                     float lit = std::pow(std::max(0.0001f, clamp01f((k - 0.24f) / 0.76f)), 1.75f);
                     float dirTerm = (1.f - fadeAmt) + fadeAmt * lit;
-                    float rimBase = 0.76f + (0.90f - 0.76f) * gMode;
+                    float rimBase = 0.76f + (0.96f - 0.76f) * gMode;
                     float rimStrength = rimBase + (1.00f - rimBase) * fillOp;
                     float modVal = std::max(0.25f, std::min(1.0f, 0.32f + 0.68f * clamp01f(-ny * 0.68f - nx * ax * 0.32f + k * 0.42f)));
-                    float glassBevelMod = 1.0f + (modVal - 1.0f) * gMode;
+                    float glassBevelMod = 1.0f + (modVal - 1.0f) * (gMode * fadeAmt);
                     float rimA = clamp01f(dirTerm * decay * ridgeFade * innerOp * rimStrength * glassBevelMod);
                     rimA = std::min(rimA, 0.96f);
                     r = r * (1.f - rimA) + inR * rimA;

@@ -268,16 +268,10 @@ object LiquidGlassShaders {
                     float litStrength = clamp(kLit * 0.70 + upFace * 0.55, 0.0, 1.0);
                     float wallBand = max(0.0001, 1.0 - clamp(depthPx / max(1.0, bevelSpan * 1.05), 0.0, 1.0));
                     float outerDarkLip = max(0.0001, 1.0 - clamp(depthPx / max(1.0, mix(1.5, 2.5, clamp(bevelW / 2.2, 0.0, 1.0)) * uSS), 0.0, 1.0));
-                    // 3D curved glass bevel: deep smoked refractive shadow on unlit wall + dark outer lip + lush broad white specular bevel on lit curve
+                    // 3D curved glass bevel depth contour on shadowed rim (inner highlight/shadow comes exclusively from unified uInner* controls)
                     float shadowUndercut = (pow(wallBand, 1.45) * (1.0 - litStrength) * 0.42 + pow(outerDarkLip, 1.6) * (1.0 - litStrength * 0.65) * 0.24) * glassMode;
                     col *= (1.0 - shadowUndercut);
-                    float wallGlint = (pow(wallBand, 1.35) * pow(max(0.0001, litStrength), 1.35) * 0.50 + pow(outerDarkLip, 2.0) * pow(max(0.0001, kLit), 1.6) * 0.26) * glassMode;
-                    col = mix(col, float3(1.0), clamp(wallGlint, 0.0, 0.70));
                 }
-            } else if (glassAmt > 0.01) {
-                float edgeBand = max(0.0001, 1.0 - clamp(depthPx / max(1.0, mix(2.2, 10.5, clamp(bevelW / 2.2, 0.0, 1.0)) * uSS), 0.0, 1.0));
-                float fresnel = pow(edgeBand, 2.1) * glassAmt * 0.18;
-                col = mix(col, float3(1.0), fresnel);
             }
 
             // vertical clock tint gradient
@@ -287,8 +281,7 @@ object LiquidGlassShaders {
             // --clock-shadow-op subtle top ink glaze
             col = mix(col, uShadowTop.rgb, uShadowTop.a);
 
-            // TOPMOST LAYER: Silky white inner glass shadow strictly ABOVE tint, glaze, and glass layers
-            // Stays crisp and clearly visible even at high clock color opacity (70-100%)
+            // TOPMOST LAYER: Single unified inner shadow strictly driven by user Inner Shadow controls (both Glass & standard modes)
             float fallLimit = uInnerThick > 0.01 ? max(0.75 * uSS, (uInnerThick * 4.8 + 0.45) * uSS) : 0.0;
             if (uInnerOp > 0.001 && uInnerThick > 0.01 && depthPx < fallLimit) {
                 if (gl > 0.01) {
@@ -301,8 +294,8 @@ object LiquidGlassShaders {
                     float fadeAmt = clamp(uInnerFade, 0.0, 1.0);
                     float lit = pow(max(0.0001, clamp((k - 0.24) / 0.76, 0.0, 1.0)), 1.75);
                     float dirTerm = mix(1.0, lit, fadeAmt);
-                    float rimStrength = mix(mix(0.76, 0.90, glassMode), 1.00, fillOp);
-                    float glassBevelMod = mix(1.0, clamp(0.32 + 0.68 * clamp(-n.y * 0.68 - n.x * uInnerDir.x * 0.32 + k * 0.42, 0.0, 1.0), 0.25, 1.0), glassMode);
+                    float rimStrength = mix(mix(0.76, 0.96, glassMode), 1.00, fillOp);
+                    float glassBevelMod = mix(1.0, clamp(0.32 + 0.68 * clamp(-n.y * 0.68 - n.x * uInnerDir.x * 0.32 + k * 0.42, 0.0, 1.0), 0.25, 1.0), glassMode * fadeAmt);
                     float rimA = clamp(dirTerm * decay * ridgeFade * uInnerOp * rimStrength * glassBevelMod, 0.0, 0.96);
                     col = mix(col, uInnerColor.rgb, rimA);
                     if (fillOp > 0.12 || glassMode > 0.01) {
