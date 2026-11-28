@@ -165,7 +165,9 @@ class NotificationCenterView(
     }
 
     fun isActivelyInteracting(): Boolean =
-        clearCascadeActive || deckCycleProg > 0.005f || deckCycleCommitting || expandAnim?.isRunning == true || scrollView.isActivelyDragging()
+        visibility == VISIBLE && currentItems.isNotEmpty() && (
+            clearCascadeActive || deckCycleProg > 0.005f || deckCycleCommitting || expandAnim?.isRunning == true || scrollView.isActivelyDragging()
+        )
 
     var uiInk = Color.WHITE
     var uiDim = Color.argb(205, 255, 255, 255)
@@ -804,7 +806,10 @@ class NotificationCenterView(
             stopGapSpring()
             removeCallbacks(burstRunnable)
             burstPending = false
+            expandAnim?.cancel()
+            expandAnim = null
             expandFrac = 0f
+            scrollView.resetAllTouchAndScroll()
             swipePeekAnim?.cancel()
             deckPromoteAnim?.cancel()
             deckCycleAnim?.cancel()
@@ -885,6 +890,8 @@ class NotificationCenterView(
             }
             return
         }
+
+        clearCascadeActive = false
 
         // Remove dismissed/missing rows immediately from displayed set
         val nextIdSet = items.mapTo(HashSet()) { it.id }
@@ -1672,6 +1679,19 @@ class NotificationCenterView(
         postDelayed({
             if (myGen == clearCascadeGen) {
                 onClearAll()
+                if (clearCascadeActive && currentItems.isNotEmpty()) {
+                    clearCascadeActive = false
+                    headerRow.animate().cancel()
+                    headerRow.alpha = 1f
+                    headerRow.translationY = 0f
+                    headerRow.scaleX = 1f
+                    headerRow.scaleY = 1f
+                    clearBtn.animate().cancel()
+                    clearBtn.rotation = 0f
+                    clearBtn.scaleX = 1f
+                    clearBtn.scaleY = 1f
+                    updateCard3DAndPeek()
+                }
             }
         }, maxDelayMs + 275L)
     }
@@ -1725,7 +1745,27 @@ class NotificationCenterView(
         fun abortScrolling() {
             if (!scroller.isFinished) scroller.abortAnimation()
             rubberAnim?.cancel()
+            rubberAnim = null
             if (rubberBotY != 0f) setRubber(0f)
+        }
+
+        fun resetAllTouchAndScroll() {
+            abortScrolling()
+            activePointerId = MotionEvent.INVALID_POINTER_ID
+            dragActive = false
+            vt?.recycle()
+            vt = null
+            if (scrollY != 0) scrollTo(0, 0)
+        }
+
+        override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
+            if (disallowIntercept) {
+                activePointerId = MotionEvent.INVALID_POINTER_ID
+                dragActive = false
+                vt?.recycle()
+                vt = null
+            }
+            super.requestDisallowInterceptTouchEvent(disallowIntercept)
         }
 
         fun smoothScrollToTop() {

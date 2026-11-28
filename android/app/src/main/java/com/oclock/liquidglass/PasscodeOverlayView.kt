@@ -48,7 +48,9 @@ class PasscodeOverlayView(
 
     private val dens = resources.displayMetrics.density
     private val iosEase = PathInterpolator(0.22f, 1f, 0.36f, 1f)
-    private val bounceEase = PathInterpolator(0.22f, 1.12f, 0.36f, 1f)
+    private val openSilkEase = PathInterpolator(0.19f, 1f, 0.28f, 1f)
+    private val closeSilkEase = PathInterpolator(0.24f, 0.90f, 0.30f, 1f)
+    private val bounceEase = PathInterpolator(0.20f, 1.07f, 0.32f, 1f)
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
 
     private val wallMatrix = Matrix()
@@ -549,12 +551,12 @@ class PasscodeOverlayView(
             return
         }
         elasticCascade = true
-        val speedBoost = (abs(vyPxPerSec) / (3000f * dens)).coerceIn(0f, 0.32f)
-        val dur = ((320f + 190f * dist) * (1f - speedBoost)).roundToInt().toLong().coerceIn(260L, 480L)
+        val speedBoost = (abs(vyPxPerSec) / (3400f * dens)).coerceIn(0f, 0.18f)
+        val dur = ((480f + 260f * dist) * (1f - speedBoost)).roundToInt().toLong().coerceIn(460L, 720L)
         var cancelled = false
         anim = ValueAnimator.ofFloat(start, 1f).apply {
             duration = dur
-            interpolator = iosEase
+            interpolator = openSilkEase
             addUpdateListener { a ->
                 if (myGen == animGen && !cancelled) {
                     applyProgressFrame((a.animatedValue as Float).coerceIn(0f, 1f))
@@ -593,12 +595,12 @@ class PasscodeOverlayView(
             return
         }
         isClosing = true
-        val speedBoost = (abs(vyPxPerSec) / (3000f * dens)).coerceIn(0f, 0.35f)
-        val dur = ((250f + 150f * start) * (1f - speedBoost)).roundToInt().toLong().coerceIn(190L, 380L)
+        val speedBoost = (abs(vyPxPerSec) / (3400f * dens)).coerceIn(0f, 0.20f)
+        val dur = ((420f + 240f * start) * (1f - speedBoost)).roundToInt().toLong().coerceIn(400L, 640L)
         var cancelled = false
         anim = ValueAnimator.ofFloat(start, 0f).apply {
             duration = dur
-            interpolator = iosEase
+            interpolator = closeSilkEase
             addUpdateListener { a ->
                 if (myGen == animGen && !cancelled) {
                     val p = (a.animatedValue as Float).coerceIn(0f, 1f)
@@ -661,8 +663,8 @@ class PasscodeOverlayView(
                     val start = progress
                     var cancelled = false
                     anim = ValueAnimator.ofFloat(start, 0f).apply {
-                        duration = 320L
-                        interpolator = iosEase
+                        duration = 460L
+                        interpolator = closeSilkEase
                         addUpdateListener { a ->
                             if (myGen == animGen && !cancelled) {
                                 val p = (a.animatedValue as Float).coerceIn(0f, 1f)

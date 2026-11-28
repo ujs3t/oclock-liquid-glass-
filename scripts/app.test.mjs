@@ -212,6 +212,10 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(notifKt.includes('playFrontSettleBounce'));
   assert.ok(notifKt.includes('isActivelyInteracting'));
   assert.ok(passcodeKt.includes('applyProgressFrame'));
+  assert.ok(passcodeKt.includes('openSilkEase'));
+  assert.ok(passcodeKt.includes('closeSilkEase'));
+  assert.ok(notifKt.includes('resetAllTouchAndScroll'));
+  assert.ok(notifKt.includes('requestDisallowInterceptTouchEvent'));
   assert.ok(mainKt.includes('passcodeProgress / 0.30f'));
   assert.ok(notifKt.includes('clearCascadeActive'));
   assert.ok(notifKt.includes('cardPtrId'));

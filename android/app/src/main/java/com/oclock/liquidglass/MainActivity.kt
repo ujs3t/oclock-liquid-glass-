@@ -1739,8 +1739,14 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
     private fun isEligibleForUnlockSwipe(rawX: Float, rawY: Float): Boolean {
         val dens = resources.displayMetrics.density
+        if (isWallOrClockPulling && pullAnimator?.isRunning != true && pullY <= 0.5f && !wallView.isPressed && !clockView.isPressed) {
+            isWallOrClockPulling = false
+        }
         if (isWallOrClockPulling || pullY > 6f * dens) return false
-        if (notifExpandFrac > 0.04f) return false
+        val hasVisibleNotifs = ::notificationCenter.isInitialized &&
+            notificationCenter.visibility == View.VISIBLE &&
+            notificationCenter.displayedCount() > 0
+        if (hasVisibleNotifs && notifExpandFrac > 0.04f) return false
         if (::notificationCenter.isInitialized && notificationCenter.isActivelyInteracting()) return false
         if (isPointInView(island, rawX, rawY, 6f * dens)) return false
         if (isPointInView(shLeft, rawX, rawY, 4f * dens)) return false
