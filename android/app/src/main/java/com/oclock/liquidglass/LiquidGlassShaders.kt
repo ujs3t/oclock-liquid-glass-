@@ -182,19 +182,22 @@ object LiquidGlassShaders {
             float glassMode = clamp(uGlassMode, 0.0, 1.0);
             float glassAmt = clamp(uGlassAmt, 0.0, 1.0);
             float depthPx = max(0.0, fld.b * 255.0 / 1.5 - 1.0);
+            float2 nRaw = ((m0.gb + m1.gb + m2.gb + m3.gb) * 0.25 * 255.0 - 128.0) / 127.0;
+            float gl = length(nRaw);
 
-            float dispScale = mix(1.0, 2.25, glassMode);
-            float2 disp = dispNorm * (uMaxAbsPx * dispScale);
+            float dispScale = mix(1.0, 2.85, glassMode);
+            float2 bodyShift = -nRaw * (8.5 * uSS * smoothstep(0.0, 7.0 * uSS, depthPx) * glassMode);
+            float2 disp = dispNorm * (uMaxAbsPx * dispScale) + bodyShift;
             float2 localScaled = float2((fragCoord.x - uDstSize.x * 0.5) * uClockScale.x + uDstSize.x * 0.5, fragCoord.y * uClockScale.y);
             float2 samplePos = uClockOrigin + localScaled + disp;
 
-            float spread = mix(0.0, mix(2.7, 3.8, glassMode), glassAmt);
-            float wC = mix(1.0, 0.50, glassAmt);
+            float spread = mix(0.0, mix(2.7, 4.6, glassMode), glassAmt);
+            float wC = mix(1.0, 0.44, glassAmt);
             float wT = (1.0 - wC) * 0.25;
 
             float3 sharpCol;
             if (glassMode > 0.01) {
-                float2 prism = disp * (0.058 * glassMode);
+                float2 prism = disp * (0.072 * glassMode);
                 float3 pR = uBackdrop.eval(samplePos + prism).rgb * wC
                     + uBackdrop.eval(samplePos + prism + float2(spread, 0.0)).rgb * wT
                     + uBackdrop.eval(samplePos + prism + float2(-spread, 0.0)).rgb * wT
@@ -221,36 +224,47 @@ object LiquidGlassShaders {
 
             float3 col = sharpCol;
             if (glassMode > 0.01) {
-                // Separate frosted blur interior vs sharp caustic curved bevel
-                float2 blurPos = uClockOrigin + localScaled + disp * 0.65;
-                float3 blurCol = uBlurBackdrop.eval(blurPos).rgb;
-                float interiorMask = smoothstep(0.8 * uSS, max(2.0 * uSS, 11.5 * uSS), depthPx);
-                float blurBlend = mix(0.18, 0.80, interiorMask) * mix(0.50, 0.95, glassAmt) * glassMode;
+                // Wide creamy iOS 26 frosted crystal bokeh inside body vs bent optical caustics on curved outer bezel
+                float2 blurPos = uClockOrigin + localScaled + disp * 0.42;
+                float bRad = 22.0 * glassMode;
+                float3 blurCol = uBlurBackdrop.eval(blurPos).rgb * 0.28
+                    + uBlurBackdrop.eval(blurPos + float2(bRad, 0.0)).rgb * 0.11
+                    + uBlurBackdrop.eval(blurPos + float2(-bRad, 0.0)).rgb * 0.11
+                    + uBlurBackdrop.eval(blurPos + float2(0.0, bRad)).rgb * 0.11
+                    + uBlurBackdrop.eval(blurPos + float2(0.0, -bRad)).rgb * 0.11
+                    + uBlurBackdrop.eval(blurPos + float2(bRad * 0.72, bRad * 0.72)).rgb * 0.07
+                    + uBlurBackdrop.eval(blurPos + float2(-bRad * 0.72, bRad * 0.72)).rgb * 0.07
+                    + uBlurBackdrop.eval(blurPos + float2(bRad * 0.72, -bRad * 0.72)).rgb * 0.07
+                    + uBlurBackdrop.eval(blurPos + float2(-bRad * 0.72, -bRad * 0.72)).rgb * 0.07;
+                float interiorMask = smoothstep(0.45 * uSS, max(1.8 * uSS, 4.6 * uSS), depthPx);
+                float blurBlend = mix(0.28, 0.96, interiorMask) * mix(0.60, 1.0, glassAmt) * glassMode;
                 col = mix(sharpCol, blurCol, blurBlend);
             }
 
-            // Liquid Glass crystal vibrancy & edge depth scaled by uGlassAmt + uGlassMode
+            // Liquid Glass crystal vibrancy & depth tone mapping
             float lum = dot(col, float3(0.2126, 0.7152, 0.0722));
-            float satBoost = mix(1.0, mix(1.28, 1.38, glassMode), glassAmt);
-            float brightBoost = mix(1.0, mix(1.055, 1.09, glassMode), glassAmt);
+            float satBoost = mix(1.0, mix(1.28, 1.24, glassMode), glassAmt);
+            float brightBoost = mix(1.0, mix(1.055, 1.06, glassMode), glassAmt);
             col = clamp((lum + (col - lum) * satBoost) * brightBoost, 0.0, 1.0);
 
-            float2 nRaw = ((m0.gb + m1.gb + m2.gb + m3.gb) * 0.25 * 255.0 - 128.0) / 127.0;
-            float gl = length(nRaw);
-
             if (glassMode > 0.01) {
-                // Frosted crystal atmospheric body so digits never disappear even over pitch-black space
-                col = mix(col, max(col, float3(0.14, 0.15, 0.18)), 0.44 * glassMode);
+                // Sleek translucent smoked-crystal floor over pitch-black space (keeps dark areas glassy, not flat brown-grey)
+                col = mix(col, max(col, float3(0.085, 0.095, 0.115)), 0.36 * glassMode);
+                // Subtle vertical light bloom across top of frosted crystal face (like sunlit glass in 3:47 & 4:58)
+                float topGlow = pow(max(0.0001, 1.0 - clamp(uv.y * 1.15, 0.0, 1.0)), 1.6) * 0.10 * glassMode;
+                col = mix(col, float3(1.0), topGlow);
                 if (gl > 0.01) {
                     float2 nCrystal = nRaw / gl;
                     float kLit = abs(dot(nCrystal, uInnerDir));
-                    float wallBand = max(0.0001, 1.0 - clamp(depthPx / max(1.0, 7.2 * uSS), 0.0, 1.0));
-                    float edgeSharp = max(0.0001, 1.0 - clamp(depthPx / max(1.0, 2.4 * uSS), 0.0, 1.0));
-                    // Opposed optical refraction depth: subtle dark undercut on unlit side + bright liquid sheen on lit wall
-                    float shadowUndercut = pow(wallBand, 1.65) * (1.0 - kLit) * 0.24 * glassMode;
+                    float upFace = clamp(-nCrystal.y * 0.68 - nCrystal.x * uInnerDir.x * 0.32, 0.0, 1.0);
+                    float litStrength = clamp(kLit * 0.70 + upFace * 0.55, 0.0, 1.0);
+                    float wallBand = max(0.0001, 1.0 - clamp(depthPx / max(1.0, 10.8 * uSS), 0.0, 1.0));
+                    float outerDarkLip = max(0.0001, 1.0 - clamp(depthPx / max(1.0, 1.7 * uSS), 0.0, 1.0));
+                    // 3D curved glass bevel: deep smoked refractive shadow on unlit wall + dark outer lip + lush broad white specular bevel on lit curve
+                    float shadowUndercut = (pow(wallBand, 1.45) * (1.0 - litStrength) * 0.42 + pow(outerDarkLip, 1.6) * (1.0 - litStrength * 0.65) * 0.24) * glassMode;
                     col *= (1.0 - shadowUndercut);
-                    float wallGlint = (pow(wallBand, 1.55) * pow(max(0.0001, kLit), 1.45) * 0.30 + pow(edgeSharp, 1.7) * 0.20) * glassMode;
-                    col = mix(col, float3(1.0), clamp(wallGlint, 0.0, 0.48));
+                    float wallGlint = (pow(wallBand, 1.35) * pow(max(0.0001, litStrength), 1.35) * 0.48 + pow(outerDarkLip, 2.0) * pow(max(0.0001, kLit), 1.6) * 0.26) * glassMode;
+                    col = mix(col, float3(1.0), clamp(wallGlint, 0.0, 0.68));
                 }
             } else if (glassAmt > 0.01) {
                 float edgeBand = max(0.0001, 1.0 - clamp(depthPx / max(1.0, 2.6 * uSS), 0.0, 1.0));
@@ -275,12 +289,13 @@ object LiquidGlassShaders {
                     float k = abs(dot(n, uInnerDir));
                     float t = clamp(depthPx / fallLimit, 0.0, 1.0);
                     float fillOp = clamp(max(tint.a, uShadowTop.a), 0.0, 1.0);
-                    float decay = pow(1.0 - t, mix(2.40, 1.72, fillOp));
+                    float decay = pow(max(0.0001, 1.0 - t), mix(2.40, 1.72, fillOp));
                     float fadeAmt = clamp(uInnerFade, 0.0, 1.0);
-                    float lit = pow(clamp((k - 0.24) / 0.76, 0.0, 1.0), 1.75);
+                    float lit = pow(max(0.0001, clamp((k - 0.24) / 0.76, 0.0, 1.0)), 1.75);
                     float dirTerm = mix(1.0, lit, fadeAmt);
-                    float rimStrength = mix(mix(0.76, 0.92, glassMode), 1.00, fillOp);
-                    float rimA = clamp(dirTerm * decay * ridgeFade * uInnerOp * rimStrength, 0.0, 0.96);
+                    float rimStrength = mix(mix(0.76, 0.90, glassMode), 1.00, fillOp);
+                    float glassBevelMod = mix(1.0, clamp(0.32 + 0.68 * clamp(-n.y * 0.68 - n.x * uInnerDir.x * 0.32 + k * 0.42, 0.0, 1.0), 0.25, 1.0), glassMode);
+                    float rimA = clamp(dirTerm * decay * ridgeFade * uInnerOp * rimStrength * glassBevelMod, 0.0, 0.96);
                     col = mix(col, uInnerColor.rgb, rimA);
                     if (fillOp > 0.12 || glassMode > 0.01) {
                         col = clamp(col + uInnerColor.rgb * (rimA * max(fillOp, glassMode * 0.45) * 0.22), 0.0, 1.0);

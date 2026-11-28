@@ -359,10 +359,15 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(appStateKt.includes('clockGlassPreset'));
   assert.ok(shadersKt.includes('uBlurBackdrop'));
   assert.ok(shadersKt.includes('uGlassMode'));
-  assert.ok(shadersKt.includes('2.25'));
+  assert.ok(shadersKt.includes('2.85'));
+  assert.ok(shadersKt.includes('bodyShift'));
+  assert.ok(shadersKt.includes('outerDarkLip'));
+  assert.ok(shadersKt.includes('glassBevelMod'));
   assert.ok(shadersKt.includes('blurBlend'));
   assert.ok(shadersKt.includes('wallGlint'));
   assert.ok(jniCpp.includes('glassMode'));
+  assert.ok(jniCpp.includes('outerDarkLip'));
+  assert.ok(jniCpp.includes('glassBevelMod'));
   assert.ok(jniCpp.includes('wallGlint'));
   assert.ok(layerKt.includes('uBlurBackdrop'));
   assert.ok(layerKt.includes('uGlassMode'));

@@ -291,25 +291,25 @@ object WallpaperThemeAI {
 
         when {
             glassPreset -> {
-                // Ultra-refractive 3D Crystal "Glass" mode (high Snell displacement + frosted blur separation + pure specular edge)
+                // Ultra-refractive 3D Crystal "Glass" mode (high Snell displacement + frosted blur separation + sheer translucent crystal)
                 if (isUniformBrightClockBg) {
                     targetHue = if (peakHasColor) heroHue else 214f
-                    targetSatPct = if (peakHasColor) (heroSat * 56f + 16f).coerceIn(24f, 64f) else 22f
-                    targetLitPct = 42f
-                    clockOpacity = (20f + (clockLum - 0.66f).coerceIn(0f, 0.34f) * 20f).roundToInt().coerceIn(20, 28)
+                    targetSatPct = if (peakHasColor) (heroSat * 52f + 14f).coerceIn(22f, 58f) else 20f
+                    targetLitPct = 44f
+                    clockOpacity = (14f + (clockLum - 0.66f).coerceIn(0f, 0.34f) * 16f).roundToInt().coerceIn(14, 22)
                 } else if (peakHasColor && (meanSat >= 0.14f || heroChroma > 0.10f)) {
                     targetHue = heroHue
-                    targetSatPct = (heroSat * 52f + 18f).coerceIn(24f, 68f)
-                    targetLitPct = (78f + clockSpread * 8f).coerceIn(76f, 86f)
-                    clockOpacity = (15f + meanSat * 10f).roundToInt().coerceIn(15, 22)
+                    targetSatPct = (heroSat * 46f + 16f).coerceIn(20f, 62f)
+                    targetLitPct = (84f + clockSpread * 6f).coerceIn(82f, 92f)
+                    clockOpacity = (7f + meanSat * 8f).roundToInt().coerceIn(7, 11)
                 } else {
                     targetHue = if (peakHasColor && heroChroma > 0.03f) heroHue else 214f
-                    targetSatPct = if (peakHasColor) (heroSat * 20f).coerceIn(6f, 18f) else 12f
-                    targetLitPct = 82f
-                    clockOpacity = 16
+                    targetSatPct = if (peakHasColor) (heroSat * 18f).coerceIn(6f, 16f) else 10f
+                    targetLitPct = 88f
+                    clockOpacity = 8
                 }
-                clockGlass = (92f + detailBoost * 0.20f).roundToInt().coerceIn(92, 97)
-                clockRefraction = (142f + detailBoost * 0.35f).roundToInt().coerceIn(142, 150)
+                clockGlass = (94f + detailBoost * 0.18f).roundToInt().coerceIn(94, 98)
+                clockRefraction = (146f + detailBoost * 0.25f).roundToInt().coerceIn(146, 150)
                 profileLabel = "مظهر Glass الكريستالي حسب خلفيتك"
             }
 
@@ -372,11 +372,11 @@ object WallpaperThemeAI {
             if (clockLum < 0.50f) {
                 targetLitPct = max(targetLitPct, 82f)
                 chosenColor = AppConstants.hslToRgbInt(targetHue, min(targetSatPct, 66f), targetLitPct)
-                clockOpacity = max(clockOpacity, if (glassPreset) 18 else 24)
+                clockOpacity = max(clockOpacity, if (glassPreset) 10 else 24)
             } else {
                 targetLitPct = min(targetLitPct, 34f)
                 chosenColor = AppConstants.hslToRgbInt(targetHue, max(targetSatPct, 32f), targetLitPct)
-                clockOpacity = max(clockOpacity, if (glassPreset) 24 else 32)
+                clockOpacity = max(clockOpacity, if (glassPreset) 16 else 32)
             }
         }
 
