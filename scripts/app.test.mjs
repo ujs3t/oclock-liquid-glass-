@@ -138,7 +138,10 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(libKt.includes('boxBlurPass'));
   assert.ok(libKt.includes('ensureCaptureAndBlur'));
   assert.ok(libKt.includes('setImeBottomPx'));
-  assert.ok(libKt.includes('listView.draw(c)'));
+  assert.ok(libKt.includes('ensureSnapshot'));
+  assert.ok(libKt.includes('LAYER_TYPE_HARDWARE'));
+  assert.ok(libKt.includes('ArtThumbView'));
+  assert.ok(libKt.includes('isFlinging'));
   const rowCardSlice = libKt.slice(libKt.indexOf('class GlassTrackRowCard'), libKt.indexOf('fun drawLibraryGlyph'));
   assert.ok(!rowCardSlice.includes('LiquidGlassCardHelper'));
 

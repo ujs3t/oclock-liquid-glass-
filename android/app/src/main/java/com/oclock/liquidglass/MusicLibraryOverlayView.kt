@@ -40,10 +40,9 @@ import android.widget.AbsListView
 import android.widget.BaseAdapter
 import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ListView
 import android.widget.TextView
+import android.widget.ListView
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -91,7 +90,6 @@ class MusicLibraryOverlayView(
     private val allTracks = ArrayList<TrackInfo>()
     private val filteredIndices = ArrayList<Int>()
     private val trackAdapter = TrackAdapter()
-    private val fallbackArtCache = HashMap<String, Bitmap>()
     private val tmpVisRect = Rect()
     private var permRequestCount = 0
 
@@ -188,8 +186,6 @@ class MusicLibraryOverlayView(
         setOnClickListener { close() }
 
         panelCard = GlassSheetCard(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutDirection = LAYOUT_DIRECTION_RTL
             isClickable = true
             isFocusable = true
             isFocusableInTouchMode = true
@@ -199,8 +195,6 @@ class MusicLibraryOverlayView(
                     outline.setRoundRect(0, 0, v.width, v.height, 30f * dens)
                 }
             }
-            val padH = (12f * dens).roundToInt()
-            setPadding(padH, (6f * dens).roundToInt(), padH, 0)
             layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
                 val side = (8f * dens).roundToInt()
                 leftMargin = side
@@ -223,7 +217,7 @@ class MusicLibraryOverlayView(
         }
         grabberWrap.addView(grabberPill)
         attachDragDismiss(grabberWrap)
-        panelCard.addView(grabberWrap)
+        panelCard.contentCol.addView(grabberWrap)
 
         // Sticky Liquid Glass Header (unified identity with EditorSheetView)
         headerRow = LinearLayout(context).apply {
@@ -267,7 +261,7 @@ class MusicLibraryOverlayView(
         headerRow.addView(titleCol)
         headerRow.addView(doneBtn)
         attachDragDismiss(headerRow)
-        panelCard.addView(headerRow)
+        panelCard.contentCol.addView(headerRow)
 
         // Liquid Glass Action Pills: Shuffle + Sequential + Refresh
         val actRow = LinearLayout(context).apply {
@@ -323,7 +317,7 @@ class MusicLibraryOverlayView(
         actRow.addView(shuffleBtn)
         actRow.addView(sequentialBtn)
         actRow.addView(refreshBtn)
-        panelCard.addView(actRow)
+        panelCard.contentCol.addView(actRow)
 
         // Stage hosting scrolling list + detached floating Liquid Glass search capsule
         listStage = FrameLayout(context).apply {
@@ -393,7 +387,7 @@ class MusicLibraryOverlayView(
         permissionBox.addView(manualPickBtn)
         listStage.addView(permissionBox)
 
-        // Silky 120fps Track List with elastic rubber-band overscroll
+        // Silky 120fps Track List with elastic rubber-band overscroll & fling-paused I/O
         listView = RubberMusicListView(context).apply {
             divider = null
             dividerHeight = 0
@@ -401,10 +395,12 @@ class MusicLibraryOverlayView(
             cacheColorHint = Color.TRANSPARENT
             isVerticalScrollBarEnabled = false
             clipToPadding = false
+            setFriction(ViewConfiguration.getScrollFriction() * 0.72f)
             setPadding(0, (4f * dens).roundToInt(), 0, baseListBottomPadPx)
             layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
             adapter = trackAdapter
             onScrollOrRubber = { searchBox.markBackdropDirty() }
+            onFlingSettled = { loadVisibleRowPosters() }
             addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
                 searchBox.markBackdropDirty()
             }
@@ -421,7 +417,7 @@ class MusicLibraryOverlayView(
         }
         listStage.addView(listView)
 
-        // Detached Floating Liquid Glass Search Capsule with live refraction + blur + rubbery spring
+        // Detached Floating Liquid Glass Search Capsule with live refraction + blur + rubbery gel
         searchBox = GlassSearchBar(context).apply {
             layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, (54f * dens).roundToInt(), Gravity.BOTTOM).apply {
                 leftMargin = (8f * dens).roundToInt()
@@ -471,12 +467,13 @@ class MusicLibraryOverlayView(
         searchBox.addView(searchClearBtn)
         listStage.addView(searchBox)
 
-        panelCard.addView(listStage)
+        panelCard.contentCol.addView(listStage)
         addView(panelCard)
     }
 
     fun refreshGlass() {
         if (visibility == VISIBLE) {
+            panelCard.invalidateGlass()
             searchBox.markBackdropDirty()
             invalidateVisibleGlass(panelCard)
         }
@@ -504,12 +501,25 @@ class MusicLibraryOverlayView(
         return ox to oy
     }
 
+    private fun computeRestShellOrigin(view: View): Pair<Float, Float> {
+        val rootShell = getRootShell()
+        var ox = view.left.toFloat()
+        var oy = view.top.toFloat()
+        var p = view.parent as? View
+        while (p != null && p !== rootShell) {
+            ox += p.left - p.scrollX
+            oy += p.top - p.scrollY
+            p = p.parent as? View
+        }
+        return ox to oy
+    }
+
     private fun invalidateVisibleGlass(v: View) {
         if (v.visibility != View.VISIBLE) return
-        if (v is GlassSheetCard || v is GlassPillButton || v is GlassActionButton ||
+        if (v is GlassPillButton || v is GlassActionButton ||
             v is GlassSearchBar || v is GlassSectionCard
         ) {
-            if (v === panelCard || v.getLocalVisibleRect(tmpVisRect)) {
+            if (v.getLocalVisibleRect(tmpVisRect)) {
                 v.invalidate()
             }
         }
@@ -531,8 +541,6 @@ class MusicLibraryOverlayView(
         panelCard.scaleY = sheetScale
         val slideFade = (1f - (sheetSlideY / (visH * 0.78f)).coerceIn(0f, 1f)).let { it * it }
         panelCard.alpha = if (sheetClosing || sheetSlideY > 0.5f) slideFade else 1f
-        searchBox.markBackdropDirty()
-        invalidateVisibleGlass(panelCard)
     }
 
     private fun startSheetSpring() {
@@ -706,6 +714,7 @@ class MusicLibraryOverlayView(
         sheetScale = if (wasMidClose) sheetScale else 0.96f
         targetScale = 1f
         velScale = 0f
+        panelCard.invalidateGlass()
         applySheetVisualState()
         startSheetSpring()
         animateScrimTo(64, 230L)
@@ -758,6 +767,39 @@ class MusicLibraryOverlayView(
         allTracks.addAll(tracks)
         applyFilter(searchInput.text?.toString() ?: "")
         updateHeaderState()
+    }
+
+    private fun loadVisibleRowPosters() {
+        if (!isOpen || listView.isFlinging) return
+        var anyUpdated = false
+        for (i in 0 until listView.childCount) {
+            val child = listView.getChildAt(i) ?: continue
+            val holder = child.tag as? RowHolder ?: continue
+            val track = holder.boundTrack ?: continue
+            if (holder.artHasBitmap) continue
+            val targetUri = track.contentUri ?: continue
+            val cached = media.getCachedPoster(track, 112)
+            if (cached != null) {
+                holder.art.bind(cached, track.c1, track.c2, track.c3)
+                holder.artHasBitmap = true
+                holder.rowSnapDirty = true
+                anyUpdated = true
+            } else {
+                media.loadTrackPoster(
+                    track,
+                    112,
+                    shouldDecode = { isOpen && !listView.isFlinging && holder.boundUri == targetUri }
+                ) { bmp ->
+                    if (bmp != null && holder.boundUri == targetUri) {
+                        holder.art.bind(bmp, track.c1, track.c2, track.c3)
+                        holder.artHasBitmap = true
+                        holder.rowSnapDirty = true
+                        searchBox.markBackdropDirty()
+                    }
+                }
+            }
+        }
+        if (anyUpdated) searchBox.markBackdropDirty()
     }
 
     private fun updateHeaderState() {
@@ -826,41 +868,35 @@ class MusicLibraryOverlayView(
         return "$m:${s.toString().padStart(2, '0')}"
     }
 
-    private fun getFallbackArt(track: TrackInfo, sz: Int): Bitmap {
-        val k = "${track.c1}|${track.c2}|${track.c3}|$sz"
-        return fallbackArtCache.getOrPut(k) {
-            val bmp = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888)
-            val c = Canvas(bmp)
-            val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                shader = LinearGradient(
-                    0f, 0f, sz.toFloat(), sz.toFloat(),
-                    intArrayOf(track.c1, track.c2, track.c3),
-                    floatArrayOf(0f, 0.55f, 1f),
-                    Shader.TileMode.CLAMP
-                )
-            }
-            c.drawRect(0f, 0f, sz.toFloat(), sz.toFloat(), p)
-            val tp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.argb(190, 255, 255, 255)
-                textAlign = Paint.Align.CENTER
-                textSize = sz * 0.44f
-            }
-            c.drawText("♪", sz * 0.5f, sz * 0.65f, tp)
-            bmp
-        }
-    }
-
-    // ─────────────── Liquid Glass Outer Sheet & Inset Cards ───────────────
-    private inner class GlassSheetCard(context: Context) : LinearLayout(context) {
+    // ─────────────── Hardware-Cached Sheet Backdrop (Zero Shader Re-Execution During Scroll) ───────────────
+    private inner class GlassSheetCard(context: Context) : FrameLayout(context) {
         private val glassHelper = LiquidGlassCardHelper(
             backdrop, perf, 30f, 24f, 16f, 1.44f, 0.24f, innerShadow = 0.16f, useBlurredBackdrop = true
         )
-        init {
-            setWillNotDraw(false)
+        private val sheetBgView: View = object : View(context) {
+            override fun onDraw(canvas: Canvas) {
+                val (ox, oy) = computeRestShellOrigin(this)
+                glassHelper.draw(this, canvas, Color.argb(198, 12, 14, 22), ox, oy)
+            }
+        }.apply {
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+            setLayerType(LAYER_TYPE_HARDWARE, null)
         }
-        override fun onDraw(canvas: Canvas) {
-            val (ox, oy) = computeShellOrigin(this)
-            glassHelper.draw(this, canvas, Color.argb(198, 12, 14, 22), ox, oy)
+        val contentCol = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutDirection = LAYOUT_DIRECTION_RTL
+            val padH = (12f * dens).roundToInt()
+            setPadding(padH, (6f * dens).roundToInt(), padH, 0)
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+        }
+
+        init {
+            addView(sheetBgView)
+            addView(contentCol)
+        }
+
+        fun invalidateGlass() {
+            sheetBgView.invalidate()
         }
     }
 
@@ -888,14 +924,14 @@ class MusicLibraryOverlayView(
         }
     }
 
-    // ─────────────── Detached Floating Liquid Glass Search Capsule (Live Blur + Refraction + Rubbery Gel) ───────────────
+    // ─────────────── Detached Floating Liquid Glass Search Capsule (Row-Cached Live Blur + Refraction + Gel Spring) ───────────────
     private inner class GlassSearchBar(context: Context) : LinearLayout(context) {
         private val touchSlop = min(ViewConfiguration.get(context).scaledTouchSlop.toFloat(), 8f * dens)
         private val dragSuppressClickDist = 14f * dens
         private val maxRubberX = 14f * dens
         private val maxRubberY = 10f * dens
-        private val padDp = 18f
-        private val capScale = (1.35f / dens).coerceIn(0.32f, 0.55f)
+        private val padDp = 16f
+        private val capScale = (0.78f / dens).coerceIn(0.22f, 0.34f)
 
         private var runtimeShader: RuntimeShader? =
             if (Build.VERSION.SDK_INT >= 33) LiquidGlassShaders.createCardShader() else null
@@ -1232,10 +1268,7 @@ class MusicLibraryOverlayView(
                 backdropDirty = true
             }
 
-            val nowMs = SystemClock.uptimeMillis()
             if (!backdropDirty && liveShader != null) return
-            if (!backdropDirty && nowMs - lastCaptureMs < 8L) return
-            lastCaptureMs = nowMs
             backdropDirty = false
 
             val rawBmp = rawCapBmp ?: return
@@ -1264,29 +1297,31 @@ class MusicLibraryOverlayView(
                 } catch (_: Throwable) {}
             }
 
-            // 2. Capture live scrolling song rows + titles + album covers right behind this pill
+            // 2. Blit cached 0.26x snapshots ONLY for the 1-2 rows behind the floating search pill
             if (listView.visibility == VISIBLE && listView.width > 0 && listView.height > 0) {
                 try {
                     val relX = this.x - listView.x
                     val relY = this.y - listView.y
-                    c.save()
-                    c.scale(capScale, capScale)
-                    c.translate(padPx - relX, padPx - relY)
-                    c.clipRect(
-                        relX - padPx - 4f,
-                        relY - padPx - 4f,
-                        relX + w + padPx + 4f,
-                        relY + h + padPx + 4f
-                    )
-                    listView.draw(c)
-                    c.restore()
+                    val visTop = relY - padPx - 4f
+                    val visBot = relY + h + padPx + 4f
+                    for (i in 0 until listView.childCount) {
+                        val child = listView.getChildAt(i) ?: continue
+                        if (child.visibility != VISIBLE) continue
+                        val cTop = child.top + child.translationY
+                        val cBot = child.bottom + child.translationY
+                        if (cBot < visTop || cTop > visBot) continue
+                        val holder = child.tag as? RowHolder ?: continue
+                        val snap = holder.ensureSnapshot(child, capScale) ?: continue
+                        val dstX = (padPx - relX + child.left + child.translationX) * capScale
+                        val dstY = (padPx - relY + cTop) * capScale
+                        c.drawBitmap(snap, dstX, dstY, wallCapPaint)
+                    }
                 } catch (_: Throwable) {}
             }
 
-            // 3. Two-pass separable optical Gaussian-like blur (~2.4dp creamy frosting)
+            // 3. Single ultra-fast 1-pass separable box blur (~21k px -> <0.1ms)
             rawBmp.getPixels(pixBuf, 0, capW, 0, 0, capW, capH)
-            boxBlurPass(pixBuf, tmpBuf, capW, capH, 3)
-            boxBlurPass(pixBuf, tmpBuf, capW, capH, 4)
+            boxBlurPass(pixBuf, tmpBuf, capW, capH, 2)
             blurBmp.setPixels(pixBuf, 0, capW, 0, 0, capW, capH)
 
             val sh = BitmapShader(blurBmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
@@ -1561,24 +1596,36 @@ class MusicLibraryOverlayView(
         }
     }
 
-    // Ultra-lightweight pure-Canvas glass row (zero per-row AGSL/CPU blur overhead -> locked 120fps scrolling)
+    // Zero-onDraw GPU GradientDrawable row card (zero per-row allocation or shader work during scroll)
     private inner class GlassTrackRowCard(context: Context) : LinearLayout(context) {
-        private val radiusPx = 18f * dens
-        private val cardRect = RectF()
-        private val rimRect = RectF()
-        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-        private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = max(1f, 0.95f * dens)
+        private val cornerPx = 18f * dens
+        private val strokePx = max(1, (0.9f * dens).roundToInt())
+        private val normalBg = GradientDrawable().apply {
+            cornerRadius = cornerPx
+            setColor(Color.argb(114, 22, 27, 41))
+            setStroke(strokePx, Color.argb(38, 255, 255, 255))
         }
-        private var rimDirty = true
+        private val pressedBg = GradientDrawable().apply {
+            cornerRadius = cornerPx
+            setColor(Color.argb(148, 36, 44, 66))
+            setStroke(strokePx, Color.argb(64, 255, 255, 255))
+        }
+        private val activeBg = GradientDrawable().apply {
+            cornerRadius = cornerPx
+            setColor(Color.argb(148, 24, 74, 132))
+            setStroke(strokePx, Color.argb(110, 125, 211, 252))
+        }
+        private val activePressedBg = GradientDrawable().apply {
+            cornerRadius = cornerPx
+            setColor(Color.argb(176, 32, 92, 156))
+            setStroke(strokePx, Color.argb(136, 125, 211, 252))
+        }
 
         var isActiveTrack = false
             set(value) {
                 if (field != value) {
                     field = value
-                    rimDirty = true
-                    invalidate()
+                    syncDrawable()
                 }
             }
 
@@ -1586,7 +1633,7 @@ class MusicLibraryOverlayView(
             set(value) {
                 if (field != value) {
                     field = value
-                    invalidate()
+                    syncDrawable()
                 }
             }
 
@@ -1594,42 +1641,91 @@ class MusicLibraryOverlayView(
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutDirection = LAYOUT_DIRECTION_LTR
-            setWillNotDraw(false)
             setPadding((10f * dens).roundToInt(), (7f * dens).roundToInt(), (12f * dens).roundToInt(), (7f * dens).roundToInt())
+            background = normalBg
+        }
+
+        private fun syncDrawable() {
+            background = when {
+                isActiveTrack && isRowPressed -> activePressedBg
+                isActiveTrack -> activeBg
+                isRowPressed -> pressedBg
+                else -> normalBg
+            }
+        }
+    }
+
+    // Fixed-bounds GPU rounded album thumbnail view (zero ImageView requestLayout or clipToOutline overhead)
+    private inner class ArtThumbView(context: Context) : View(context) {
+        private val cornerPx = 11f * dens
+        private val rect = RectF()
+        private val artPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        private val gradPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val notePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(195, 255, 255, 255)
+            textAlign = Paint.Align.CENTER
+        }
+        private val bmpMatrix = Matrix()
+        private var curBmp: Bitmap? = null
+        private var c1 = 0
+        private var c2 = 0
+        private var c3 = 0
+        private var shaderDirty = false
+
+        fun bind(bmp: Bitmap?, col1: Int, col2: Int, col3: Int) {
+            val bmpChanged = curBmp !== bmp
+            val colChanged = c1 != col1 || c2 != col2 || c3 != col3
+            if (!bmpChanged && !colChanged) return
+            curBmp = bmp
+            c1 = col1
+            c2 = col2
+            c3 = col3
+            shaderDirty = true
+            invalidate()
         }
 
         override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
             super.onSizeChanged(w, h, oldw, oldh)
-            val halfStroke = rimPaint.strokeWidth * 0.5f
-            cardRect.set(0f, 0f, w.toFloat(), h.toFloat())
-            rimRect.set(halfStroke, halfStroke, max(halfStroke, w - halfStroke), max(halfStroke, h - halfStroke))
-            rimDirty = true
+            rect.set(0f, 0f, w.toFloat(), h.toFloat())
+            notePaint.textSize = min(w, h) * 0.44f
+            shaderDirty = true
         }
 
         override fun onDraw(canvas: Canvas) {
             val w = width.toFloat()
             val h = height.toFloat()
-            if (w <= 1f || h <= 1f) return
-            if (rimDirty) {
-                rimDirty = false
-                rimPaint.shader = LinearGradient(
-                    0f, 0f, 0f, h,
-                    intArrayOf(
-                        if (isActiveTrack) Color.argb(128, 125, 211, 252) else Color.argb(72, 255, 255, 255),
-                        Color.argb(14, 255, 255, 255)
-                    ),
-                    null,
-                    Shader.TileMode.CLAMP
-                )
+            if (w <= 0f || h <= 0f) return
+            val bmp = curBmp
+            if (bmp != null && !bmp.isRecycled) {
+                if (shaderDirty) {
+                    shaderDirty = false
+                    val bw = max(1f, bmp.width.toFloat())
+                    val bh = max(1f, bmp.height.toFloat())
+                    val scale = max(w / bw, h / bh)
+                    val dx = (w - bw * scale) * 0.5f
+                    val dy = (h - bh * scale) * 0.5f
+                    bmpMatrix.reset()
+                    bmpMatrix.setScale(scale, scale)
+                    bmpMatrix.postTranslate(dx, dy)
+                    val sh = BitmapShader(bmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+                    sh.setLocalMatrix(bmpMatrix)
+                    artPaint.shader = sh
+                }
+                canvas.drawRoundRect(rect, cornerPx, cornerPx, artPaint)
+            } else {
+                if (shaderDirty) {
+                    shaderDirty = false
+                    gradPaint.shader = LinearGradient(
+                        0f, 0f, w, h,
+                        intArrayOf(c1, c2, c3),
+                        floatArrayOf(0f, 0.55f, 1f),
+                        Shader.TileMode.CLAMP
+                    )
+                }
+                canvas.drawRoundRect(rect, cornerPx, cornerPx, gradPaint)
+                val cy = h * 0.5f - (notePaint.descent() + notePaint.ascent()) * 0.5f
+                canvas.drawText("♪", w * 0.5f, cy, notePaint)
             }
-            fillPaint.color = when {
-                isActiveTrack && isRowPressed -> Color.argb(176, 32, 92, 156)
-                isActiveTrack -> Color.argb(148, 24, 74, 132)
-                isRowPressed -> Color.argb(148, 36, 44, 66)
-                else -> Color.argb(114, 22, 27, 41)
-            }
-            canvas.drawRoundRect(cardRect, radiusPx, radiusPx, fillPaint)
-            canvas.drawRoundRect(rimRect, radiusPx, radiusPx, rimPaint)
         }
     }
 
@@ -1730,14 +1826,17 @@ class MusicLibraryOverlayView(
         private var velRubber = 0f
         private var springReboundRunning = false
         private var reboundLastNs = 0L
-        private var pressedCard: GlassTrackRowCard? = null
+        private var pressedHolder: RowHolder? = null
 
         private var curScrollState = OnScrollListener.SCROLL_STATE_IDLE
         private var lastFlingVelY = 0f
         private var flingStartMs = 0L
         private var didScrollDuringFling = false
         private var flingBounceUsed = false
+        val isFlinging: Boolean
+            get() = curScrollState == OnScrollListener.SCROLL_STATE_FLING
         var onScrollOrRubber: (() -> Unit)? = null
+        var onFlingSettled: (() -> Unit)? = null
 
         private val reboundCallback = object : Choreographer.FrameCallback {
             override fun doFrame(frameTimeNanos: Long) {
@@ -1766,7 +1865,11 @@ class MusicLibraryOverlayView(
             overScrollMode = OVER_SCROLL_NEVER
             setOnScrollListener(object : OnScrollListener {
                 override fun onScrollStateChanged(view: AbsListView?, scrollState: Int) {
+                    val wasFling = curScrollState == OnScrollListener.SCROLL_STATE_FLING
                     curScrollState = scrollState
+                    if (wasFling && scrollState != OnScrollListener.SCROLL_STATE_FLING) {
+                        onFlingSettled?.invoke()
+                    }
                     if (scrollState != OnScrollListener.SCROLL_STATE_IDLE) {
                         onScrollOrRubber?.invoke()
                     }
@@ -1798,6 +1901,7 @@ class MusicLibraryOverlayView(
         fun abortScrolling() {
             springReboundRunning = false
             Choreographer.getInstance().removeFrameCallback(reboundCallback)
+            curScrollState = OnScrollListener.SCROLL_STATE_IDLE
             rawPull = 0f
             velRubber = 0f
             flingBounceUsed = true
@@ -1849,8 +1953,10 @@ class MusicLibraryOverlayView(
         }
 
         private fun releasePressedCard() {
-            pressedCard?.isRowPressed = false
-            pressedCard = null
+            val h = pressedHolder ?: return
+            pressedHolder = null
+            h.card.isRowPressed = false
+            h.rowSnapDirty = true
         }
 
         override fun onTouchEvent(ev: MotionEvent): Boolean {
@@ -1873,10 +1979,11 @@ class MusicLibraryOverlayView(
                     if (pos != INVALID_POSITION) {
                         val idx = pos - firstVisiblePosition
                         val row = if (idx in 0 until childCount) getChildAt(idx) else null
-                        val card = (row as? FrameLayout)?.getChildAt(0) as? GlassTrackRowCard
-                        if (card != null) {
-                            pressedCard = card
-                            card.isRowPressed = true
+                        val holder = row?.tag as? RowHolder
+                        if (holder != null) {
+                            pressedHolder = holder
+                            holder.card.isRowPressed = true
+                            holder.rowSnapDirty = true
                         }
                     }
                 }
@@ -1946,14 +2053,46 @@ class MusicLibraryOverlayView(
         }
     }
 
-    private class RowHolder(
+    private inner class RowHolder(
         val card: GlassTrackRowCard,
-        val art: ImageView,
+        val art: ArtThumbView,
         val title: TextView,
         val artist: TextView,
         val duration: TextView,
-        var boundUri: Uri? = null
-    )
+        var boundUri: Uri? = null,
+        var boundTrack: TrackInfo? = null,
+        var boundActive: Boolean = false,
+        var boundPlaying: Boolean = false,
+        var artHasBitmap: Boolean = false,
+        var rowSnapDirty: Boolean = true,
+        var rowSnapBmp: Bitmap? = null,
+        var rowSnapCanvas: Canvas? = null
+    ) {
+        fun ensureSnapshot(rowView: View, capScale: Float): Bitmap? {
+            val rw = rowView.width
+            val rh = rowView.height
+            if (rw <= 0 || rh <= 0) return null
+            val sw = max(8, (rw * capScale).roundToInt())
+            val sh = max(4, (rh * capScale).roundToInt())
+            if (rowSnapBmp == null || rowSnapBmp!!.width != sw || rowSnapBmp!!.height != sh) {
+                rowSnapBmp?.recycle()
+                rowSnapBmp = Bitmap.createBitmap(sw, sh, Bitmap.Config.ARGB_8888)
+                rowSnapCanvas = Canvas(rowSnapBmp!!)
+                rowSnapDirty = true
+            }
+            if (rowSnapDirty) {
+                rowSnapDirty = false
+                val bmp = rowSnapBmp!!
+                bmp.eraseColor(Color.TRANSPARENT)
+                val sc = rowSnapCanvas!!
+                sc.save()
+                sc.scale(capScale, capScale)
+                rowView.draw(sc)
+                sc.restore()
+            }
+            return rowSnapBmp
+        }
+    }
 
     private inner class TrackAdapter : BaseAdapter() {
         private val artPx = (48f * dens).roundToInt()
@@ -1973,15 +2112,8 @@ class MusicLibraryOverlayView(
                 val card = GlassTrackRowCard(context).apply {
                     layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, cardHeightPx)
                 }
-                val art = ImageView(context).apply {
+                val art = ArtThumbView(context).apply {
                     layoutParams = LinearLayout.LayoutParams(artPx, artPx).apply { marginEnd = (12f * dens).roundToInt() }
-                    scaleType = ImageView.ScaleType.CENTER_CROP
-                    clipToOutline = true
-                    outlineProvider = object : android.view.ViewOutlineProvider() {
-                        override fun getOutline(v: View, outline: android.graphics.Outline) {
-                            outline.setRoundRect(0, 0, v.width, v.height, 11f * dens)
-                        }
-                    }
                 }
                 val meta = LinearLayout(context).apply {
                     orientation = LinearLayout.VERTICAL
@@ -2023,33 +2155,57 @@ class MusicLibraryOverlayView(
                 holder = rowView.tag as RowHolder
             }
 
-            rowView.translationY = listView.rubberY
+            if (rowView.translationY != listView.rubberY) {
+                rowView.translationY = listView.rubberY
+            }
+
             val track = getItem(position)
-            val isActive = cachedActiveUri != null && cachedActiveUri == track.contentUri
+            val targetUri = track.contentUri
+            val isActive = cachedActiveUri != null && cachedActiveUri == targetUri
+            val trackChanged = holder.boundTrack !== track
+            val stateChanged = holder.boundActive != isActive || holder.boundPlaying != cachedIsPlaying
 
             holder.card.isActiveTrack = isActive
             holder.card.isRowPressed = false
-            holder.title.text = track.title
-            holder.title.setTextColor(if (isActive) 0xFFE0F2FE.toInt() else Color.WHITE)
-            holder.artist.text = if (track.albumName.isNotBlank()) "${track.artist} · ${track.albumName}" else track.artist
-            holder.duration.text = if (isActive && cachedIsPlaying) "▶ ${fmtSec(track.durationSec)}" else fmtSec(track.durationSec)
-            holder.duration.setTextColor(if (isActive) 0xFF7DD3FC.toInt() else Color.argb(178, 255, 255, 255))
 
-            val targetUri = track.contentUri
-            holder.boundUri = targetUri
-            val cached = media.getCachedPoster(track, 112)
-            if (cached != null) {
-                holder.art.setImageBitmap(cached)
-            } else {
-                holder.art.setImageBitmap(getFallbackArt(track, artPx))
-                media.loadTrackPoster(
-                    track,
-                    112,
-                    shouldDecode = { isOpen && holder.boundUri == targetUri }
-                ) { bmp ->
-                    if (bmp != null && holder.boundUri == targetUri) {
-                        holder.art.setImageBitmap(bmp)
-                        searchBox.markBackdropDirty()
+            if (trackChanged || stateChanged) {
+                holder.boundTrack = track
+                holder.boundUri = targetUri
+                holder.boundActive = isActive
+                holder.boundPlaying = cachedIsPlaying
+                holder.rowSnapDirty = true
+
+                if (trackChanged) {
+                    holder.title.text = track.title
+                    holder.artist.text = if (track.albumName.isNotBlank()) "${track.artist} · ${track.albumName}" else track.artist
+                }
+                holder.title.setTextColor(if (isActive) 0xFFE0F2FE.toInt() else Color.WHITE)
+                holder.duration.text = if (isActive && cachedIsPlaying) "▶ ${fmtSec(track.durationSec)}" else fmtSec(track.durationSec)
+                holder.duration.setTextColor(if (isActive) 0xFF7DD3FC.toInt() else Color.argb(178, 255, 255, 255))
+            }
+
+            if (trackChanged || !holder.artHasBitmap) {
+                val cached = media.getCachedPoster(track, 112)
+                if (cached != null) {
+                    holder.art.bind(cached, track.c1, track.c2, track.c3)
+                    holder.artHasBitmap = true
+                    holder.rowSnapDirty = true
+                } else {
+                    holder.art.bind(null, track.c1, track.c2, track.c3)
+                    holder.artHasBitmap = false
+                    if (!listView.isFlinging && targetUri != null) {
+                        media.loadTrackPoster(
+                            track,
+                            112,
+                            shouldDecode = { isOpen && !listView.isFlinging && holder.boundUri == targetUri }
+                        ) { bmp ->
+                            if (bmp != null && holder.boundUri == targetUri) {
+                                holder.art.bind(bmp, track.c1, track.c2, track.c3)
+                                holder.artHasBitmap = true
+                                holder.rowSnapDirty = true
+                                searchBox.markBackdropDirty()
+                            }
+                        }
                     }
                 }
             }
