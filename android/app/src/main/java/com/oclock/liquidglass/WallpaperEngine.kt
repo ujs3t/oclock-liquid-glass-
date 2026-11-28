@@ -8,6 +8,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.Shader
+import android.graphics.drawable.GradientDrawable
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -15,6 +16,22 @@ import kotlin.math.sin
 object WallpaperEngine {
     private val cache = HashMap<String, Bitmap>(6)
     private val thumbCache = HashMap<String, Bitmap>(6)
+
+    fun makePlaceholderDrawable(name: String): GradientDrawable {
+        val cols = when (PresetWall.fromId(name)) {
+            PresetWall.ANGEL -> intArrayOf(0xFFA9C1DD.toInt(), 0xFF9DB0C9.toInt(), 0xFF333E51.toInt())
+            PresetWall.OBSIDIAN -> intArrayOf(0xFF171B24.toInt(), 0xFF0A0C11.toInt(), 0xFF000000.toInt())
+            PresetWall.DUSK -> intArrayOf(0xFF2A1C46.toInt(), 0xFFD9705C.toInt(), 0xFF2B2039.toInt())
+            PresetWall.AURORA -> intArrayOf(0xFF0B1030.toInt(), 0xFF1C4D8C.toInt(), 0xFF101A34.toInt())
+            PresetWall.DAYLIGHT -> intArrayOf(0xFFF2F6FB.toInt(), 0xFFE2EBF4.toInt(), 0xFFBFD0E2.toInt())
+        }
+        return GradientDrawable(GradientDrawable.Orientation.TL_BR, cols)
+    }
+
+    fun peekPreset(name: String): Bitmap? {
+        val key = PresetWall.fromId(name).id
+        return synchronized(cache) { cache[key] }
+    }
 
     fun drawPreset(name: String, w: Int = 900, h: Int = 1800): Bitmap {
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
@@ -140,7 +157,13 @@ object WallpaperEngine {
     fun getWallpaper(name: String, customWall: Bitmap?): Bitmap {
         if (name == "custom" && customWall != null) return customWall
         val key = PresetWall.fromId(name).id
-        return cache.getOrPut(key) { drawPreset(key, 900, 1800) }
+        synchronized(cache) {
+            cache[key]?.let { return it }
+        }
+        val bmp = drawPreset(key, 720, 1440)
+        synchronized(cache) {
+            return cache.getOrPut(key) { bmp }
+        }
     }
 
     fun getThumb(name: String, customWall: Bitmap?): Bitmap {
@@ -148,6 +171,12 @@ object WallpaperEngine {
             return Bitmap.createScaledBitmap(customWall, 84, 108, true)
         }
         val key = PresetWall.fromId(name).id
-        return thumbCache.getOrPut(key) { drawPreset(key, 84, 108) }
+        synchronized(thumbCache) {
+            thumbCache[key]?.let { return it }
+        }
+        val bmp = drawPreset(key, 84, 108)
+        synchronized(thumbCache) {
+            return thumbCache.getOrPut(key) { bmp }
+        }
     }
 }

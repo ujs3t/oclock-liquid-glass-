@@ -28,6 +28,7 @@ import android.widget.TextView
 import java.util.Calendar
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
@@ -61,7 +62,12 @@ class ClockGlassView(
     private var lastCommittedSx = 1.0f
     private var lastCommittedSy = 1.22f
     private var lastMinuteKey = ""
+    private var committedBootKey = ""
+    private var committedAvailHDp = 0f
+    private var inFlightBootKey = ""
+    private var inFlightAvailHDp = 0f
     private val applyVersion = AtomicLong(0L)
+    @Volatile
     private var latestScheduledSeq = 0L
     private val worker = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -102,6 +108,27 @@ class ClockGlassView(
         invalidate()
     }
 
+    private fun commitArtifactOnUi(art: ClockArtifact, snapCfg: LockConfig, bootKey: String, availH: Float) {
+        activeArtifact = art
+        lastMinuteKey = art.minuteKey
+        lastCommittedSize = snapCfg.size
+        lastCommittedSx = snapCfg.sx
+        lastCommittedSy = snapCfg.sy
+        committedBootKey = bootKey
+        committedAvailHDp = availH
+        if (!art.isDraft && inFlightBootKey == bootKey) {
+            inFlightBootKey = ""
+        }
+        previewScaleX = 1f
+        previewScaleY = 1f
+        scaleX = 1f
+        scaleY = 1f
+        cpuFallbackKey = ""
+        requestLayout()
+        invalidate()
+        onArtifactCommitted?.invoke(art)
+    }
+
     fun scheduleRender(
         cfg: LockConfig,
         hostW: Float,
@@ -113,37 +140,86 @@ class ClockGlassView(
         availableHDp = availH
         val lines = currentTimeLines(cfg)
         val minuteKey = lines.joinToString("|")
-        if (!force && minuteKey == lastMinuteKey && activeArtifact != null) return
+        val bootKey = "${cfg.font}|${"%.2f".format(cfg.size)}|${"%.3f".format(cfg.sx)}|${"%.3f".format(cfg.sy)}|${"%.1f".format(cfg.tracking)}|${hostW.roundToInt()}|${cfg.music}|${cfg.notifications}|$minuteKey"
 
+        val curArt = activeArtifact
+        if (curArt != null && !curArt.isDraft && committedBootKey == bootKey &&
+            (!force || abs(committedAvailHDp - availH) < 18f)
+        ) {
+            if (previewScaleX != 1f || previewScaleY != 1f) clearPreviewTransform()
+            return
+        }
+        if (inFlightBootKey == bootKey && (!force || abs(inFlightAvailHDp - availH) < 18f)) {
+            return
+        }
+
+        val dens = resources.displayMetrics.density
+        val snapCfg = cfg.copy()
+
+        // Zero-latency synchronous RAM cache hit (e.g. reopening after Back/finish)
+        val memHit = renderer.peekFastMemoryArtifact(lines, snapCfg, hostW, availH, dens)
+        if (memHit != null) {
+            inFlightBootKey = ""
+            ++latestScheduledSeq
+            commitArtifactOnUi(memHit, snapCfg, bootKey, availH)
+            return
+        }
+
+        val needFastBootstrap = curArt == null || minuteKey != lastMinuteKey
+        inFlightBootKey = bootKey
+        inFlightAvailHDp = availH
         val seq = ++latestScheduledSeq
         val ver = applyVersion.incrementAndGet()
         NativeGlass.setLatestVersion(ver)
-        val snapCfg = cfg.copy()
-        val dens = resources.displayMetrics.density
 
         worker.execute {
             if (seq != latestScheduledSeq) return@execute
+
+            val ramArt = renderer.peekCachedArtifact(lines, snapCfg, hostW, availH, dens)
+            if (ramArt != null) {
+                perf.setCacheBytes(renderer.getCacheBytes())
+                mainHandler.post {
+                    if (seq != latestScheduledSeq) return@post
+                    commitArtifactOnUi(ramArt, snapCfg, bootKey, availH)
+                }
+                return@execute
+            }
+
+            if (needFastBootstrap) {
+                val bootArt = renderer.tryLoadBootArtifact(bootKey)
+                if (bootArt != null) {
+                    perf.setCacheBytes(renderer.getCacheBytes())
+                    mainHandler.post {
+                        if (seq != latestScheduledSeq) return@post
+                        commitArtifactOnUi(bootArt, snapCfg, bootKey, availH)
+                    }
+                    return@execute
+                }
+
+                // Stage 1: ultra-fast (~15-25ms) Liquid Glass draft so clock appears immediately
+                val draftArt = renderer.buildArtifact(lines, snapCfg, hostW, availH, dens, ver, ssOverride = 1.25f)
+                if (draftArt != null && seq == latestScheduledSeq) {
+                    mainHandler.post {
+                        if (seq != latestScheduledSeq) return@post
+                        commitArtifactOnUi(draftArt, snapCfg, bootKey, availH)
+                    }
+                }
+                if (seq != latestScheduledSeq) return@execute
+            }
+
+            // Stage 2: full native-resolution Liquid Glass
             val t0 = SystemClock.elapsedRealtimeNanos()
-            val art = renderer.buildArtifact(lines, snapCfg, hostW, availH, dens, ver) ?: return@execute
+            val art = renderer.buildArtifact(lines, snapCfg, hostW, availH, dens, ver, ssOverride = null) ?: return@execute
             val elapsedMs = (SystemClock.elapsedRealtimeNanos() - t0) / 1_000_000.0
             perf.recordWork("clockFieldCpp", elapsedMs)
             perf.setCacheBytes(renderer.getCacheBytes())
 
             mainHandler.post {
                 if (seq != latestScheduledSeq) return@post
-                activeArtifact = art
-                lastMinuteKey = art.minuteKey
-                lastCommittedSize = snapCfg.size
-                lastCommittedSx = snapCfg.sx
-                lastCommittedSy = snapCfg.sy
-                previewScaleX = 1f
-                previewScaleY = 1f
-                scaleX = 1f
-                scaleY = 1f
-                cpuFallbackKey = ""
-                requestLayout()
-                invalidate()
-                onArtifactCommitted?.invoke(art)
+                commitArtifactOnUi(art, snapCfg, bootKey, availH)
+            }
+            if (seq == latestScheduledSeq) {
+                renderer.saveBootArtifact(bootKey, art)
             }
         }
     }

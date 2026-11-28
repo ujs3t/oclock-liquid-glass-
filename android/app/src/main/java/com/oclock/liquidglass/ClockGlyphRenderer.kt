@@ -10,6 +10,13 @@ import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.os.Build
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -62,27 +69,37 @@ data class ClockArtifact(
     val sx: Float,
     val sy: Float,
     val minuteKey: String,
-    val maskKey: String
+    val maskKey: String,
+    val isDraft: Boolean = false
 ) {
     val byteSize: Long get() = alphaBmp.allocationByteCount.toLong() + fieldBmp.allocationByteCount.toLong()
 }
 
-class ClockGlyphRenderer(private val context: Context) {
-    private val typefaceCache = HashMap<String, Typeface>(24)
-    private val metricsCache = HashMap<String, NumeralMetrics>(24)
-    private val glyphCache = object : LinkedHashMap<String, StretchedGlyph>(28, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, StretchedGlyph>?): Boolean {
-            return size > 24
+class ClockGlyphRenderer(context: Context) {
+    private val appContext = context.applicationContext
+
+    companion object {
+        private const val BOOT_CACHE_FILE = "clock_boot_v2.bin"
+        private const val BOOT_MAGIC = 0x4F434C4B
+        private const val BOOT_VER = 2
+        private val bootLock = Any()
+
+        private val typefaceCache = HashMap<String, Typeface>(24)
+        private val metricsCache = HashMap<String, NumeralMetrics>(24)
+        private val glyphCache = object : LinkedHashMap<String, StretchedGlyph>(32, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, StretchedGlyph>?): Boolean {
+                return size > 28
+            }
         }
-    }
-    private val colonCache = object : LinkedHashMap<String, ColonDots>(8, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ColonDots>?): Boolean {
-            return size > 8
+        private val colonCache = object : LinkedHashMap<String, ColonDots>(8, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ColonDots>?): Boolean {
+                return size > 8
+            }
         }
-    }
-    private val artifactCache = object : LinkedHashMap<String, ClockArtifact>(4, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ClockArtifact>?): Boolean {
-            return size > 3
+        private val artifactCache = object : LinkedHashMap<String, ClockArtifact>(6, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ClockArtifact>?): Boolean {
+                return size > 5
+            }
         }
     }
 
@@ -101,7 +118,7 @@ class ClockGlyphRenderer(private val context: Context) {
                 val f = ClockFont.fromId(fontId)
                 if (f.assetPath != null) {
                     try {
-                        Typeface.createFromAsset(context.assets, f.assetPath)
+                        Typeface.createFromAsset(appContext.assets, f.assetPath)
                     } catch (_: Throwable) {
                         Typeface.DEFAULT_BOLD
                     }
@@ -120,16 +137,27 @@ class ClockGlyphRenderer(private val context: Context) {
         synchronized(metricsCache) {
             metricsCache[fontId]?.let { return it }
             val tf = getTypeface(fontId)
-            val sz = 256
-            val baseY = 172f
-            val bmp = Bitmap.createBitmap(sz, sz, Bitmap.Config.ALPHA_8)
-            val c = Canvas(bmp)
+            val sz = 144
+            val textPx = 72f
+            val baseY = 104f
             val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 typeface = tf
-                textSize = 100f
+                textSize = textPx
                 textAlign = Paint.Align.CENTER
                 color = Color.WHITE
             }
+            val tb = android.graphics.Rect()
+            var tbTop = 0
+            var tbBot = 0
+            for (d in '0'..'9') {
+                p.getTextBounds(d.toString(), 0, 1, tb)
+                if (tb.top < tbTop) tbTop = tb.top
+                if (tb.bottom > tbBot) tbBot = tb.bottom
+            }
+            val rowStart = max(0, floor(baseY + tbTop - 4f).toInt())
+            val rowEnd = min(sz - 1, ceil(baseY + tbBot + 4f).toInt())
+            val bmp = Bitmap.createBitmap(sz, sz, Bitmap.Config.ALPHA_8)
+            val c = Canvas(bmp)
             val buf = ByteArray(sz * sz)
             var yMin = sz
             var yMax = -1
@@ -140,7 +168,7 @@ class ClockGlyphRenderer(private val context: Context) {
                     it.rewind()
                     bmp.copyPixelsToBuffer(it)
                 }
-                for (y in 0 until sz) {
+                for (y in rowStart..rowEnd) {
                     val row = y * sz
                     for (x in 0 until sz) {
                         if ((buf[row + x].toInt() and 0xFF) > 10) {
@@ -151,9 +179,9 @@ class ClockGlyphRenderer(private val context: Context) {
                 }
             }
             bmp.recycle()
-            val capRatio = if (yMax >= yMin) ((yMax - yMin + 1) / 100f).coerceIn(0.50f, 1.25f) else 0.74f
-            // Baseline offset relative to 100px so optical numeral center lands at centerY
-            val refMidRel = if (yMax >= yMin) (((yMin + yMax + 1) * 0.5f) - baseY) / 100f else 0f
+            val capRatio = if (yMax >= yMin) ((yMax - yMin + 1) / textPx).coerceIn(0.50f, 1.25f) else 0.74f
+            // Baseline offset relative to 1px so optical numeral center lands at centerY
+            val refMidRel = if (yMax >= yMin) (((yMin + yMax + 1) * 0.5f) - baseY) / textPx else 0f
             return NumeralMetrics(capRatio, refMidRel).also { metricsCache[fontId] = it }
         }
     }
@@ -172,22 +200,32 @@ class ClockGlyphRenderer(private val context: Context) {
             glyphCache[key]?.let { return it }
         }
 
-        val vSub = max(2, ceil(sy * 1.6f).toInt().coerceAtMost(4))
+        val vSub = if (sy > 2.25f) 3 else 2
         val srcPx = fontPx * ss
-        val sw = ceil(srcPx * sx * 1.65f).toInt() + 32
-        val sh = ceil(srcPx * vSub * 1.95f).toInt() + 32
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = getTypeface(fontId)
+            textSize = srcPx
+            textAlign = Paint.Align.LEFT
+            color = Color.WHITE
+        }
+        val tb = android.graphics.Rect()
+        paint.getTextBounds(ch.toString(), 0, 1, tb)
+        val adv = paint.measureText(ch.toString())
+        val tbW = max(8, tb.width())
+        val tbH = max(8, tb.height())
+        val padBox = 8
+        val sw = ceil((tbW + padBox * 2) * sx).toInt().coerceAtLeast(16)
+        val sh = ceil((tbH + padBox * 2) * vSub).toInt().coerceAtLeast(16)
+        val tbMidX = (tb.left + tb.right) * 0.5f
+        val tbMidY = (tb.top + tb.bottom) * 0.5f
+        val drawX = (sw * 0.5f / sx) - tbMidX
+        val baseY = (sh * 0.5f / vSub) - tbMidY
+
         val src = Bitmap.createBitmap(sw, sh, Bitmap.Config.ALPHA_8)
         val sc = Canvas(src)
         sc.save()
         sc.scale(sx, vSub.toFloat())
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            typeface = getTypeface(fontId)
-            textSize = srcPx
-            textAlign = Paint.Align.CENTER
-            color = Color.WHITE
-        }
-        val baseY = (sh / (2f * vSub)) - refMidRel * srcPx
-        sc.drawText(ch.toString(), sw / (2f * sx), baseY, paint)
+        sc.drawText(ch.toString(), drawX, baseY, paint)
         sc.restore()
 
         val sData = ByteArray(sw * sh)
@@ -351,13 +389,14 @@ class ClockGlyphRenderer(private val context: Context) {
         val outBmp = Bitmap.createBitmap(outW, outH, Bitmap.Config.ALPHA_8)
         outBmp.copyPixelsFromBuffer(ByteBuffer.wrap(outBytes))
 
-        val refMidYSrc = sh * 0.5f
+        val refOriginX = (sw * 0.5f - tbMidX * sx) + (adv * 0.5f * sx)
+        val refMidYSrc = (baseY + refMidRel * srcPx) * vSub
         val digitCenterYSrc = (yMin + yMax + 1) * 0.5f
         val res = StretchedGlyph(
             alphaBmp = outBmp,
             w = outW,
             h = outH,
-            xCenterOffset = ((xMin + xMax + 1) * 0.5f) - sw * 0.5f,
+            xCenterOffset = ((xMin + xMax + 1) * 0.5f) - refOriginX,
             yCenterRel = ((digitCenterYSrc - refMidYSrc) / vSub) * sy
         )
         synchronized(glyphCache) { glyphCache[key] = res }
@@ -370,17 +409,19 @@ class ClockGlyphRenderer(private val context: Context) {
             colonCache[key]?.let { return it }
         }
         val srcPx = fontPx * ss
-        val sw = ceil(srcPx * 1.5f).toInt() + 32
-        val sh = ceil(srcPx * 1.8f).toInt() + 32
-        val src = Bitmap.createBitmap(sw, sh, Bitmap.Config.ALPHA_8)
-        val sc = Canvas(src)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = getTypeface(fontId)
             textSize = srcPx
-            textAlign = Paint.Align.CENTER
+            textAlign = Paint.Align.LEFT
             color = Color.WHITE
         }
-        sc.drawText(":", sw * 0.5f, sh * 0.5f - refMidRel * srcPx, paint)
+        val tb = android.graphics.Rect()
+        paint.getTextBounds(":", 0, 1, tb)
+        val sw = max(24, tb.width() + 24)
+        val sh = max(32, tb.height() + 24)
+        val src = Bitmap.createBitmap(sw, sh, Bitmap.Config.ALPHA_8)
+        val sc = Canvas(src)
+        sc.drawText(":", sw * 0.5f - (tb.left + tb.right) * 0.5f, sh * 0.5f - (tb.top + tb.bottom) * 0.5f, paint)
 
         val sData = ByteArray(sw * sh)
         ByteBuffer.wrap(sData).also {
@@ -489,17 +530,31 @@ class ClockGlyphRenderer(private val context: Context) {
         class TextOp(val ch: String, val cx: Float, val cy: Float, val baseOffset: Float) : GlyphDrawOp()
     }
 
-    fun buildArtifact(
+    private data class PreparedSpec(
+        val size: Float,
+        val ss: Float,
+        val capRatio: Float,
+        val refMidRel: Float,
+        val tf: Typeface,
+        val maxLineW: Float,
+        val estWDp: Float,
+        val estHDp: Float,
+        val pad: Float,
+        val minuteKey: String,
+        val fullKey: String
+    )
+
+    private fun prepareSpec(
         lines: List<String>,
         cfg: LockConfig,
         hostWDp: Float,
         availableHDp: Float,
         density: Float,
-        version: Long
-    ): ClockArtifact? {
+        ssOverride: Float? = null
+    ): PreparedSpec {
         var size = cfg.size
         val maxW = max(80f, hostWDp - 12f)
-        var ss = min(3.8f, max(2.6f, density * 1.35f))
+        var ss = ssOverride ?: min(3.0f, max(2.1f, density))
 
         val (capRatio, refMidRel) = measureNumeralMetrics(cfg.font)
         val tf = getTypeface(cfg.font)
@@ -532,18 +587,223 @@ class ClockGlyphRenderer(private val context: Context) {
         val estHDp = ceil(max(40f, lines.size * capH * cfg.sy) + pad * 2f)
 
         val rawArea = max(1f, estWDp * estHDp)
-        val maxArea = 2_600_000f
+        val maxArea = if (ssOverride != null) 600_000f else 1_900_000f
         if (rawArea * ss * ss > maxArea) {
-            ss = max(1.8f, floor(sqrt(maxArea / rawArea) * 10f) / 10f)
+            val minSs = if (ssOverride != null) 1.0f else 1.7f
+            ss = max(minSs, floor(sqrt(maxArea / rawArea) * 10f) / 10f)
         }
         val longSide = max(estWDp, estHDp)
-        if (longSide * ss > 2200f) ss = max(1.8f, floor((2200f / longSide) * 10f) / 10f)
+        if (longSide * ss > 2048f) {
+            val minSs = if (ssOverride != null) 1.0f else 1.7f
+            ss = max(minSs, floor((2048f / longSide) * 10f) / 10f)
+        }
 
         val minuteKey = lines.joinToString("|")
-        val estKey = "${"%.2f".format(size)}|${"%.2f".format(ss)}|${cfg.font}|${cfg.sx}|${cfg.sy}|${cfg.tracking}|$minuteKey"
-        synchronized(artifactCache) {
-            artifactCache[estKey]?.let { return it }
+        val fullKey = "${"%.2f".format(size)}|${"%.2f".format(ss)}|${cfg.font}|${cfg.sx}|${cfg.sy}|${cfg.tracking}|$minuteKey"
+        return PreparedSpec(size, ss, capRatio, refMidRel, tf, maxLineW, estWDp, estHDp, pad, minuteKey, fullKey)
+    }
+
+    fun peekFastMemoryArtifact(
+        lines: List<String>,
+        cfg: LockConfig,
+        hostWDp: Float,
+        availableHDp: Float,
+        density: Float
+    ): ClockArtifact? {
+        val hasMetrics = synchronized(metricsCache) { metricsCache.containsKey(cfg.font) }
+        if (!hasMetrics) return null
+        return peekCachedArtifact(lines, cfg, hostWDp, availableHDp, density)
+    }
+
+    fun peekCachedArtifact(
+        lines: List<String>,
+        cfg: LockConfig,
+        hostWDp: Float,
+        availableHDp: Float,
+        density: Float
+    ): ClockArtifact? {
+        val spec = prepareSpec(lines, cfg, hostWDp, availableHDp, density, ssOverride = null)
+        return synchronized(artifactCache) { artifactCache[spec.fullKey] }
+    }
+
+    fun tryLoadBootArtifact(expectedRenderKey: String): ClockArtifact? {
+        val file = File(appContext.cacheDir, BOOT_CACHE_FILE)
+        if (!file.exists()) return null
+        return synchronized(bootLock) {
+            try {
+                DataInputStream(BufferedInputStream(FileInputStream(file), 32768)).use { dis ->
+                    if (dis.readInt() != BOOT_MAGIC || dis.readInt() != BOOT_VER) return@synchronized null
+                    val storedRenderKey = dis.readUTF()
+                    if (storedRenderKey != expectedRenderKey) return@synchronized null
+                    val maxAbsCss = dis.readFloat()
+                    val wDp = dis.readFloat()
+                    val hDp = dis.readFloat()
+                    val wPx = dis.readInt()
+                    val hPx = dis.readInt()
+                    if (wPx < 4 || hPx < 4 || wPx.toLong() * hPx > 2_500_000L) return@synchronized null
+                    val ss = dis.readFloat()
+                    val sizeDp = dis.readFloat()
+                    val textWDp = dis.readFloat()
+                    val textHDp = dis.readFloat()
+                    val lineHDp = dis.readFloat()
+                    val padDp = dis.readFloat()
+                    val inkLeftDp = dis.readFloat()
+                    val inkTopDp = dis.readFloat()
+                    val inkRightDp = dis.readFloat()
+                    val inkBottomDp = dis.readFloat()
+                    val sx = dis.readFloat()
+                    val sy = dis.readFloat()
+                    val minuteKey = dis.readUTF()
+                    val maskKey = dis.readUTF()
+
+                    val byteCount = wPx * hPx * 4
+                    val bytes = ByteArray(byteCount)
+                    dis.readFully(bytes)
+                    val alphaBmp = Bitmap.createBitmap(wPx, hPx, Bitmap.Config.ARGB_8888).apply {
+                        setHasAlpha(false)
+                        copyPixelsFromBuffer(ByteBuffer.wrap(bytes))
+                    }
+                    dis.readFully(bytes)
+                    val fieldBmp = Bitmap.createBitmap(wPx, hPx, Bitmap.Config.ARGB_8888).apply {
+                        setHasAlpha(false)
+                        copyPixelsFromBuffer(ByteBuffer.wrap(bytes))
+                    }
+
+                    val alphaShader = if (LiquidGlassShaders.isGpuAgslAvailable()) {
+                        BitmapShader(alphaBmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
+                            if (Build.VERSION.SDK_INT >= 33) filterMode = BitmapShader.FILTER_MODE_LINEAR
+                        }
+                    } else null
+                    val fieldShader = if (LiquidGlassShaders.isGpuAgslAvailable()) {
+                        BitmapShader(fieldBmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
+                            if (Build.VERSION.SDK_INT >= 33) filterMode = BitmapShader.FILTER_MODE_LINEAR
+                        }
+                    } else null
+
+                    val art = ClockArtifact(
+                        alphaBmp = alphaBmp,
+                        fieldBmp = fieldBmp,
+                        alphaShader = alphaShader,
+                        fieldShader = fieldShader,
+                        maxAbsCss = maxAbsCss,
+                        wDp = wDp,
+                        hDp = hDp,
+                        wPx = wPx,
+                        hPx = hPx,
+                        ss = ss,
+                        sizeDp = sizeDp,
+                        textWDp = textWDp,
+                        textHDp = textHDp,
+                        lineHDp = lineHDp,
+                        padDp = padDp,
+                        inkLeftDp = inkLeftDp,
+                        inkTopDp = inkTopDp,
+                        inkRightDp = inkRightDp,
+                        inkBottomDp = inkBottomDp,
+                        sx = sx,
+                        sy = sy,
+                        minuteKey = minuteKey,
+                        maskKey = maskKey,
+                        isDraft = false
+                    )
+                    synchronized(artifactCache) { artifactCache[maskKey] = art }
+                    art
+                }
+            } catch (_: Throwable) {
+                null
+            }
         }
+    }
+
+    fun saveBootArtifact(renderKey: String, art: ClockArtifact) {
+        if (art.isDraft || art.alphaBmp.isRecycled || art.fieldBmp.isRecycled) return
+        val dir = appContext.cacheDir
+        val tmp = File(dir, "$BOOT_CACHE_FILE.tmp")
+        val dst = File(dir, BOOT_CACHE_FILE)
+        synchronized(bootLock) {
+            try {
+                val byteCount = art.wPx * art.hPx * 4
+                if (art.alphaBmp.byteCount != byteCount || art.fieldBmp.byteCount != byteCount) return
+                val buf = ByteArray(byteCount)
+                DataOutputStream(BufferedOutputStream(FileOutputStream(tmp), 32768)).use { dos ->
+                    dos.writeInt(BOOT_MAGIC)
+                    dos.writeInt(BOOT_VER)
+                    dos.writeUTF(renderKey)
+                    dos.writeFloat(art.maxAbsCss)
+                    dos.writeFloat(art.wDp)
+                    dos.writeFloat(art.hDp)
+                    dos.writeInt(art.wPx)
+                    dos.writeInt(art.hPx)
+                    dos.writeFloat(art.ss)
+                    dos.writeFloat(art.sizeDp)
+                    dos.writeFloat(art.textWDp)
+                    dos.writeFloat(art.textHDp)
+                    dos.writeFloat(art.lineHDp)
+                    dos.writeFloat(art.padDp)
+                    dos.writeFloat(art.inkLeftDp)
+                    dos.writeFloat(art.inkTopDp)
+                    dos.writeFloat(art.inkRightDp)
+                    dos.writeFloat(art.inkBottomDp)
+                    dos.writeFloat(art.sx)
+                    dos.writeFloat(art.sy)
+                    dos.writeUTF(art.minuteKey)
+                    dos.writeUTF(art.maskKey)
+
+                    ByteBuffer.wrap(buf).also {
+                        it.rewind()
+                        art.alphaBmp.copyPixelsToBuffer(it)
+                    }
+                    dos.write(buf)
+                    ByteBuffer.wrap(buf).also {
+                        it.rewind()
+                        art.fieldBmp.copyPixelsToBuffer(it)
+                    }
+                    dos.write(buf)
+                }
+                if (dst.exists()) dst.delete()
+                tmp.renameTo(dst)
+            } catch (_: Throwable) {
+                try { if (tmp.exists()) tmp.delete() } catch (_: Throwable) {}
+            }
+        }
+    }
+
+    fun buildArtifact(
+        lines: List<String>,
+        cfg: LockConfig,
+        hostWDp: Float,
+        availableHDp: Float,
+        density: Float,
+        version: Long,
+        ssOverride: Float? = null
+    ): ClockArtifact? {
+        // Return full-resolution cached artifact immediately even if a draft was requested
+        val fullSpec = prepareSpec(lines, cfg, hostWDp, availableHDp, density, ssOverride = null)
+        synchronized(artifactCache) {
+            artifactCache[fullSpec.fullKey]?.let { return it }
+        }
+
+        val spec = if (ssOverride != null) {
+            prepareSpec(lines, cfg, hostWDp, availableHDp, density, ssOverride = ssOverride)
+        } else {
+            fullSpec
+        }
+        val size = spec.size
+        val ss = spec.ss
+        val capRatio = spec.capRatio
+        val refMidRel = spec.refMidRel
+        val tf = spec.tf
+        val maxLineW = spec.maxLineW
+        val estWDp = spec.estWDp
+        val estHDp = spec.estHDp
+        val pad = spec.pad
+        val minuteKey = spec.minuteKey
+        val estKey = spec.fullKey
+        val probe = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = tf
+            textSize = size
+        }
+        val capH = size * capRatio
 
         // Phase 1: collect all draw ops & measure true ink bounding box so NO ascender/edge can ever clip
         val digitTargetH = capH * cfg.sy * ss
@@ -721,10 +981,13 @@ class ClockGlyphRenderer(private val context: Context) {
             sx = cfg.sx,
             sy = cfg.sy,
             minuteKey = minuteKey,
-            maskKey = estKey
+            maskKey = estKey,
+            isDraft = ssOverride != null
         )
 
-        synchronized(artifactCache) { artifactCache[estKey] = artifact }
+        if (ssOverride == null) {
+            synchronized(artifactCache) { artifactCache[estKey] = artifact }
+        }
         return artifact
     }
 }

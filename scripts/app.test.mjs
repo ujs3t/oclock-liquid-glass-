@@ -280,6 +280,13 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(glyphKt.includes('bestGapStart'));
   assert.ok(glyphKt.includes('GlyphDrawOp'));
   assert.ok(glyphKt.includes("for (d in '0'..'9')"));
+  assert.ok(glyphKt.includes('tryLoadBootArtifact'));
+  assert.ok(glyphKt.includes('saveBootArtifact'));
+  assert.ok(glyphKt.includes('peekFastMemoryArtifact'));
+  assert.ok(glyphKt.includes('companion object'));
+  assert.ok(layerKt.includes('ssOverride = 1.25f'));
+  assert.ok(sheetKt.includes('ensureBodiesBuilt'));
+  assert.ok(mainKt.includes('estimatedShellWidthDp'));
   assert.ok(sheetKt.includes('widthSeek'));
   assert.ok(sheetKt.includes('العرض'));
   assert.ok(!sheetKt.includes('مجاني'));

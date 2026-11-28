@@ -20,6 +20,11 @@ class AdaptiveTheme {
     private var lastLight: Boolean? = null
     private var sampledKey: String = ""
 
+    fun samplePresetDefaults(cfg: LockConfig): AdaptiveColors {
+        val light = cfg.wall == "daylight"
+        return buildColors(light, cfg)
+    }
+
     fun sample(wallKey: String, bmp: Bitmap, cfg: LockConfig): AdaptiveColors {
         if (sampledKey != wallKey || lastLight == null) {
             val tiny = Bitmap.createScaledBitmap(bmp, 24, 24, true)
@@ -44,7 +49,10 @@ class AdaptiveTheme {
             sampledKey = wallKey
         }
 
-        val light = lastLight ?: false
+        return buildColors(lastLight ?: false, cfg)
+    }
+
+    private fun buildColors(light: Boolean, cfg: LockConfig): AdaptiveColors {
         val uiInk = if (light) 0xFF12151C.toInt() else Color.WHITE
         val uiDim = if (light) Color.argb(173, 18, 21, 28) else Color.argb(189, 255, 255, 255)
         val glassBg = if (light) Color.argb(20, 255, 255, 255) else Color.argb(10, 255, 255, 255)

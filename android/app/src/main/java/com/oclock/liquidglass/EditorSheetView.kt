@@ -152,6 +152,7 @@ class EditorSheetView(
     var currentMode: Mode = Mode.WALLPAPER
         private set
 
+    private var bodiesBuilt = false
     private var safeBottomPx = (14f * dens).roundToInt()
     private var suppressSeek = false
     private var proHue = 210f
@@ -349,9 +350,6 @@ class EditorSheetView(
             setPadding(0, 0, 0, (16f * dens).roundToInt())
         }
 
-        buildClockBody(clockBody)
-        buildWallpaperBody(wallBody)
-
         clockScrollView.addView(clockBody)
         wallScrollView.addView(wallBody)
         scrollHost.addView(clockScrollView)
@@ -361,7 +359,13 @@ class EditorSheetView(
         sheetCard.addView(hdr)
         sheetCard.addView(scrollHost)
         addView(sheetCard)
+    }
 
+    fun ensureBodiesBuilt() {
+        if (bodiesBuilt) return
+        bodiesBuilt = true
+        buildClockBody(clockBody)
+        buildWallpaperBody(wallBody)
         syncFromConfig()
     }
 
@@ -2438,6 +2442,7 @@ class EditorSheetView(
     }
 
     fun setAiStatus(msg: String, busy: Boolean) {
+        if (!bodiesBuilt) return
         if (msg.isBlank()) {
             aiDepthStatus.text = ""
             aiDepthStatus.visibility = View.GONE
@@ -2449,11 +2454,12 @@ class EditorSheetView(
     }
 
     fun setPerfStatus(msg: String) {
+        if (!bodiesBuilt) return
         perfStatus.text = msg
     }
 
     fun updatePerfUi(snap: PerfMonitor.SummarySnapshot) {
-        if (!isOpen) return
+        if (!isOpen || !bodiesBuilt) return
         perfMeta.text = "${snap.uptimeSec}s · ${snap.engineLabel}"
         perfFpsVal.text = "${snap.avgFps}/${snap.currentFps}"
         perfJankVal.text = "${snap.dropped24}/${snap.jank50}"
@@ -2470,6 +2476,7 @@ class EditorSheetView(
     }
 
     fun syncFromConfig() {
+        if (!bodiesBuilt) return
         suppressSeek = true
         for ((id, chip) in fontBtns) {
             chip.selectedState = cfg.font == id
@@ -2627,6 +2634,7 @@ class EditorSheetView(
             if (currentMode != mode) switchMode(mode)
             return
         }
+        ensureBodiesBuilt()
         isOpen = true
         sheetClosing = false
         clockScrollView.animate().cancel()
@@ -2687,6 +2695,7 @@ class EditorSheetView(
             open(mode)
             return
         }
+        ensureBodiesBuilt()
         if (currentMode == mode) return
         val toClock = mode == Mode.CLOCK
         val outScroll = if (toClock) wallScrollView else clockScrollView

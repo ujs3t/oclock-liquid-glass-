@@ -293,8 +293,6 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
         store = StateStore(this)
         cfg = store.load()
-        customWallBmp = if (cfg.hasCustomWall) store.loadCustomWall() else null
-        customSubjectBmp = if (cfg.hasCustomSubject) store.loadCustomSubject() else null
 
         perf = PerfMonitor(this)
         glyphRenderer = ClockGlyphRenderer(this)
@@ -366,12 +364,44 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         }
         perf.start()
 
+        val initCols = adaptive.samplePresetDefaults(cfg)
+        applyThemeColors(initCols)
+        applyToggles()
+        wallView.background = WallpaperEngine.makePlaceholderDrawable(cfg.wall)
+        updateDateLabel()
+        layoutScreenPositions()
+
+        // Start clock artifact lookup/Stage-1 render immediately before first measure/layout pass
+        scheduleClockRender(force = false)
+
+        val cachedPreset = if (!cfg.hasCustomWall && cfg.wall != "custom") WallpaperEngine.peekPreset(cfg.wall) else null
+        if (cachedPreset != null && !cfg.hasCustomSubject) {
+            applyWallpaperAndTheme(reRenderClock = false)
+        } else {
+            val needWall = cfg.hasCustomWall
+            val needSubj = cfg.hasCustomSubject
+            val wallId = cfg.wall
+            bgExecutor.execute {
+                val cw = if (needWall) store.loadCustomWall() else null
+                val cs = if (needSubj) store.loadCustomSubject() else null
+                WallpaperEngine.getWallpaper(wallId, cw)
+                mainHandler.post {
+                    if (isDestroyed) return@post
+                    if (cw != null) customWallBmp = cw
+                    if (cs != null) customSubjectBmp = cs
+                    applyWallpaperAndTheme(reRenderClock = false)
+                }
+            }
+        }
+
         phoneShell.post {
-            applyWallpaperAndTheme(reRenderClock = true)
             updateDateLabel()
             layoutScreenPositions()
             perf.recordWork("boot", (SystemClock.elapsedRealtimeNanos() - bootStartNs) / 1_000_000.0)
         }
+        mainHandler.postDelayed({
+            if (!isDestroyed) editorSheet.ensureBodiesBuilt()
+        }, 280L)
     }
 
     private fun buildUi() {
@@ -882,9 +912,20 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         attachWallpaperPullAndDoubleTap()
         attachInsetsListener()
         phoneShell.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
-            if ((r - l) > 0 && (b - t) > 0 && (r - l != or - ol || b - t != ob - ot)) {
+            val newW = r - l
+            val newH = b - t
+            val oldW = or - ol
+            val oldH = ob - ot
+            if (newW > 0 && newH > 0 && (newW != oldW || newH != oldH)) {
                 phoneShell.post {
-                    applyWallpaperAndTheme(reRenderClock = true)
+                    if (isDestroyed) return@post
+                    val bmp = currentWallBmp
+                    if (bmp != null) {
+                        val subj = if (cfg.depth) customSubjectBmp else null
+                        backdrop.updateWallAndSubject(bmp, subj, cfg.depth, max(1, phoneShell.width), max(1, phoneShell.height), wallView.scaleX)
+                        refreshAllGlass()
+                    }
+                    scheduleClockRender(force = false)
                     if (resizeOverlay.isOpen) resizeOverlay.layoutAroundClock()
                 }
             }
@@ -1701,6 +1742,15 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             }
         }
 
+        applyThemeColors(cols)
+
+        applyToggles()
+        refreshAllGlass()
+        if (reRenderClock) scheduleClockRender(force = true)
+    }
+
+    private fun applyThemeColors(cols: AdaptiveColors) {
+        currentColors = cols
         clockView.colors = cols
         clockView.config = cfg
         dateText.setTextColor(cols.uiInk)
@@ -1713,10 +1763,6 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         dndPill.applyTheme(cols.uiInk, cols.glassBg)
         shLeft.uiInk = cols.uiInk; shLeft.glassBg = cols.glassBg; shLeft.invalidate()
         shRight.uiInk = cols.uiInk; shRight.glassBg = cols.glassBg; shRight.invalidate()
-
-        applyToggles()
-        refreshAllGlass()
-        if (reRenderClock) scheduleClockRender(force = true)
     }
 
     private fun applyToggles() {
@@ -1751,10 +1797,21 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         shRight.invalidate()
     }
 
+    private fun estimatedShellWidthDp(): Float {
+        val dens = resources.displayMetrics.density
+        val measured = phoneShell.width
+        if (measured > 0) return measured / dens
+        val screenWDp = resources.displayMetrics.widthPixels / dens
+        val screenHDp = resources.displayMetrics.heightPixels / dens
+        return if (screenWDp >= 560f && screenHDp >= 600f &&
+            resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
+        ) 430f else screenWDp
+    }
+
     private fun computeClockLimitsDp(): Pair<Float, Float> {
         val dens = resources.displayMetrics.density
-        val hostW = (phoneShell.width / dens).coerceAtLeast(320f)
-        val hostH = (phoneShell.height / dens).coerceAtLeast(480f)
+        val hostW = estimatedShellWidthDp().coerceAtLeast(320f)
+        val hostH = (phoneShell.height.takeIf { it > 0 }?.div(dens) ?: (resources.displayMetrics.heightPixels / dens)).coerceAtLeast(480f)
         val shellHPx = (phoneShell.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels).toFloat()
         val minInkTopPx = safeTopPx + 74f * dens
         val clockGapPx = 10f * dens
@@ -1784,8 +1841,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     }
 
     private fun scheduleClockRender(force: Boolean) {
-        val dens = resources.displayMetrics.density
-        val hostW = (phoneShell.width / dens).takeIf { it > 100f } ?: (resources.displayMetrics.widthPixels / dens)
+        val hostW = estimatedShellWidthDp()
         val (_, maxTextH) = computeClockLimitsDp()
         val art = clockView.activeArtifact
         val padEstimate = art?.padDp ?: 52f
