@@ -51,7 +51,7 @@ data class SmartClockStyle(
 
 object WallpaperThemeAI {
 
-    fun analyze(bmp: Bitmap, baseCfg: LockConfig = LockConfig()): SmartClockStyle {
+    fun analyze(bmp: Bitmap, baseCfg: LockConfig = LockConfig(), glassPreset: Boolean = baseCfg.clockGlassPreset): SmartClockStyle {
         val w = 48
         val h = 88
         val safeBmp = if (bmp.config == Bitmap.Config.HARDWARE) {
@@ -290,6 +290,29 @@ object WallpaperThemeAI {
         val detailBoost = (clockDetail * 145f + clockSpread * 16f).coerceIn(0f, 26f)
 
         when {
+            glassPreset -> {
+                // Ultra-refractive 3D Crystal "Glass" mode (high Snell displacement + frosted blur separation + pure specular edge)
+                if (isUniformBrightClockBg) {
+                    targetHue = if (peakHasColor) heroHue else 214f
+                    targetSatPct = if (peakHasColor) (heroSat * 56f + 16f).coerceIn(24f, 64f) else 22f
+                    targetLitPct = 42f
+                    clockOpacity = (20f + (clockLum - 0.66f).coerceIn(0f, 0.34f) * 20f).roundToInt().coerceIn(20, 28)
+                } else if (peakHasColor && (meanSat >= 0.14f || heroChroma > 0.10f)) {
+                    targetHue = heroHue
+                    targetSatPct = (heroSat * 52f + 18f).coerceIn(24f, 68f)
+                    targetLitPct = (78f + clockSpread * 8f).coerceIn(76f, 86f)
+                    clockOpacity = (15f + meanSat * 10f).roundToInt().coerceIn(15, 22)
+                } else {
+                    targetHue = if (peakHasColor && heroChroma > 0.03f) heroHue else 214f
+                    targetSatPct = if (peakHasColor) (heroSat * 20f).coerceIn(6f, 18f) else 12f
+                    targetLitPct = 82f
+                    clockOpacity = 16
+                }
+                clockGlass = (92f + detailBoost * 0.20f).roundToInt().coerceIn(92, 97)
+                clockRefraction = (142f + detailBoost * 0.35f).roundToInt().coerceIn(142, 150)
+                profileLabel = "مظهر Glass الكريستالي حسب خلفيتك"
+            }
+
             isTrueDarkHeroScene -> {
                 // Rich dramatic accent tint over deep dark background (e.g. crimson red in dark forest)
                 targetSatPct = (heroSat * 100f).coerceIn(68f, 88f)
@@ -349,11 +372,11 @@ object WallpaperThemeAI {
             if (clockLum < 0.50f) {
                 targetLitPct = max(targetLitPct, 82f)
                 chosenColor = AppConstants.hslToRgbInt(targetHue, min(targetSatPct, 66f), targetLitPct)
-                clockOpacity = max(clockOpacity, 24)
+                clockOpacity = max(clockOpacity, if (glassPreset) 18 else 24)
             } else {
                 targetLitPct = min(targetLitPct, 34f)
                 chosenColor = AppConstants.hslToRgbInt(targetHue, max(targetSatPct, 32f), targetLitPct)
-                clockOpacity = max(clockOpacity, 32)
+                clockOpacity = max(clockOpacity, if (glassPreset) 24 else 32)
             }
         }
 

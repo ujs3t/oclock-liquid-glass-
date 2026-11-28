@@ -355,6 +355,25 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(mainKt.includes('harmonyAuraView'));
   assert.ok(mainKt.includes('harmonyPillView'));
 
+  // Dedicated "Glass" 3D Crystal Clock Mode (high Snell refraction + chromatic dispersion + frosted interior blur + adaptive wallpaper harmony)
+  assert.ok(appStateKt.includes('clockGlassPreset'));
+  assert.ok(shadersKt.includes('uBlurBackdrop'));
+  assert.ok(shadersKt.includes('uGlassMode'));
+  assert.ok(shadersKt.includes('2.25'));
+  assert.ok(shadersKt.includes('blurBlend'));
+  assert.ok(shadersKt.includes('wallGlint'));
+  assert.ok(jniCpp.includes('glassMode'));
+  assert.ok(jniCpp.includes('wallGlint'));
+  assert.ok(layerKt.includes('uBlurBackdrop'));
+  assert.ok(layerKt.includes('uGlassMode'));
+  assert.ok(layerKt.includes('liveGlassModeOverride'));
+  assert.ok(wallAiKt.includes('glassPreset'));
+  assert.ok(sheetKt.includes('togClockGlass'));
+  assert.ok(sheetKt.includes('"Glass"'));
+  assert.ok(sheetKt.includes('onToggleClockGlassPreset'));
+  assert.ok(mainKt.includes('onToggleClockGlassPreset'));
+  assert.ok(mainKt.includes('liveGlassModeOverride'));
+
   const perfKt = readFileSync(ktDir + 'PerfMonitor.kt','utf8');
   assert.ok(perfKt.includes('Choreographer'));
   assert.ok(perfKt.includes('oclock.liquidglass.perf.v1'));

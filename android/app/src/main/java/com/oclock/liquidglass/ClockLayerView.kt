@@ -52,6 +52,7 @@ class ClockGlassView(
 
     var colors: AdaptiveColors? = null
     var config: LockConfig = LockConfig()
+    var liveGlassModeOverride: Float? = null
     var previewScaleX: Float = 1f
     var previewScaleY: Float = 1f
     var pullOffsetYPx: Float = 0f
@@ -336,6 +337,7 @@ class ClockGlassView(
             val t0 = SystemClock.elapsedRealtimeNanos()
             val sh = clockShader!!
             sh.setInputShader("uBackdrop", wallShader)
+            sh.setInputShader("uBlurBackdrop", backdrop.blurredShader ?: wallShader)
             sh.setInputShader("uField", art.fieldShader)
             sh.setInputShader("uMask", art.alphaShader)
             sh.setFloatUniform("uClockOrigin", originX, originY)
@@ -344,9 +346,11 @@ class ClockGlassView(
             sh.setFloatUniform("uFieldSize", art.wPx.toFloat(), art.hPx.toFloat())
             val effMaxAbsPx = art.maxAbsCss * dens * (config.clockRefraction / 100f).coerceIn(0f, 1.5f)
             val glassAmt = (config.clockGlass / 100f).coerceIn(0f, 1f)
+            val glassMode = (liveGlassModeOverride ?: if (config.clockGlassPreset) 1f else 0f).coerceIn(0f, 1f)
             sh.setFloatUniform("uMaxAbsPx", effMaxAbsPx)
             sh.setFloatUniform("uSS", art.ss)
             sh.setFloatUniform("uGlassAmt", glassAmt)
+            sh.setFloatUniform("uGlassMode", glassMode)
             setColorUniform(sh, "uTintTop", cols.clockTintTop)
             setColorUniform(sh, "uTintBot", cols.clockTintBot)
             val shTop = Color.argb(
@@ -374,7 +378,8 @@ class ClockGlassView(
             val wallBmp = backdrop.wallBitmap ?: return
             val effMaxAbsPx = art.maxAbsCss * dens * (config.clockRefraction / 100f).coerceIn(0f, 1.5f)
             val glassAmt = (config.clockGlass / 100f).coerceIn(0f, 1f)
-            val key = "${art.maskKey}|${originX.roundToInt()}|${originY.roundToInt()}|${cols.clockTintTop}|${cols.clockTintBot}|${config.innerOpacity}|${config.innerThickness}|${config.innerAngle}|${config.innerFade}|${config.innerColor}|${config.clockGlass}|${config.clockRefraction}"
+            val glassMode = (liveGlassModeOverride ?: if (config.clockGlassPreset) 1f else 0f).coerceIn(0f, 1f)
+            val key = "${art.maskKey}|${originX.roundToInt()}|${originY.roundToInt()}|${cols.clockTintTop}|${cols.clockTintBot}|${config.innerOpacity}|${config.innerThickness}|${config.innerAngle}|${config.innerFade}|${config.innerColor}|${config.clockGlass}|${config.clockRefraction}|$glassMode"
             var out = cpuFallbackBmp?.takeIf { !it.isRecycled && it.width == art.wPx && it.height == art.hPx }
             if (out == null || cpuFallbackKey != key) {
                 if (out == null) {
@@ -389,7 +394,7 @@ class ClockGlassView(
                     effMaxAbsPx, art.ss,
                     cols.clockTintTop, cols.clockTintBot, cols.clockShadowOp, cols.clockShadowTopColor,
                     innerCol, config.innerThickness, (config.innerOpacity / 100f).coerceIn(0f, 1f), config.innerAngle, (config.innerFade / 100f).coerceIn(0f, 1f),
-                    glassAmt
+                    glassAmt, glassMode
                 )
                 cpuFallbackKey = key
             }
@@ -487,9 +492,11 @@ class ClockGhostView(
 
         val effMaxAbsPx = art.maxAbsCss * dens * (ghostConfig.clockRefraction / 100f).coerceIn(0f, 1.5f)
         val glassAmt = (ghostConfig.clockGlass / 100f).coerceIn(0f, 1f)
+        val glassMode = if (ghostConfig.clockGlassPreset) 1f else 0f
         if (Build.VERSION.SDK_INT >= 33 && clockShader != null && art.fieldShader != null && art.alphaShader != null) {
             val sh = clockShader!!
             sh.setInputShader("uBackdrop", wallShader)
+            sh.setInputShader("uBlurBackdrop", backdrop.blurredShader ?: wallShader)
             sh.setInputShader("uField", art.fieldShader)
             sh.setInputShader("uMask", art.alphaShader)
             sh.setFloatUniform("uClockOrigin", originX, originY)
@@ -499,6 +506,7 @@ class ClockGhostView(
             sh.setFloatUniform("uMaxAbsPx", effMaxAbsPx)
             sh.setFloatUniform("uSS", art.ss)
             sh.setFloatUniform("uGlassAmt", glassAmt)
+            sh.setFloatUniform("uGlassMode", glassMode)
             setColorUniform(sh, "uTintTop", cols.clockTintTop)
             setColorUniform(sh, "uTintBot", cols.clockTintBot)
             val shTop = Color.argb(
@@ -534,7 +542,7 @@ class ClockGhostView(
                     cols.clockTintTop, cols.clockTintBot, cols.clockShadowOp, cols.clockShadowTopColor,
                     innerCol, ghostConfig.innerThickness, (ghostConfig.innerOpacity / 100f).coerceIn(0f, 1f),
                     ghostConfig.innerAngle, (ghostConfig.innerFade / 100f).coerceIn(0f, 1f),
-                    glassAmt
+                    glassAmt, glassMode
                 )
                 ghostCpuBmp = created
                 created

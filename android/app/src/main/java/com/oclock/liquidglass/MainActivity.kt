@@ -393,7 +393,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val isFirstLaunch = !store.hasSavedConfig()
         if (cachedPreset != null && !cfg.hasCustomSubject) {
             applyWallpaperAndTheme(reRenderClock = false)
-            if (isFirstLaunch && cfg.smartWallTheme) {
+            if (isFirstLaunch && (cfg.smartWallTheme || cfg.clockGlassPreset)) {
                 currentWallBmp?.let { bmp ->
                     runSmartWallpaperHarmony(bmp, animated = false, playEffect = false)
                 }
@@ -411,7 +411,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     if (cw != null) customWallBmp = cw
                     if (cs != null) customSubjectBmp = cs
                     applyWallpaperAndTheme(reRenderClock = false)
-                    if (isFirstLaunch && cfg.smartWallTheme) {
+                    if (isFirstLaunch && (cfg.smartWallTheme || cfg.clockGlassPreset)) {
                         currentWallBmp?.let { bmp ->
                             runSmartWallpaperHarmony(bmp, animated = false, playEffect = false)
                         }
@@ -1815,6 +1815,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     val curW = max(1, phoneShell.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels)
                     val curH = max(1, phoneShell.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels)
                     backdrop.updateBlurredBackdrop(blurred, curW, curH, wallView.scaleX)
+                    clockView.invalidate()
                     if (::passcodeOverlay.isInitialized && passcodeOverlay.isOpen) {
                         passcodeOverlay.invalidate()
                         passcodeOverlay.invalidateAllKeys()
@@ -1860,9 +1861,10 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val wallKey = if (cfg.wall == "custom") "custom:${bmp.generationId}" else cfg.wall
         val startCols = prevColorsOverride ?: currentColors ?: adaptive.sample(wallKey, bmp, cfg)
         val startCfg = prevConfigOverride ?: cfg.copy()
+        val targetGlassPreset = cfg.clockGlassPreset
 
         bgExecutor.execute {
-            val style = WallpaperThemeAI.analyze(bmp, startCfg)
+            val style = WallpaperThemeAI.analyze(bmp, startCfg, glassPreset = targetGlassPreset)
             mainHandler.post {
                 if (myToken != smartWallToken || isDestroyed) return@post
 
@@ -1889,6 +1891,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 }
 
                 if (!animated) {
+                    clockView.liveGlassModeOverride = null
                     applyThemeColors(targetCols)
                     clockView.invalidate()
                     return@post
@@ -1897,7 +1900,10 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 // Keep starting look on screen for frame 0 so the transition morphs seamlessly
                 val fromInnerInt = AppConstants.parseHexColor(startCfg.innerColor, Color.WHITE)
                 val toInnerInt = style.innerColorInt
+                val fromGlassMode = if (startCfg.clockGlassPreset) 1f else 0f
+                val toGlassMode = if (cfg.clockGlassPreset) 1f else 0f
                 val interpCfg = cfg.copy()
+                clockView.liveGlassModeOverride = fromGlassMode
                 clockView.colors = startCols
                 clockView.config = startCfg.copy()
                 clockView.invalidate()
@@ -1920,6 +1926,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                         interpCfg.innerColor = AppConstants.toHex(WallpaperThemeAI.lerpArgb(fromInnerInt, toInnerInt, t))
 
                         smartBreathScale = if (playEffect) 1f + 0.018f * kotlin.math.sin(t * kotlin.math.PI).toFloat() else 1f
+                        clockView.liveGlassModeOverride = fromGlassMode + (toGlassMode - fromGlassMode) * t
                         clockView.colors = curCols
                         clockView.config = interpCfg
                         dateText.setTextColor(curCols.uiInk)
@@ -1930,10 +1937,12 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     addListener(object : android.animation.AnimatorListenerAdapter() {
                         override fun onAnimationCancel(animation: android.animation.Animator) {
                             cancelled = true
+                            clockView.liveGlassModeOverride = null
                         }
                         override fun onAnimationEnd(animation: android.animation.Animator) {
                             if (cancelled || myToken != smartWallToken || isDestroyed) return
                             smartBreathScale = 1f
+                            clockView.liveGlassModeOverride = null
                             applyThemeColors(targetCols)
                             applyDepthAndLayerTransforms()
                             clockView.invalidate()
@@ -2604,7 +2613,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                                 store.clearCustomSubject()
                                 store.save(cfg)
                                 applyWallpaperAndTheme(reRenderClock = true)
-                                if (cfg.smartWallTheme) {
+                                if (cfg.smartWallTheme || cfg.clockGlassPreset) {
                                     runSmartWallpaperHarmony(
                                         bmp = bmp,
                                         animated = true,
@@ -2733,6 +2742,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     override fun onColorOrOpacityChanged() {
         smartMorphAnim?.cancel()
         smartBreathScale = 1f
+        clockView.liveGlassModeOverride = null
         val bmp = currentWallBmp ?: return
         val wallKey = if (cfg.wall == "custom") "custom:${bmp.generationId}" else cfg.wall
         currentColors = adaptive.sample(wallKey, bmp, cfg)
@@ -2754,7 +2764,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         store.clearCustomSubject()
         store.save(cfg)
         applyWallpaperAndTheme(reRenderClock = true)
-        if (cfg.smartWallTheme) {
+        if (cfg.smartWallTheme || cfg.clockGlassPreset) {
             currentWallBmp?.let { bmp ->
                 runSmartWallpaperHarmony(
                     bmp = bmp,
@@ -2906,9 +2916,98 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     override fun onInnerShadowChanged() {
         smartMorphAnim?.cancel()
         smartBreathScale = 1f
+        clockView.liveGlassModeOverride = null
         clockView.config = cfg
         clockView.invalidate()
         store.save(cfg)
+    }
+
+    override fun onToggleClockGlassPreset(enabled: Boolean) {
+        haptic("pop")
+        val prevCfg = cfg.copy(clockGlassPreset = !enabled)
+        cfg.clockGlassPreset = enabled
+        val bmp = currentWallBmp
+        if (enabled && bmp != null) {
+            store.save(cfg)
+            runSmartWallpaperHarmony(
+                bmp = bmp,
+                animated = true,
+                playEffect = true,
+                prevColorsOverride = currentColors,
+                prevConfigOverride = prevCfg
+            )
+            return
+        }
+        if (!enabled && cfg.smartWallTheme && bmp != null) {
+            store.save(cfg)
+            runSmartWallpaperHarmony(
+                bmp = bmp,
+                animated = true,
+                playEffect = false,
+                prevColorsOverride = currentColors,
+                prevConfigOverride = prevCfg
+            )
+            return
+        }
+        smartWallToken++
+        smartMorphAnim?.cancel()
+        smartBreathScale = 1f
+        if (!enabled) {
+            cfg.color = "auto"
+            cfg.clockOpacity = 14
+            cfg.clockGlass = 75
+            cfg.clockRefraction = 100
+        }
+        store.save(cfg)
+        if (::editorSheet.isInitialized) editorSheet.syncFromConfig()
+        if (bmp == null) {
+            clockView.liveGlassModeOverride = null
+            clockView.config = cfg
+            clockView.invalidate()
+            return
+        }
+        val myToken = smartWallToken
+        val wallKey = if (cfg.wall == "custom") "custom:${bmp.generationId}" else cfg.wall
+        val startCols = currentColors ?: adaptive.sample(wallKey, bmp, prevCfg)
+        val targetCols = adaptive.sample(wallKey, bmp, cfg)
+        val fromMode = if (prevCfg.clockGlassPreset) 1f else 0f
+        val toMode = if (cfg.clockGlassPreset) 1f else 0f
+        val interpCfg = cfg.copy()
+        clockView.liveGlassModeOverride = fromMode
+        clockView.colors = startCols
+        clockView.config = prevCfg
+        clockView.invalidate()
+
+        smartMorphAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 380L
+            interpolator = PathInterpolator(0.22f, 1f, 0.36f, 1f)
+            var cancelled = false
+            addUpdateListener { a ->
+                if (myToken != smartWallToken || isDestroyed) return@addUpdateListener
+                val t = (a.animatedValue as Float).coerceIn(0f, 1f)
+                val curCols = WallpaperThemeAI.lerpAdaptiveColors(startCols, targetCols, t)
+                interpCfg.clockOpacity = (prevCfg.clockOpacity + (cfg.clockOpacity - prevCfg.clockOpacity) * t).roundToInt()
+                interpCfg.clockGlass = (prevCfg.clockGlass + (cfg.clockGlass - prevCfg.clockGlass) * t).roundToInt()
+                interpCfg.clockRefraction = (prevCfg.clockRefraction + (cfg.clockRefraction - prevCfg.clockRefraction) * t).roundToInt()
+                clockView.liveGlassModeOverride = fromMode + (toMode - fromMode) * t
+                clockView.colors = curCols
+                clockView.config = interpCfg
+                clockView.invalidate()
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationCancel(animation: android.animation.Animator) {
+                    cancelled = true
+                    clockView.liveGlassModeOverride = null
+                }
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    if (cancelled || myToken != smartWallToken || isDestroyed) return
+                    clockView.liveGlassModeOverride = null
+                    applyThemeColors(targetCols)
+                    clockView.invalidate()
+                }
+            })
+            start()
+        }
     }
 
     override fun onToggleSmartWallTheme(enabled: Boolean) {

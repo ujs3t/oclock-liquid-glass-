@@ -96,6 +96,7 @@ data class LockConfig(
     var innerFade: Int = 100,
     var innerColor: String = "#ffffff",
     var smartWallTheme: Boolean = true,
+    var clockGlassPreset: Boolean = false,
     var clockGlass: Int = 75,
     var clockRefraction: Int = 100,
     var depth: Boolean = false,
@@ -238,6 +239,7 @@ class StateStore(context: Context) {
             cfg.innerFade = j.optInt("innerFade", cfg.innerFade)
             cfg.innerColor = j.optString("innerColor", cfg.innerColor)
             cfg.smartWallTheme = j.optBoolean("smartWallTheme", cfg.smartWallTheme)
+            cfg.clockGlassPreset = j.optBoolean("clockGlassPreset", cfg.clockGlassPreset)
             cfg.clockGlass = j.optInt("clockGlass", cfg.clockGlass)
             cfg.clockRefraction = j.optInt("clockRefraction", cfg.clockRefraction)
             cfg.depth = j.optBoolean("depth", cfg.depth)
@@ -276,6 +278,7 @@ class StateStore(context: Context) {
             put("innerFade", cfg.innerFade)
             put("innerColor", cfg.innerColor)
             put("smartWallTheme", cfg.smartWallTheme)
+            put("clockGlassPreset", cfg.clockGlassPreset)
             put("clockGlass", cfg.clockGlass)
             put("clockRefraction", cfg.clockRefraction)
             put("depth", cfg.depth)

@@ -71,6 +71,7 @@ class EditorSheetView(
         fun onToggleMusic()
         fun onToggleNotifications()
         fun onToggleDepth()
+        fun onToggleClockGlassPreset(enabled: Boolean)
         fun onToggleSmartWallTheme(enabled: Boolean)
         fun onApplySmartWallThemeNow()
         fun onToggleDnd()
@@ -111,6 +112,7 @@ class EditorSheetView(
     private lateinit var ySeek: SeekBar
     private lateinit var yVal: TextView
     private lateinit var fmtSegment: IosSegmentedControl
+    private lateinit var togClockGlass: IosToggleRow
 
     private val colorSwatches = HashMap<String, View>()
     private lateinit var proSwatch: View
@@ -2027,6 +2029,24 @@ class EditorSheetView(
 
     // ─────────────── Clock Customizer Sheet Content ───────────────
     private fun buildClockBody(body: LinearLayout) {
+        // 0. Dedicated "Glass" 3D Crystal Mode (High Refraction + Frosted Blur + Wallpaper Adaptive Color/Light)
+        body.addView(secHeader("المظهر"))
+        val glassModeCard = GlassSectionCard(context)
+        togClockGlass = IosToggleRow(context, "sparkle", 0xFF7DD3FC.toInt(), "Glass", 0xFF38BDF8.toInt()) {
+            cfg.clockGlassPreset = !cfg.clockGlassPreset
+            callbacks.onToggleClockGlassPreset(cfg.clockGlassPreset)
+            syncFromConfig()
+        }
+        glassModeCard.addView(togClockGlass)
+        val glassSub = TextView(context).apply {
+            text = "انكسار عالٍ · ضبابية زجاجية · تكيّف تلقائي مع خلفيتك"
+            setTextColor(Color.argb(165, 255, 255, 255))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setPadding((4f * dens).roundToInt(), 0, (4f * dens).roundToInt(), (2f * dens).roundToInt())
+        }
+        glassModeCard.addView(glassSub)
+        body.addView(glassModeCard)
+
         // 1. iPhone Horizontal Font Strip
         body.addView(secHeader("الخط"))
         val fontRow = LinearLayout(context).apply {
@@ -2549,6 +2569,7 @@ class EditorSheetView(
     fun syncFromConfig() {
         if (!bodiesBuilt) return
         suppressSeek = true
+        togClockGlass.setChecked(cfg.clockGlassPreset)
         for ((id, chip) in fontBtns) {
             chip.selectedState = cfg.font == id
         }

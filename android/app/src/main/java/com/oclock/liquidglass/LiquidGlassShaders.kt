@@ -138,6 +138,7 @@ object LiquidGlassShaders {
     // Pure GPU Clock Liquid Glass (reads C++ EDT Field + Mask, computes Snell refraction + tint + dynamic inner rim)
     private const val CLOCK_AGSL = """
         uniform shader uBackdrop;
+        uniform shader uBlurBackdrop;
         uniform shader uField;
         uniform shader uMask;
         uniform float2 uClockOrigin;
@@ -147,6 +148,7 @@ object LiquidGlassShaders {
         uniform float uMaxAbsPx;
         uniform float uSS;
         uniform float uGlassAmt;
+        uniform float uGlassMode;
         uniform float4 uTintTop;
         uniform float4 uTintBot;
         uniform float4 uShadowTop;
@@ -176,29 +178,82 @@ object LiquidGlassShaders {
             float4 f3 = uField.eval(fp + float2( 0.25 * rg.x, -0.75 * rg.y));
             float4 fld = (f0 + f1 + f2 + f3) * 0.25;
             float2 dispNorm = (fld.rg * 255.0 - 128.0) / 127.0;
-            float2 disp = dispNorm * uMaxAbsPx;
 
+            float glassMode = clamp(uGlassMode, 0.0, 1.0);
             float glassAmt = clamp(uGlassAmt, 0.0, 1.0);
+            float depthPx = max(0.0, fld.b * 255.0 / 1.5 - 1.0);
+
+            float dispScale = mix(1.0, 2.25, glassMode);
+            float2 disp = dispNorm * (uMaxAbsPx * dispScale);
             float2 localScaled = float2((fragCoord.x - uDstSize.x * 0.5) * uClockScale.x + uDstSize.x * 0.5, fragCoord.y * uClockScale.y);
             float2 samplePos = uClockOrigin + localScaled + disp;
-            float spread = mix(0.0, 2.7, glassAmt);
+
+            float spread = mix(0.0, mix(2.7, 3.8, glassMode), glassAmt);
             float wC = mix(1.0, 0.50, glassAmt);
             float wT = (1.0 - wC) * 0.25;
-            float3 col = uBackdrop.eval(samplePos).rgb * wC
-                + uBackdrop.eval(samplePos + float2(spread, 0.0)).rgb * wT
-                + uBackdrop.eval(samplePos + float2(-spread, 0.0)).rgb * wT
-                + uBackdrop.eval(samplePos + float2(0.0, spread)).rgb * wT
-                + uBackdrop.eval(samplePos + float2(0.0, -spread)).rgb * wT;
 
-            // Liquid Glass crystal vibrancy & edge depth scaled by uGlassAmt
+            float3 sharpCol;
+            if (glassMode > 0.01) {
+                float2 prism = disp * (0.058 * glassMode);
+                float3 pR = uBackdrop.eval(samplePos + prism).rgb * wC
+                    + uBackdrop.eval(samplePos + prism + float2(spread, 0.0)).rgb * wT
+                    + uBackdrop.eval(samplePos + prism + float2(-spread, 0.0)).rgb * wT
+                    + uBackdrop.eval(samplePos + prism + float2(0.0, spread)).rgb * wT
+                    + uBackdrop.eval(samplePos + prism + float2(0.0, -spread)).rgb * wT;
+                float3 pG = uBackdrop.eval(samplePos).rgb * wC
+                    + uBackdrop.eval(samplePos + float2(spread, 0.0)).rgb * wT
+                    + uBackdrop.eval(samplePos + float2(-spread, 0.0)).rgb * wT
+                    + uBackdrop.eval(samplePos + float2(0.0, spread)).rgb * wT
+                    + uBackdrop.eval(samplePos + float2(0.0, -spread)).rgb * wT;
+                float3 pB = uBackdrop.eval(samplePos - prism).rgb * wC
+                    + uBackdrop.eval(samplePos - prism + float2(spread, 0.0)).rgb * wT
+                    + uBackdrop.eval(samplePos - prism + float2(-spread, 0.0)).rgb * wT
+                    + uBackdrop.eval(samplePos - prism + float2(0.0, spread)).rgb * wT
+                    + uBackdrop.eval(samplePos - prism + float2(0.0, -spread)).rgb * wT;
+                sharpCol = float3(pR.r, pG.g, pB.b);
+            } else {
+                sharpCol = uBackdrop.eval(samplePos).rgb * wC
+                    + uBackdrop.eval(samplePos + float2(spread, 0.0)).rgb * wT
+                    + uBackdrop.eval(samplePos + float2(-spread, 0.0)).rgb * wT
+                    + uBackdrop.eval(samplePos + float2(0.0, spread)).rgb * wT
+                    + uBackdrop.eval(samplePos + float2(0.0, -spread)).rgb * wT;
+            }
+
+            float3 col = sharpCol;
+            if (glassMode > 0.01) {
+                // Separate frosted blur interior vs sharp caustic curved bevel
+                float2 blurPos = uClockOrigin + localScaled + disp * 0.65;
+                float3 blurCol = uBlurBackdrop.eval(blurPos).rgb;
+                float interiorMask = smoothstep(0.8 * uSS, max(2.0 * uSS, 11.5 * uSS), depthPx);
+                float blurBlend = mix(0.18, 0.80, interiorMask) * mix(0.50, 0.95, glassAmt) * glassMode;
+                col = mix(sharpCol, blurCol, blurBlend);
+            }
+
+            // Liquid Glass crystal vibrancy & edge depth scaled by uGlassAmt + uGlassMode
             float lum = dot(col, float3(0.2126, 0.7152, 0.0722));
-            float satBoost = mix(1.0, 1.28, glassAmt);
-            float brightBoost = mix(1.0, 1.055, glassAmt);
+            float satBoost = mix(1.0, mix(1.28, 1.38, glassMode), glassAmt);
+            float brightBoost = mix(1.0, mix(1.055, 1.09, glassMode), glassAmt);
             col = clamp((lum + (col - lum) * satBoost) * brightBoost, 0.0, 1.0);
 
-            float depthPx = max(0.0, fld.b * 255.0 / 1.5 - 1.0);
-            if (glassAmt > 0.01) {
-                float edgeBand = 1.0 - clamp(depthPx / max(1.0, 2.6 * uSS), 0.0, 1.0);
+            float2 nRaw = ((m0.gb + m1.gb + m2.gb + m3.gb) * 0.25 * 255.0 - 128.0) / 127.0;
+            float gl = length(nRaw);
+
+            if (glassMode > 0.01) {
+                // Frosted crystal atmospheric body so digits never disappear even over pitch-black space
+                col = mix(col, max(col, float3(0.14, 0.15, 0.18)), 0.44 * glassMode);
+                if (gl > 0.01) {
+                    float2 nCrystal = nRaw / gl;
+                    float kLit = abs(dot(nCrystal, uInnerDir));
+                    float wallBand = max(0.0001, 1.0 - clamp(depthPx / max(1.0, 7.2 * uSS), 0.0, 1.0));
+                    float edgeSharp = max(0.0001, 1.0 - clamp(depthPx / max(1.0, 2.4 * uSS), 0.0, 1.0));
+                    // Opposed optical refraction depth: subtle dark undercut on unlit side + bright liquid sheen on lit wall
+                    float shadowUndercut = pow(wallBand, 1.65) * (1.0 - kLit) * 0.24 * glassMode;
+                    col *= (1.0 - shadowUndercut);
+                    float wallGlint = (pow(wallBand, 1.55) * pow(max(0.0001, kLit), 1.45) * 0.30 + pow(edgeSharp, 1.7) * 0.20) * glassMode;
+                    col = mix(col, float3(1.0), clamp(wallGlint, 0.0, 0.48));
+                }
+            } else if (glassAmt > 0.01) {
+                float edgeBand = max(0.0001, 1.0 - clamp(depthPx / max(1.0, 2.6 * uSS), 0.0, 1.0));
                 float fresnel = pow(edgeBand, 2.3) * glassAmt * 0.14;
                 col = mix(col, float3(1.0), fresnel);
             }
@@ -214,8 +269,6 @@ object LiquidGlassShaders {
             // Stays crisp and clearly visible even at high clock color opacity (70-100%)
             float fallLimit = uInnerThick > 0.01 ? max(0.75 * uSS, (uInnerThick * 4.8 + 0.45) * uSS) : 0.0;
             if (uInnerOp > 0.001 && uInnerThick > 0.01 && depthPx < fallLimit) {
-                float2 nRaw = ((m0.gb + m1.gb + m2.gb + m3.gb) * 0.25 * 255.0 - 128.0) / 127.0;
-                float gl = length(nRaw);
                 if (gl > 0.01) {
                     float ridgeFade = clamp(gl * 1.40, 0.0, 1.0);
                     float2 n = nRaw / gl;
@@ -226,11 +279,11 @@ object LiquidGlassShaders {
                     float fadeAmt = clamp(uInnerFade, 0.0, 1.0);
                     float lit = pow(clamp((k - 0.24) / 0.76, 0.0, 1.0), 1.75);
                     float dirTerm = mix(1.0, lit, fadeAmt);
-                    float rimStrength = mix(0.76, 1.00, fillOp);
+                    float rimStrength = mix(mix(0.76, 0.92, glassMode), 1.00, fillOp);
                     float rimA = clamp(dirTerm * decay * ridgeFade * uInnerOp * rimStrength, 0.0, 0.96);
                     col = mix(col, uInnerColor.rgb, rimA);
-                    if (fillOp > 0.12) {
-                        col = clamp(col + uInnerColor.rgb * (rimA * fillOp * 0.22), 0.0, 1.0);
+                    if (fillOp > 0.12 || glassMode > 0.01) {
+                        col = clamp(col + uInnerColor.rgb * (rimA * max(fillOp, glassMode * 0.45) * 0.22), 0.0, 1.0);
                     }
                 }
             }
