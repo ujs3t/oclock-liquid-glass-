@@ -6,6 +6,9 @@ import android.app.AlertDialog
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.text.InputType
@@ -25,9 +28,11 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
+import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 class EditorSheetView(
     context: Context,
@@ -91,8 +96,7 @@ class EditorSheetView(
     private lateinit var widthVal: TextView
     private lateinit var ySeek: SeekBar
     private lateinit var yVal: TextView
-    private lateinit var fmt12Btn: GlassPillButton
-    private lateinit var fmt24Btn: GlassPillButton
+    private lateinit var fmtSegment: IosSegmentedControl
 
     private val colorSwatches = HashMap<String, View>()
     private lateinit var proSwatch: View
@@ -114,15 +118,15 @@ class EditorSheetView(
 
     // Wallpaper & Lock customizer controls
     private val wallThumbs = HashMap<String, FrameLayout>()
-    private lateinit var aiDepthBtn: GlassPillButton
+    private lateinit var aiDepthBtn: IosWallActionTile
     private lateinit var aiDepthStatus: TextView
 
-    private lateinit var togWeather: GlassPillButton
-    private lateinit var togMusic: GlassPillButton
-    private lateinit var togNotif: GlassPillButton
-    private lateinit var togDepth: GlassPillButton
-    private lateinit var togDnd: GlassPillButton
-    private lateinit var togPasscode: GlassPillButton
+    private lateinit var togWeather: IosToggleRow
+    private lateinit var togMusic: IosToggleRow
+    private lateinit var togNotif: IosToggleRow
+    private lateinit var togDepth: IosToggleRow
+    private lateinit var togDnd: IosToggleRow
+    private lateinit var togPasscode: IosToggleRow
 
     private lateinit var perfMeta: TextView
     private lateinit var perfStatus: TextView
@@ -184,7 +188,7 @@ class EditorSheetView(
         grabberWrap.addView(grabber)
         attachSwipeDismiss(grabberWrap)
 
-        // Sticky Liquid Glass Header
+        // Sticky Liquid Glass Header (keeps "تم" and switch pill intact)
         val hdr = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -288,7 +292,10 @@ class EditorSheetView(
     }
 
     private fun invalidateGlassTree(v: View) {
-        if (v is GlassPillButton || v is GlassFontChip || v is GlassSectionCard || v is GlassSheetCard) {
+        if (v is GlassPillButton || v is GlassFontChip || v is GlassSectionCard ||
+            v is GlassSheetCard || v is IosWallActionTile || v is IosSegmentedControl ||
+            v is IosCapsuleButton
+        ) {
             v.invalidate()
         }
         if (v is ViewGroup) {
@@ -298,6 +305,7 @@ class EditorSheetView(
         }
     }
 
+    // ─────────────── Liquid Glass Outer Sheet & Inset Cards ───────────────
     private inner class GlassSheetCard(context: Context) : LinearLayout(context) {
         private val glassHelper = LiquidGlassCardHelper(
             backdrop, perf, 30f, 24f, 16f, 1.44f, 0.24f, innerShadow = 0.16f, useBlurredBackdrop = true
@@ -311,27 +319,36 @@ class EditorSheetView(
         }
     }
 
-    private inner class GlassSectionCard(context: Context) : LinearLayout(context) {
+    private inner class GlassSectionCard(
+        context: Context,
+        padHdp: Float = 12f,
+        padVdp: Float = 10f
+    ) : LinearLayout(context) {
         private val glassHelper = LiquidGlassCardHelper(
-            backdrop, perf, 18f, 14f, 10f, 1.38f, 0.16f, innerShadow = 0.12f, useBlurredBackdrop = true
+            backdrop, perf, 20f, 14f, 9f, 1.38f, 0.14f, innerShadow = 0.11f, useBlurredBackdrop = true
         )
         init {
             orientation = VERTICAL
             setWillNotDraw(false)
-            val p = (12f * dens).roundToInt()
-            setPadding(p, p, p, p)
+            setPadding(
+                (padHdp * dens).roundToInt(),
+                (padVdp * dens).roundToInt(),
+                (padHdp * dens).roundToInt(),
+                (padVdp * dens).roundToInt()
+            )
         }
         override fun onDraw(canvas: Canvas) {
             val (ox, oy) = computeShellOrigin(this)
-            glassHelper.draw(this, canvas, Color.argb(166, 18, 22, 34), ox, oy)
+            glassHelper.draw(this, canvas, Color.argb(172, 17, 20, 31), ox, oy)
         }
     }
 
+    // Header pill ("تم", "الساعة"/"الخلفية") kept clean as requested
     @SuppressLint("ClickableViewAccessibility")
     private inner class GlassPillButton(
         context: Context,
         label: String,
-        radiusDp: Float = 13f,
+        radiusDp: Float = 999f,
         private val isAccent: Boolean = false,
         private val onClick: () -> Unit
     ) : FrameLayout(context) {
@@ -339,13 +356,6 @@ class EditorSheetView(
             backdrop, perf, radiusDp, 12f, 10f, 1.44f, 0.22f, innerShadow = 0.18f, useBlurredBackdrop = true
         )
         val tv: TextView
-        var selectedState = false
-            set(value) {
-                if (field == value) return
-                field = value
-                applyVisualState()
-            }
-
         init {
             setWillNotDraw(false)
             isClickable = true
@@ -354,14 +364,13 @@ class EditorSheetView(
                 gravity = Gravity.CENTER
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
+                setTextColor(if (isAccent) 0xFFE0F2FE.toInt() else Color.argb(232, 255, 255, 255))
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
                 typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-                setPadding((12f * dens).roundToInt(), (7f * dens).roundToInt(), (12f * dens).roundToInt(), (7f * dens).roundToInt())
+                setPadding((14f * dens).roundToInt(), (6f * dens).roundToInt(), (14f * dens).roundToInt(), (6f * dens).roundToInt())
                 layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.CENTER)
             }
             addView(tv)
-            applyVisualState()
-
             setOnTouchListener { _, ev ->
                 when (ev.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
@@ -385,23 +394,697 @@ class EditorSheetView(
             }
             setOnClickListener { onClick() }
         }
+        override fun onDraw(canvas: Canvas) {
+            val (ox, oy) = computeShellOrigin(this)
+            val bg = if (isAccent) Color.argb(166, 26, 86, 146) else Color.argb(148, 26, 30, 44)
+            val sh = if (isAccent) 0.34f else 0.22f
+            val inn = if (isAccent) 0.28f else 0.17f
+            glassHelper.draw(this, canvas, bg, ox, oy, shadowOverride = sh, innerOverride = inn)
+        }
+    }
 
-        private fun applyVisualState() {
-            val active = selectedState || isAccent
-            tv.setTextColor(if (active) 0xFFE0F2FE.toInt() else Color.argb(232, 255, 255, 255))
-            invalidate()
+    // ─────────────── SF-Style Vector Glyph Helper ───────────────
+    private fun drawIosGlyph(canvas: Canvas, iconId: String, cx: Float, cy: Float, sz: Float, color: Int) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            this.color = color
+            style = Paint.Style.STROKE
+            strokeWidth = max(1.5f, sz * 0.11f)
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+        val fillP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            this.color = color
+            style = Paint.Style.FILL
+        }
+        val r = sz * 0.42f
+        when (iconId) {
+            "depth" -> {
+                // Overlapping layered frames + subtle front subject curve
+                val backRect = RectF(cx - r * 0.95f, cy - r * 0.95f, cx + r * 0.45f, cy + r * 0.45f)
+                canvas.drawRoundRect(backRect, r * 0.28f, r * 0.28f, p)
+                val frontRect = RectF(cx - r * 0.32f, cy - r * 0.32f, cx + r * 0.98f, cy + r * 0.98f)
+                p.alpha = 215
+                canvas.drawRoundRect(frontRect, r * 0.28f, r * 0.28f, p)
+                canvas.drawCircle(cx + r * 0.33f, cy + r * 0.15f, r * 0.22f, fillP)
+            }
+            "gallery" -> {
+                val frame = RectF(cx - r, cy - r * 0.82f, cx + r, cy + r * 0.82f)
+                canvas.drawRoundRect(frame, r * 0.26f, r * 0.26f, p)
+                canvas.drawCircle(cx - r * 0.38f, cy - r * 0.28f, r * 0.16f, fillP)
+                val path = Path().apply {
+                    moveTo(cx - r * 0.72f, cy + r * 0.52f)
+                    lineTo(cx - r * 0.18f, cy + r * 0.04f)
+                    lineTo(cx + r * 0.14f, cy + r * 0.34f)
+                    lineTo(cx + r * 0.46f, cy - r * 0.02f)
+                    lineTo(cx + r * 0.76f, cy + r * 0.52f)
+                }
+                canvas.drawPath(path, p)
+            }
+            "ai" -> {
+                // 4-point iOS Intelligence sparkle + corner dot
+                val star = Path().apply {
+                    moveTo(cx, cy - r * 1.02f)
+                    quadTo(cx + r * 0.12f, cy - r * 0.12f, cx + r * 1.02f, cy)
+                    quadTo(cx + r * 0.12f, cy + r * 0.12f, cx, cy + r * 1.02f)
+                    quadTo(cx - r * 0.12f, cy + r * 0.12f, cx - r * 1.02f, cy)
+                    quadTo(cx - r * 0.12f, cy - r * 0.12f, cx, cy - r * 1.02f)
+                    close()
+                }
+                canvas.drawPath(star, fillP)
+                canvas.drawCircle(cx + r * 0.72f, cy - r * 0.68f, r * 0.15f, fillP)
+            }
+            "subject" -> {
+                // Person silhouette over layered cutout card
+                canvas.drawCircle(cx, cy - r * 0.38f, r * 0.32f, fillP)
+                val body = RectF(cx - r * 0.68f, cy + r * 0.06f, cx + r * 0.68f, cy + r * 0.88f)
+                canvas.drawArc(body, 180f, 180f, true, fillP)
+                val card = RectF(cx - r * 0.95f, cy - r * 0.92f, cx + r * 0.95f, cy + r * 0.92f)
+                p.alpha = 140
+                canvas.drawRoundRect(card, r * 0.3f, r * 0.3f, p)
+            }
+            "weather" -> {
+                canvas.drawCircle(cx - r * 0.25f, cy - r * 0.22f, r * 0.34f, p)
+                for (a in 0 until 6) {
+                    val ang = Math.toRadians(a * 60.0)
+                    val sx = (cx - r * 0.25f) + cos(ang).toFloat() * (r * 0.52f)
+                    val sy = (cy - r * 0.22f) + sin(ang).toFloat() * (r * 0.52f)
+                    val ex = (cx - r * 0.25f) + cos(ang).toFloat() * (r * 0.72f)
+                    val ey = (cy - r * 0.22f) + sin(ang).toFloat() * (r * 0.72f)
+                    canvas.drawLine(sx, sy, ex, ey, p)
+                }
+                val cloud = RectF(cx - r * 0.18f, cy + r * 0.02f, cx + r * 0.88f, cy + r * 0.68f)
+                canvas.drawRoundRect(cloud, r * 0.33f, r * 0.33f, fillP)
+            }
+            "music" -> {
+                val beam = Path().apply {
+                    moveTo(cx - r * 0.28f, cy + r * 0.52f)
+                    lineTo(cx - r * 0.28f, cy - r * 0.62f)
+                    lineTo(cx + r * 0.62f, cy - r * 0.82f)
+                    lineTo(cx + r * 0.62f, cy + r * 0.34f)
+                }
+                canvas.drawPath(beam, p)
+                canvas.drawCircle(cx - r * 0.48f, cy + r * 0.58f, r * 0.24f, fillP)
+                canvas.drawCircle(cx + r * 0.42f, cy + r * 0.40f, r * 0.24f, fillP)
+            }
+            "notif" -> {
+                val bell = Path().apply {
+                    moveTo(cx - r * 0.68f, cy + r * 0.38f)
+                    lineTo(cx - r * 0.52f, cy - r * 0.28f)
+                    quadTo(cx, cy - r * 0.96f, cx + r * 0.52f, cy - r * 0.28f)
+                    lineTo(cx + r * 0.68f, cy + r * 0.38f)
+                    close()
+                }
+                canvas.drawPath(bell, fillP)
+                canvas.drawCircle(cx, cy + r * 0.70f, r * 0.18f, fillP)
+            }
+            "dnd" -> {
+                val moon = Path().apply {
+                    addCircle(cx, cy, r * 0.78f, Path.Direction.CW)
+                }
+                val cut = Path().apply {
+                    addCircle(cx + r * 0.42f, cy - r * 0.26f, r * 0.64f, Path.Direction.CW)
+                }
+                moon.op(cut, Path.Op.DIFFERENCE)
+                canvas.drawPath(moon, fillP)
+            }
+            "lock" -> {
+                val arch = RectF(cx - r * 0.42f, cy - r * 0.88f, cx + r * 0.42f, cy - r * 0.02f)
+                canvas.drawArc(arch, 180f, 180f, false, p)
+                val body = RectF(cx - r * 0.66f, cy - r * 0.24f, cx + r * 0.66f, cy + r * 0.82f)
+                canvas.drawRoundRect(body, r * 0.26f, r * 0.26f, fillP)
+            }
+            "pin" -> {
+                val off = r * 0.46f
+                for (row in -1..1 step 2) {
+                    for (col in -1..1 step 2) {
+                        canvas.drawCircle(cx + col * off, cy + row * off, r * 0.20f, fillP)
+                    }
+                }
+            }
+            "test_notif" -> {
+                val card = RectF(cx - r * 0.82f, cy - r * 0.58f, cx + r * 0.82f, cy + r * 0.58f)
+                canvas.drawRoundRect(card, r * 0.30f, r * 0.30f, p)
+                canvas.drawLine(cx - r * 0.32f, cy, cx + r * 0.32f, cy, p)
+                canvas.drawLine(cx, cy - r * 0.32f, cx, cy + r * 0.32f, p)
+            }
+            "sys_notif" -> {
+                for (i in -1..1) {
+                    val y = cy + i * r * 0.54f
+                    canvas.drawLine(cx - r * 0.76f, y, cx + r * 0.76f, y, p)
+                    canvas.drawCircle(cx + (if (i == 0) 0.28f else -0.28f) * r, y, r * 0.16f, fillP)
+                }
+            }
+            "audio" -> {
+                val heights = floatArrayOf(0.36f, 0.78f, 0.96f, 0.62f, 0.38f)
+                for (i in heights.indices) {
+                    val x = cx + (i - 2) * r * 0.38f
+                    val hh = r * heights[i]
+                    canvas.drawLine(x, cy - hh, x, cy + hh, p)
+                }
+            }
+            "art" -> {
+                canvas.drawCircle(cx, cy, r * 0.82f, p)
+                canvas.drawCircle(cx, cy, r * 0.24f, fillP)
+            }
+            "export" -> {
+                canvas.drawLine(cx, cy - r * 0.78f, cx, cy + r * 0.28f, p)
+                canvas.drawLine(cx - r * 0.38f, cy - r * 0.08f, cx, cy + r * 0.32f, p)
+                canvas.drawLine(cx + r * 0.38f, cy - r * 0.08f, cx, cy + r * 0.32f, p)
+                canvas.drawLine(cx - r * 0.68f, cy + r * 0.72f, cx + r * 0.68f, cy + r * 0.72f, p)
+            }
+            "share" -> {
+                canvas.drawLine(cx, cy + r * 0.28f, cx, cy - r * 0.80f, p)
+                canvas.drawLine(cx - r * 0.36f, cy - r * 0.42f, cx, cy - r * 0.82f, p)
+                canvas.drawLine(cx + r * 0.36f, cy - r * 0.42f, cx, cy - r * 0.82f, p)
+                val box = RectF(cx - r * 0.64f, cy - r * 0.14f, cx + r * 0.64f, cy + r * 0.82f)
+                canvas.drawRoundRect(box, r * 0.22f, r * 0.22f, p)
+            }
+            "reset" -> {
+                val arc = RectF(cx - r * 0.72f, cy - r * 0.72f, cx + r * 0.72f, cy + r * 0.72f)
+                canvas.drawArc(arc, -45f, 270f, false, p)
+                canvas.drawLine(cx - r * 0.56f, cy - r * 0.52f, cx - r * 0.16f, cy - r * 0.56f, p)
+                canvas.drawLine(cx - r * 0.56f, cy - r * 0.52f, cx - r * 0.56f, cy - r * 0.12f, p)
+            }
+        }
+    }
+
+    // ─────────────── iPhone Wallpaper Gallery Action Tile (matches thumb proportions) ───────────────
+    @SuppressLint("ClickableViewAccessibility")
+    private inner class IosWallActionTile(
+        context: Context,
+        private val iconId: String,
+        label: String,
+        private val accentBg: Boolean = false,
+        private val onClick: () -> Unit
+    ) : FrameLayout(context) {
+        private val glassHelper = LiquidGlassCardHelper(
+            backdrop, perf, 13f, 12f, 9f, 1.42f, 0.20f, innerShadow = 0.16f, useBlurredBackdrop = true
+        )
+        private val iconCircle: View
+
+        init {
+            setWillNotDraw(false)
+            isClickable = true
+            layoutParams = LinearLayout.LayoutParams((64f * dens).roundToInt(), (68f * dens).roundToInt()).apply {
+                marginEnd = (8f * dens).roundToInt()
+            }
+
+            val col = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+                setPadding((4f * dens).roundToInt(), (7f * dens).roundToInt(), (4f * dens).roundToInt(), (6f * dens).roundToInt())
+            }
+            val iconColor = if (accentBg) 0xFF7DD3FC.toInt() else Color.WHITE
+            val circleColor = if (accentBg) Color.argb(46, 56, 189, 248) else Color.argb(26, 255, 255, 255)
+            iconCircle = object : View(context) {
+                private val bgP = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = circleColor }
+                override fun onDraw(canvas: Canvas) {
+                    val cx = width * 0.5f
+                    val cy = height * 0.5f
+                    canvas.drawCircle(cx, cy, min(width, height) * 0.48f, bgP)
+                    drawIosGlyph(canvas, iconId, cx, cy, min(width, height) * 0.56f, iconColor)
+                }
+            }.apply {
+                val sz = (29f * dens).roundToInt()
+                layoutParams = LinearLayout.LayoutParams(sz, sz).apply { bottomMargin = (4f * dens).roundToInt() }
+            }
+            val tv = TextView(context).apply {
+                text = label
+                gravity = Gravity.CENTER
+                maxLines = 2
+                ellipsize = TextUtils.TruncateAt.END
+                setTextColor(if (accentBg) 0xFFE0F2FE.toInt() else Color.argb(235, 255, 255, 255))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.8f)
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                setLineSpacing(0f, 0.92f)
+            }
+            col.addView(iconCircle)
+            col.addView(tv)
+            addView(col)
+
+            setOnTouchListener { _, ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        animate().cancel()
+                        animate().scaleX(0.92f).scaleY(0.92f).setDuration(85L).start()
+                        false
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        animate().cancel()
+                        animate().scaleX(1f).scaleY(1f).setDuration(260L)
+                            .setInterpolator(OvershootInterpolator(1.7f)).start()
+                        false
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        animate().cancel()
+                        animate().scaleX(1f).scaleY(1f).setDuration(180L).start()
+                        false
+                    }
+                    else -> false
+                }
+            }
+            setOnClickListener { onClick() }
         }
 
         override fun onDraw(canvas: Canvas) {
             val (ox, oy) = computeShellOrigin(this)
-            val bg = when {
-                selectedState -> Color.argb(166, 32, 92, 152)
-                isAccent -> Color.argb(160, 26, 84, 142)
-                else -> Color.argb(150, 24, 28, 42)
-            }
-            val sh = if (selectedState || isAccent) 0.34f else 0.22f
-            val inn = if (selectedState || isAccent) 0.28f else 0.17f
+            val bg = if (accentBg) Color.argb(148, 22, 68, 118) else Color.argb(142, 24, 28, 42)
+            val sh = if (accentBg) 0.28f else 0.18f
+            val inn = if (accentBg) 0.22f else 0.15f
             glassHelper.draw(this, canvas, bg, ox, oy, shadowOverride = sh, innerOverride = inn)
+        }
+    }
+
+    // ─────────────── Authentic iOS Sliding Glass Segmented Control (12h / 24h) ───────────────
+    @SuppressLint("ClickableViewAccessibility")
+    private inner class IosSegmentedControl(
+        context: Context,
+        leftLabel: String,
+        rightLabel: String,
+        private val onSelectIndex: (Int) -> Unit
+    ) : FrameLayout(context) {
+        private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val trackStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 0.8f * dens
+        }
+        private val thumbPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val thumbRimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 0.9f * dens
+        }
+        private val trackRect = RectF()
+        private val thumbRect = RectF()
+        private val labels = arrayOf(
+            makeSegLabel(leftLabel, 0),
+            makeSegLabel(rightLabel, 1)
+        )
+        private var selectedIdx = 0
+        private var animFrac = 0f
+        private var thumbAnim: ValueAnimator? = null
+
+        init {
+            setWillNotDraw(false)
+            layoutDirection = LAYOUT_DIRECTION_LTR
+            val row = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutDirection = LAYOUT_DIRECTION_LTR
+                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, (38f * dens).roundToInt())
+                setPadding((3f * dens).roundToInt(), (3f * dens).roundToInt(), (3f * dens).roundToInt(), (3f * dens).roundToInt())
+            }
+            labels.forEach { row.addView(it) }
+            addView(row)
+        }
+
+        private fun makeSegLabel(txt: String, idx: Int): TextView {
+            return TextView(context).apply {
+                text = txt
+                gravity = Gravity.CENTER
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                layoutParams = LinearLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1f)
+                setOnClickListener {
+                    if (selectedIdx != idx) {
+                        setSelectedIndex(idx, animated = true)
+                        onSelectIndex(idx)
+                    }
+                }
+            }
+        }
+
+        fun setSelectedIndex(idx: Int, animated: Boolean = false) {
+            val clamped = idx.coerceIn(0, 1)
+            selectedIdx = clamped
+            labels.forEachIndexed { i, tv ->
+                tv.setTextColor(if (i == clamped) 0xFFFFFFFF.toInt() else Color.argb(175, 255, 255, 255))
+            }
+            val target = clamped.toFloat()
+            if (!animated) {
+                thumbAnim?.cancel()
+                animFrac = target
+                invalidate()
+            } else {
+                thumbAnim?.cancel()
+                val start = animFrac
+                thumbAnim = ValueAnimator.ofFloat(start, target).apply {
+                    duration = 250L
+                    interpolator = DecelerateInterpolator(2.1f)
+                    addUpdateListener { a ->
+                        animFrac = a.animatedValue as Float
+                        invalidate()
+                    }
+                    start()
+                }
+            }
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val w = width.toFloat()
+            val h = height.toFloat()
+            if (w <= 4f || h <= 4f) return
+            val pad = 3f * dens
+            trackRect.set(0.5f, 0.5f, w - 0.5f, h - 0.5f)
+            trackPaint.color = Color.argb(135, 11, 13, 21)
+            canvas.drawRoundRect(trackRect, h * 0.5f, h * 0.5f, trackPaint)
+            trackStrokePaint.color = Color.argb(34, 255, 255, 255)
+            canvas.drawRoundRect(trackRect, h * 0.5f, h * 0.5f, trackStrokePaint)
+
+            val segW = (w - pad * 2f) * 0.5f
+            val tx = pad + segW * animFrac
+            thumbRect.set(tx, pad, tx + segW, h - pad)
+            val tr = (h - pad * 2f) * 0.5f
+            thumbPaint.shader = android.graphics.LinearGradient(
+                0f, thumbRect.top, 0f, thumbRect.bottom,
+                Color.argb(190, 74, 122, 178),
+                Color.argb(148, 34, 72, 124),
+                android.graphics.Shader.TileMode.CLAMP
+            )
+            canvas.drawRoundRect(thumbRect, tr, tr, thumbPaint)
+            thumbPaint.shader = null
+            thumbRimPaint.color = Color.argb(118, 198, 232, 255)
+            canvas.drawRoundRect(thumbRect, tr, tr, thumbRimPaint)
+        }
+    }
+
+    // ─────────────── Authentic Animated iOS Liquid Glass Switch ───────────────
+    private inner class IosSwitchView(
+        context: Context,
+        private val onColor: Int = 0xFF30D158.toInt()
+    ) : View(context) {
+        private var checked = false
+        private var frac = 0f
+        private var anim: ValueAnimator? = null
+        private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 0.8f * dens
+        }
+        private val thumbPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            setShadowLayer(4f * dens, 0f, 1.5f * dens, Color.argb(72, 0, 0, 0))
+        }
+        private val trackRect = RectF()
+        private val thumbRect = RectF()
+
+        init {
+            val w = (48f * dens).roundToInt()
+            val h = (28f * dens).roundToInt()
+            layoutParams = LinearLayout.LayoutParams(w, h)
+        }
+
+        fun setChecked(on: Boolean, animated: Boolean) {
+            if (checked == on && anim == null) return
+            checked = on
+            val target = if (on) 1f else 0f
+            if (!animated) {
+                anim?.cancel()
+                anim = null
+                frac = target
+                invalidate()
+            } else {
+                anim?.cancel()
+                val start = frac
+                anim = ValueAnimator.ofFloat(start, target).apply {
+                    duration = 230L
+                    interpolator = OvershootInterpolator(1.1f)
+                    addUpdateListener { a ->
+                        frac = (a.animatedValue as Float).coerceIn(-0.08f, 1.08f)
+                        invalidate()
+                    }
+                    start()
+                }
+            }
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val w = width.toFloat()
+            val h = height.toFloat()
+            if (w <= 4f || h <= 4f) return
+            val t = frac.coerceIn(0f, 1f)
+            val offCol = Color.argb(92, 118, 120, 134)
+            trackPaint.color = blendColors(offCol, onColor, t)
+            trackRect.set(0.5f, 0.5f, w - 0.5f, h - 0.5f)
+            val rad = h * 0.5f
+            canvas.drawRoundRect(trackRect, rad, rad, trackPaint)
+            rimPaint.color = Color.argb((34 + 34 * t).roundToInt(), 255, 255, 255)
+            canvas.drawRoundRect(trackRect, rad, rad, rimPaint)
+
+            // iOS 26 pill-elastic thumb widens gently mid-transition
+            val pad = 2.6f * dens
+            val baseThumb = h - pad * 2f
+            val stretch = sin(t * Math.PI).toFloat() * (4.2f * dens)
+            val thumbW = baseThumb + stretch
+            val travel = w - pad * 2f - thumbW
+            val left = pad + travel * frac.coerceIn(0f, 1f)
+            thumbRect.set(left, pad, left + thumbW, h - pad)
+            canvas.drawRoundRect(thumbRect, baseThumb * 0.5f, baseThumb * 0.5f, thumbPaint)
+        }
+    }
+
+    private fun blendColors(c0: Int, c1: Int, t: Float): Int {
+        val a = (Color.alpha(c0) + (Color.alpha(c1) - Color.alpha(c0)) * t).roundToInt().coerceIn(0, 255)
+        val r = (Color.red(c0) + (Color.red(c1) - Color.red(c0)) * t).roundToInt().coerceIn(0, 255)
+        val g = (Color.green(c0) + (Color.green(c1) - Color.green(c0)) * t).roundToInt().coerceIn(0, 255)
+        val b = (Color.blue(c0) + (Color.blue(c1) - Color.blue(c0)) * t).roundToInt().coerceIn(0, 255)
+        return Color.argb(a, r, g, b)
+    }
+
+    // ─────────────── iOS Settings Icon Badge + Toggle Row ───────────────
+    private fun makeIconBadge(iconId: String, badgeTint: Int): View {
+        return object : View(context) {
+            private val fillP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.argb(62, Color.red(badgeTint), Color.green(badgeTint), Color.blue(badgeTint))
+            }
+            private val rimP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = 0.8f * dens
+                color = Color.argb(128, Color.red(badgeTint), Color.green(badgeTint), Color.blue(badgeTint))
+            }
+            private val rect = RectF()
+            override fun onDraw(canvas: Canvas) {
+                val w = width.toFloat()
+                val h = height.toFloat()
+                rect.set(0.5f, 0.5f, w - 0.5f, h - 0.5f)
+                val r = 8.5f * dens
+                canvas.drawRoundRect(rect, r, r, fillP)
+                canvas.drawRoundRect(rect, r, r, rimP)
+                drawIosGlyph(canvas, iconId, w * 0.5f, h * 0.5f, min(w, h) * 0.62f, badgeTint)
+            }
+        }.apply {
+            val sz = (28f * dens).roundToInt()
+            layoutParams = LinearLayout.LayoutParams(sz, sz).apply { marginEnd = (10f * dens).roundToInt() }
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private inner class IosToggleRow(
+        context: Context,
+        iconId: String,
+        badgeTint: Int,
+        label: String,
+        switchColor: Int = 0xFF30D158.toInt(),
+        private val onToggle: () -> Unit
+    ) : LinearLayout(context) {
+        private val switchView = IosSwitchView(context, switchColor)
+        private var initDone = false
+        private val pressBg = GradientDrawable().apply {
+            setColor(Color.TRANSPARENT)
+            cornerRadius = 12f * dens
+        }
+
+        init {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            isClickable = true
+            background = pressBg
+            setPadding((4f * dens).roundToInt(), (7f * dens).roundToInt(), (4f * dens).roundToInt(), (7f * dens).roundToInt())
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+
+            addView(makeIconBadge(iconId, badgeTint))
+            val tv = TextView(context).apply {
+                text = label
+                setTextColor(Color.WHITE)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+            }
+            addView(tv)
+            addView(switchView)
+
+            setOnTouchListener { _, ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        pressBg.setColor(Color.argb(26, 255, 255, 255))
+                        animate().cancel()
+                        animate().scaleX(0.985f).scaleY(0.985f).setDuration(80L).start()
+                        false
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        pressBg.setColor(Color.TRANSPARENT)
+                        animate().cancel()
+                        animate().scaleX(1f).scaleY(1f).setDuration(200L).start()
+                        false
+                    }
+                    else -> false
+                }
+            }
+            setOnClickListener { onToggle() }
+        }
+
+        fun setChecked(on: Boolean) {
+            switchView.setChecked(on, animated = initDone && isOpen)
+            initDone = true
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun makeIosActionRow(
+        iconId: String,
+        badgeTint: Int,
+        label: String,
+        onClick: () -> Unit
+    ): LinearLayout {
+        val pressBg = GradientDrawable().apply {
+            setColor(Color.TRANSPARENT)
+            cornerRadius = 12f * dens
+        }
+        return LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            isClickable = true
+            background = pressBg
+            setPadding((4f * dens).roundToInt(), (7f * dens).roundToInt(), (4f * dens).roundToInt(), (7f * dens).roundToInt())
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+
+            addView(makeIconBadge(iconId, badgeTint))
+            addView(TextView(context).apply {
+                text = label
+                setTextColor(Color.WHITE)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            // Crisp RTL iOS chevron pointing left
+            addView(object : View(context) {
+                private val chevP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style = Paint.Style.STROKE
+                    strokeWidth = 1.7f * dens
+                    strokeCap = Paint.Cap.ROUND
+                    strokeJoin = Paint.Join.ROUND
+                    color = Color.argb(115, 255, 255, 255)
+                }
+                override fun onDraw(canvas: Canvas) {
+                    val cx = width * 0.5f
+                    val cy = height * 0.5f
+                    val s = 3.8f * dens
+                    canvas.drawLine(cx + s * 0.5f, cy - s, cx - s * 0.5f, cy, chevP)
+                    canvas.drawLine(cx - s * 0.5f, cy, cx + s * 0.5f, cy + s, chevP)
+                }
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams((18f * dens).roundToInt(), (18f * dens).roundToInt())
+            })
+
+            setOnTouchListener { _, ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        pressBg.setColor(Color.argb(26, 255, 255, 255))
+                        animate().cancel()
+                        animate().scaleX(0.985f).scaleY(0.985f).setDuration(80L).start()
+                        false
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        pressBg.setColor(Color.TRANSPARENT)
+                        animate().cancel()
+                        animate().scaleX(1f).scaleY(1f).setDuration(200L).start()
+                        false
+                    }
+                    else -> false
+                }
+            }
+            setOnClickListener { onClick() }
+        }
+    }
+
+    private fun makeHairlineDivider(indented: Boolean = true): View {
+        return View(context).apply {
+            setBackgroundColor(Color.argb(24, 255, 255, 255))
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, max(1, (0.6f * dens).roundToInt())).apply {
+                if (indented) marginStart = (42f * dens).roundToInt()
+                topMargin = (2f * dens).roundToInt()
+                bottomMargin = (2f * dens).roundToInt()
+            }
+        }
+    }
+
+    // Sleek iPhone capsule action buttons (for Performance tools)
+    @SuppressLint("ClickableViewAccessibility")
+    private inner class IosCapsuleButton(
+        context: Context,
+        private val iconId: String,
+        label: String,
+        private val primary: Boolean = false,
+        private val onClick: () -> Unit
+    ) : FrameLayout(context) {
+        private val glassHelper = LiquidGlassCardHelper(
+            backdrop, perf, 999f, 11f, 8f, 1.40f, 0.18f, innerShadow = 0.14f, useBlurredBackdrop = true
+        )
+        init {
+            setWillNotDraw(false)
+            isClickable = true
+            val row = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, (36f * dens).roundToInt())
+                setPadding((8f * dens).roundToInt(), 0, (8f * dens).roundToInt(), 0)
+            }
+            val tint = if (primary) 0xFF7DD3FC.toInt() else Color.WHITE
+            row.addView(object : View(context) {
+                override fun onDraw(canvas: Canvas) {
+                    drawIosGlyph(canvas, iconId, width * 0.5f, height * 0.5f, min(width, height) * 0.86f, tint)
+                }
+            }.apply {
+                val sz = (14f * dens).roundToInt()
+                layoutParams = LinearLayout.LayoutParams(sz, sz).apply { marginEnd = (5f * dens).roundToInt() }
+            })
+            row.addView(TextView(context).apply {
+                text = label
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                setTextColor(if (primary) 0xFFE0F2FE.toInt() else Color.WHITE)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            })
+            addView(row)
+
+            setOnTouchListener { _, ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        animate().cancel()
+                        animate().scaleX(0.94f).scaleY(0.94f).setDuration(85L).start()
+                        false
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        animate().cancel()
+                        animate().scaleX(1f).scaleY(1f).setDuration(260L)
+                            .setInterpolator(OvershootInterpolator(1.6f)).start()
+                        false
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        animate().cancel()
+                        animate().scaleX(1f).scaleY(1f).setDuration(180L).start()
+                        false
+                    }
+                    else -> false
+                }
+            }
+            setOnClickListener { onClick() }
+        }
+        override fun onDraw(canvas: Canvas) {
+            val (ox, oy) = computeShellOrigin(this)
+            val bg = if (primary) Color.argb(154, 24, 76, 132) else Color.argb(136, 24, 28, 42)
+            val sh = if (primary) 0.28f else 0.16f
+            glassHelper.draw(this, canvas, bg, ox, oy, shadowOverride = sh, innerOverride = 0.14f)
         }
     }
 
@@ -584,33 +1267,17 @@ class EditorSheetView(
         colScroll.addView(colRow)
         body.addView(colScroll)
 
-        // 3. Time Format (12h / 24h)
+        // 3. Time Format (iOS Sliding Segmented Control)
         body.addView(secHeader("نظام الساعة"))
-        val fmtRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
+        fmtSegment = IosSegmentedControl(context, "12 ساعة", "24 ساعة") { idx ->
+            cfg.hour24 = idx == 1
+            cfg.leadingZero = idx == 1
+            callbacks.onFormatToggled()
+            syncFromConfig()
+        }.apply {
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
         }
-        fmt12Btn = GlassPillButton(context, "12 ساعة", radiusDp = 12f) {
-            cfg.hour24 = false
-            cfg.leadingZero = false
-            callbacks.onFormatToggled()
-            syncFromConfig()
-        }.apply {
-            layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginEnd = (8f * dens).roundToInt()
-            }
-        }
-        fmt24Btn = GlassPillButton(context, "24 ساعة", radiusDp = 12f) {
-            cfg.hour24 = true
-            cfg.leadingZero = true
-            callbacks.onFormatToggled()
-            syncFromConfig()
-        }.apply {
-            layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
-        }
-        fmtRow.addView(fmt12Btn)
-        fmtRow.addView(fmt24Btn)
-        body.addView(fmtRow)
+        body.addView(fmtSegment)
 
         // 4. Geometry Card (الحجم · الطول · العرض · الموضع)
         body.addView(secHeader("الأبعاد"))
@@ -806,9 +1473,9 @@ class EditorSheetView(
 
     // ─────────────── Wallpaper, Depth & Lock-Screen Sheet Content ───────────────
     private fun buildWallpaperBody(body: LinearLayout) {
-        // 1. Wallpapers + Depth
+        // 1. Wallpapers + Depth iOS Card
         body.addView(secHeader("الخلفية والعمق"))
-        val wallCard = GlassSectionCard(context)
+        val wallCard = GlassSectionCard(context, padHdp = 12f, padVdp = 10f)
         val wallScroll = HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = false
             setOnScrollChangeListener { _, _, _, _, _ -> invalidateGlassTree(this) }
@@ -830,7 +1497,7 @@ class EditorSheetView(
                     clipToOutline = true
                     outlineProvider = object : android.view.ViewOutlineProvider() {
                         override fun getOutline(v: View, outline: android.graphics.Outline) {
-                            outline.setRoundRect(0, 0, v.width, v.height, 12f * dens)
+                            outline.setRoundRect(0, 0, v.width, v.height, 13f * dens)
                         }
                     }
                 }
@@ -844,20 +1511,27 @@ class EditorSheetView(
             wallThumbs[pw.id] = box
             wallRow.addView(box)
         }
-        wallRow.addView(makeChipBtn("صور جهازي") { callbacks.onPickCustomWall() })
-        aiDepthBtn = makeChipBtn("عزل AI", accent = true) { callbacks.onExtractAiDepth() }
+        wallRow.addView(IosWallActionTile(context, "gallery", "صور جهازي") { callbacks.onPickCustomWall() })
+        aiDepthBtn = IosWallActionTile(context, "ai", "عزل AI", accentBg = true) { callbacks.onExtractAiDepth() }
         wallRow.addView(aiDepthBtn)
-        wallRow.addView(makeChipBtn("صورة أمام الساعة") { callbacks.onPickManualSubject() })
+        wallRow.addView(IosWallActionTile(context, "subject", "أمام الساعة") { callbacks.onPickManualSubject() })
         wallScroll.addView(wallRow)
         wallCard.addView(wallScroll)
 
-        togDepth = GlassPillButton(context, "تأثير العمق", radiusDp = 12f) {
+        wallCard.addView(makeHairlineDivider(indented = false).apply {
+            (layoutParams as LinearLayout.LayoutParams).topMargin = (10f * dens).roundToInt()
+            (layoutParams as LinearLayout.LayoutParams).bottomMargin = (4f * dens).roundToInt()
+        })
+
+        togDepth = IosToggleRow(
+            context,
+            iconId = "depth",
+            badgeTint = 0xFF38BDF8.toInt(),
+            label = "تأثير العمق",
+            switchColor = 0xFF0A84FF.toInt()
+        ) {
             callbacks.onToggleDepth()
             syncFromConfig()
-        }.apply {
-            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                topMargin = (10f * dens).roundToInt()
-            }
         }
         wallCard.addView(togDepth)
 
@@ -866,55 +1540,46 @@ class EditorSheetView(
             visibility = View.GONE
             setTextColor(Color.argb(175, 255, 255, 255))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            setPadding(0, (6f * dens).roundToInt(), 0, 0)
+            setPadding((4f * dens).roundToInt(), (4f * dens).roundToInt(), (4f * dens).roundToInt(), 0)
         }
         wallCard.addView(aiDepthStatus)
         body.addView(wallCard)
 
-        // 2. Lock-Screen Widgets & Toggles
-        body.addView(secHeader("تخصيصات أخرى"))
-        val optsCard = GlassSectionCard(context)
-        val r1 = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
-        togWeather = makeTogglePill("الطقس") { callbacks.onToggleWeather(); syncFromConfig() }
-        togMusic = makeTogglePill("الموسيقى") { callbacks.onToggleMusic(); syncFromConfig() }
-        togNotif = makeTogglePill("الإشعارات", isLast = true) { callbacks.onToggleNotifications(); syncFromConfig() }
-        r1.addView(togWeather); r1.addView(togMusic); r1.addView(togNotif)
+        // 2. Grouped iOS Toggle Switch Rows
+        body.addView(secHeader("عناصر الشاشة"))
+        val togglesCard = GlassSectionCard(context, padHdp = 12f, padVdp = 6f)
+        togWeather = IosToggleRow(context, "weather", 0xFFFBBF24.toInt(), "الطقس") { callbacks.onToggleWeather(); syncFromConfig() }
+        togMusic = IosToggleRow(context, "music", 0xFFFB7185.toInt(), "الموسيقى") { callbacks.onToggleMusic(); syncFromConfig() }
+        togNotif = IosToggleRow(context, "notif", 0xFFEF4444.toInt(), "الإشعارات") { callbacks.onToggleNotifications(); syncFromConfig() }
+        togDnd = IosToggleRow(context, "dnd", 0xFFA78BFA.toInt(), "عدم الإزعاج", switchColor = 0xFF8B5CF6.toInt()) { callbacks.onToggleDnd(); syncFromConfig() }
+        togPasscode = IosToggleRow(context, "lock", 0xFF60A5FA.toInt(), "رمز القفل") { callbacks.onTogglePasscode(); syncFromConfig() }
 
-        val r2 = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                topMargin = (8f * dens).roundToInt()
-            }
-        }
-        togDnd = makeTogglePill("عدم الإزعاج") { callbacks.onToggleDnd(); syncFromConfig() }
-        togPasscode = makeTogglePill("رمز القفل") { callbacks.onTogglePasscode(); syncFromConfig() }
-        val changePinBtn = makeTogglePill("تغيير الرمز", isLast = true) { callbacks.onChangePasscodePin() }
-        r2.addView(togDnd); r2.addView(togPasscode); r2.addView(changePinBtn)
+        togglesCard.addView(togWeather)
+        togglesCard.addView(makeHairlineDivider())
+        togglesCard.addView(togMusic)
+        togglesCard.addView(makeHairlineDivider())
+        togglesCard.addView(togNotif)
+        togglesCard.addView(makeHairlineDivider())
+        togglesCard.addView(togDnd)
+        togglesCard.addView(makeHairlineDivider())
+        togglesCard.addView(togPasscode)
+        body.addView(togglesCard)
 
-        val r3 = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                topMargin = (8f * dens).roundToInt()
-            }
-        }
-        val testNotifBtn = makeTogglePill("إشعار تجريبي") { callbacks.onTestNotification() }
-        val sysNotifBtn = makeTogglePill("إشعارات النظام", isLast = true) { callbacks.onOpenNotificationAccess() }
-        r3.addView(testNotifBtn); r3.addView(sysNotifBtn)
+        // 3. Grouped iOS Action Rows
+        body.addView(secHeader("أدوات سريعة"))
+        val toolsCard = GlassSectionCard(context, padHdp = 12f, padVdp = 6f)
+        toolsCard.addView(makeIosActionRow("pin", 0xFF93C5FD.toInt(), "تغيير الرمز") { callbacks.onChangePasscodePin() })
+        toolsCard.addView(makeHairlineDivider())
+        toolsCard.addView(makeIosActionRow("test_notif", 0xFF38BDF8.toInt(), "إشعار تجريبي") { callbacks.onTestNotification() })
+        toolsCard.addView(makeHairlineDivider())
+        toolsCard.addView(makeIosActionRow("sys_notif", 0xFF94A3B8.toInt(), "إشعارات النظام") { callbacks.onOpenNotificationAccess() })
+        toolsCard.addView(makeHairlineDivider())
+        toolsCard.addView(makeIosActionRow("audio", 0xFFF472B6.toInt(), "ملف صوتي") { callbacks.onPickAudio() })
+        toolsCard.addView(makeHairlineDivider())
+        toolsCard.addView(makeIosActionRow("art", 0xFFC084FC.toInt(), "غلاف الألبوم") { callbacks.onPickAlbumArt() })
+        body.addView(toolsCard)
 
-        val r4 = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                topMargin = (8f * dens).roundToInt()
-            }
-        }
-        val audioBtn = makeTogglePill("ملف صوتي") { callbacks.onPickAudio() }
-        val artBtn = makeTogglePill("غلاف الألبوم", isLast = true) { callbacks.onPickAlbumArt() }
-        r4.addView(audioBtn); r4.addView(artBtn)
-
-        optsCard.addView(r1); optsCard.addView(r2); optsCard.addView(r3); optsCard.addView(r4)
-        body.addView(optsCard)
-
-        // 3. Performance Monitor Card
+        // 4. Performance Monitor Card
         body.addView(secHeader("الأداء"))
         val perfCard = GlassSectionCard(context)
         val perfTop = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
@@ -952,9 +1617,9 @@ class EditorSheetView(
                 topMargin = (9f * dens).roundToInt()
             }
         }
-        actRow.addView(makePerfBtn("تصدير JSON", primary = true) { callbacks.onDownloadPerf() })
-        actRow.addView(makePerfBtn("مشاركة") { callbacks.onSharePerf() })
-        actRow.addView(makePerfBtn("تصفير", weight = 0.7f, isLast = true) { callbacks.onResetPerf() })
+        actRow.addView(makePerfBtn("export", "تصدير", primary = true) { callbacks.onDownloadPerf() })
+        actRow.addView(makePerfBtn("share", "مشاركة") { callbacks.onSharePerf() })
+        actRow.addView(makePerfBtn("reset", "تصفير", weight = 0.85f, isLast = true) { callbacks.onResetPerf() })
         perfCard.addView(actRow)
         body.addView(perfCard)
     }
@@ -1031,8 +1696,7 @@ class EditorSheetView(
         ySeek.progress = (cfg.clockY.roundToInt() + 20).coerceIn(0, 100)
         yVal.text = "${cfg.clockY.roundToInt()}px"
 
-        fmt12Btn.selectedState = !cfg.hour24
-        fmt24Btn.selectedState = cfg.hour24
+        fmtSegment.setSelectedIndex(if (cfg.hour24) 1 else 0, animated = isOpen && currentMode == Mode.CLOCK)
 
         for ((id, v) in colorSwatches) {
             val active = cfg.color.equals(id, ignoreCase = true)
@@ -1054,7 +1718,7 @@ class EditorSheetView(
         for ((id, box) in wallThumbs) {
             val active = cfg.wall == id
             box.foreground = GradientDrawable().apply {
-                cornerRadius = 12f * dens
+                cornerRadius = 13f * dens
                 setStroke((if (active) 2.2f else 0.8f * dens).roundToInt(), if (active) 0xFFB3DFFF.toInt() else Color.argb(40, 255, 255, 255))
             }
         }
@@ -1080,12 +1744,12 @@ class EditorSheetView(
             }
         }
 
-        togWeather.selectedState = cfg.weather
-        togMusic.selectedState = cfg.music
-        togNotif.selectedState = cfg.notifications
-        togDepth.selectedState = cfg.depth
-        togDnd.selectedState = cfg.dnd
-        togPasscode.selectedState = cfg.passcodeEnabled
+        togWeather.setChecked(cfg.weather)
+        togMusic.setChecked(cfg.music)
+        togNotif.setChecked(cfg.notifications)
+        togDepth.setChecked(cfg.depth)
+        togDnd.setChecked(cfg.dnd)
+        togPasscode.setChecked(cfg.passcodeEnabled)
         suppressSeek = false
     }
 
@@ -1377,26 +2041,6 @@ class EditorSheetView(
         }
     }
 
-    private fun makeChipBtn(label: String, accent: Boolean = false, onClick: () -> Unit): GlassPillButton {
-        return GlassPillButton(context, label, radiusDp = 12f, isAccent = accent, onClick = onClick).apply {
-            layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, (68f * dens).roundToInt()).apply {
-                marginEnd = (8f * dens).roundToInt()
-            }
-            tv.setPadding((14f * dens).roundToInt(), 0, (14f * dens).roundToInt(), 0)
-            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-        }
-    }
-
-    private fun makeTogglePill(label: String, isLast: Boolean = false, onClick: () -> Unit): GlassPillButton {
-        return GlassPillButton(context, label, radiusDp = 12f, isAccent = false, onClick = onClick).apply {
-            layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
-                if (!isLast) marginEnd = (6f * dens).roundToInt()
-            }
-            tv.setPadding((6f * dens).roundToInt(), (10f * dens).roundToInt(), (6f * dens).roundToInt(), (10f * dens).roundToInt())
-            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-        }
-    }
-
     private fun makePerfStatBox(label: String, isLast: Boolean = false): Pair<LinearLayout, TextView> {
         val box = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -1427,13 +2071,11 @@ class EditorSheetView(
         return box to v
     }
 
-    private fun makePerfBtn(label: String, primary: Boolean = false, weight: Float = 1f, isLast: Boolean = false, onClick: () -> Unit): GlassPillButton {
-        return GlassPillButton(context, label, radiusDp = 11f, isAccent = primary, onClick = onClick).apply {
+    private fun makePerfBtn(iconId: String, label: String, primary: Boolean = false, weight: Float = 1f, isLast: Boolean = false, onClick: () -> Unit): IosCapsuleButton {
+        return IosCapsuleButton(context, iconId, label, primary = primary, onClick = onClick).apply {
             layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, weight).apply {
                 if (!isLast) marginEnd = (6f * dens).roundToInt()
             }
-            tv.setPadding((6f * dens).roundToInt(), (9f * dens).roundToInt(), (6f * dens).roundToInt(), (9f * dens).roundToInt())
-            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
         }
     }
 }

@@ -249,6 +249,12 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(sheetKt.includes('GlassSectionCard'));
   assert.ok(sheetKt.includes('GlassPillButton'));
   assert.ok(sheetKt.includes('GlassFontChip'));
+  assert.ok(sheetKt.includes('IosSwitchView'));
+  assert.ok(sheetKt.includes('IosToggleRow'));
+  assert.ok(sheetKt.includes('IosSegmentedControl'));
+  assert.ok(sheetKt.includes('IosWallActionTile'));
+  assert.ok(sheetKt.includes('IosCapsuleButton'));
+  assert.ok(sheetKt.includes('makeIosActionRow'));
   assert.ok(sheetKt.includes('widthSeek'));
   assert.ok(sheetKt.includes('العرض'));
   assert.ok(!sheetKt.includes('مجاني'));
