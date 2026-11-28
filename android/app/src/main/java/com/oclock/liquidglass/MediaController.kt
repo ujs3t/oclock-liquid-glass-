@@ -52,8 +52,9 @@ class MediaController(
     private val scanExecutor = Executors.newSingleThreadExecutor()
     private val artExecutor = Executors.newFixedThreadPool(2)
 
-    private val artCache = object : LruCache<String, Bitmap>(64) {}
+    private val artCache = object : LruCache<String, Bitmap>(160) {}
     private val noArtKeys = Collections.synchronizedSet(HashSet<String>())
+    private val pendingArtWaiters = HashMap<String, ArrayList<Pair<(() -> Boolean)?, (Bitmap?) -> Unit>>>()
     private var onLibraryUpdated: ((List<TrackInfo>) -> Unit)? = null
 
     private val ticker = object : Runnable {
@@ -234,7 +235,12 @@ class MediaController(
         return artCache.get(key)
     }
 
-    fun loadTrackPoster(track: TrackInfo, sizePx: Int, callback: (Bitmap?) -> Unit) {
+    fun loadTrackPoster(
+        track: TrackInfo,
+        sizePx: Int,
+        shouldDecode: (() -> Boolean)? = null,
+        callback: (Bitmap?) -> Unit
+    ) {
         val key = artKey(track, sizePx)
         if (key == null) {
             callback(null)
@@ -248,14 +254,38 @@ class MediaController(
             callback(null)
             return
         }
+        val shouldStart = synchronized(pendingArtWaiters) {
+            val list = pendingArtWaiters[key]
+            if (list != null) {
+                list.add(shouldDecode to callback)
+                false
+            } else {
+                pendingArtWaiters[key] = arrayListOf(shouldDecode to callback)
+                true
+            }
+        }
+        if (!shouldStart) return
         artExecutor.execute {
+            val wantAny = synchronized(pendingArtWaiters) {
+                val waiters = pendingArtWaiters[key]
+                waiters?.any { it.first == null || it.first!!.invoke() } ?: false
+            }
+            if (!wantAny) {
+                synchronized(pendingArtWaiters) { pendingArtWaiters.remove(key) }
+                return@execute
+            }
             val bmp = decodeTrackArt(track, sizePx)
             if (bmp != null) {
                 artCache.put(key, bmp)
             } else {
                 noArtKeys.add(key)
             }
-            handler.post { callback(bmp) }
+            val callbacks = synchronized(pendingArtWaiters) {
+                pendingArtWaiters.remove(key)?.map { it.second } ?: emptyList()
+            }
+            handler.post {
+                for (cb in callbacks) cb(bmp)
+            }
         }
     }
 
@@ -269,15 +299,37 @@ class MediaController(
         if (Build.VERSION.SDK_INT >= 29) {
             try {
                 val thumb = context.contentResolver.loadThumbnail(uri, Size(sizePx, sizePx), null)
-                if (thumb != null) return thumb
+                if (thumb != null) {
+                    if (thumb.config == Bitmap.Config.HARDWARE) {
+                        val soft = thumb.copy(Bitmap.Config.ARGB_8888, false)
+                        thumb.recycle()
+                        if (soft != null) return soft
+                    } else {
+                        return thumb
+                    }
+                }
             } catch (_: Throwable) {}
         }
         if (track.albumId > 0L) {
             try {
                 val albumUri = ContentUris.withAppendedId(Uri.parse("content://media/external/audio/albumart"), track.albumId)
+                val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 context.contentResolver.openInputStream(albumUri)?.use { stream ->
-                    val raw = BitmapFactory.decodeStream(stream)
-                    if (raw != null) return scaleCenterBitmap(raw, sizePx)
+                    BitmapFactory.decodeStream(stream, null, opts)
+                }
+                if (opts.outWidth > 0 && opts.outHeight > 0) {
+                    var inSample = 1
+                    while (opts.outWidth / (inSample * 2) >= sizePx && opts.outHeight / (inSample * 2) >= sizePx) {
+                        inSample *= 2
+                    }
+                    val decOpts = BitmapFactory.Options().apply {
+                        inSampleSize = inSample
+                        inPreferredConfig = Bitmap.Config.ARGB_8888
+                    }
+                    context.contentResolver.openInputStream(albumUri)?.use { stream ->
+                        val raw = BitmapFactory.decodeStream(stream, null, decOpts)
+                        if (raw != null) return scaleCenterBitmap(raw, sizePx)
+                    }
                 }
             } catch (_: Throwable) {}
         }

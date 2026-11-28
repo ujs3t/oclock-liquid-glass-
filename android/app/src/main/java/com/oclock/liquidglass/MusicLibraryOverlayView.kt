@@ -4,18 +4,23 @@ import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.RuntimeShader
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.os.Build
+import android.os.SystemClock
 import android.text.Editable
 import android.text.TextUtils
 import android.text.TextWatcher
@@ -41,6 +46,7 @@ import android.widget.ListView
 import android.widget.TextView
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -72,6 +78,7 @@ class MusicLibraryOverlayView(
     private val shuffleBtn: GlassActionButton
     private val sequentialBtn: GlassActionButton
     private val refreshBtn: GlassActionButton
+    private val listStage: FrameLayout
     private val searchBox: GlassSearchBar
     private val searchInput: EditText
     private val searchClearBtn: GlassClearButton
@@ -88,8 +95,15 @@ class MusicLibraryOverlayView(
     private val tmpVisRect = Rect()
     private var permRequestCount = 0
 
+    private var cachedActiveUri: Uri? = null
+    private var cachedIsPlaying = false
+
     private var safeTopPx = (36f * dens).roundToInt()
     private var safeBottomPx = (14f * dens).roundToInt()
+    private var imeBottomPx = 0
+    private var imeLiftPx = 0f
+    private val baseListBottomPadPx = (82f * dens).roundToInt()
+
     private var scrimAnim: ValueAnimator? = null
     private var currentScrimAlpha = 0
 
@@ -185,8 +199,8 @@ class MusicLibraryOverlayView(
                     outline.setRoundRect(0, 0, v.width, v.height, 30f * dens)
                 }
             }
-            val padH = (14f * dens).roundToInt()
-            setPadding(padH, (6f * dens).roundToInt(), padH, (12f * dens).roundToInt())
+            val padH = (12f * dens).roundToInt()
+            setPadding(padH, (6f * dens).roundToInt(), padH, 0)
             layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
                 val side = (8f * dens).roundToInt()
                 leftMargin = side
@@ -215,6 +229,7 @@ class MusicLibraryOverlayView(
         headerRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            setPadding((2f * dens).roundToInt(), 0, (2f * dens).roundToInt(), 0)
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
                 bottomMargin = (10f * dens).roundToInt()
             }
@@ -258,8 +273,9 @@ class MusicLibraryOverlayView(
         val actRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            setPadding((2f * dens).roundToInt(), 0, (2f * dens).roundToInt(), 0)
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = (10f * dens).roundToInt()
+                bottomMargin = (8f * dens).roundToInt()
             }
         }
         shuffleBtn = GlassActionButton(context, "shuffle", "تشغيل عشوائي", accentBg = false) {
@@ -309,54 +325,20 @@ class MusicLibraryOverlayView(
         actRow.addView(refreshBtn)
         panelCard.addView(actRow)
 
-        // Liquid Glass Search Bar with vector magnifier + animated clear pill
-        searchBox = GlassSearchBar(context).apply {
-            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, (42f * dens).roundToInt()).apply {
-                bottomMargin = (10f * dens).roundToInt()
-            }
+        // Stage hosting scrolling list + detached floating Liquid Glass search capsule
+        listStage = FrameLayout(context).apply {
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f)
+            clipChildren = true
+            clipToPadding = false
         }
-        val searchIcon = object : View(context) {
-            override fun onDraw(canvas: Canvas) {
-                drawLibraryGlyph(canvas, "search", width * 0.5f, height * 0.5f, min(width, height) * 0.62f, Color.argb(175, 255, 255, 255))
-            }
-        }.apply {
-            val sz = (22f * dens).roundToInt()
-            layoutParams = LinearLayout.LayoutParams(sz, sz).apply { marginEnd = (8f * dens).roundToInt() }
-        }
-        searchInput = EditText(context).apply {
-            hint = "ابحث عن أغنية أو فنان..."
-            setHintTextColor(Color.argb(128, 255, 255, 255))
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
-            isSingleLine = true
-            imeOptions = EditorInfo.IME_ACTION_DONE
-            background = null
-            setPadding(0, (4f * dens).roundToInt(), 0, (4f * dens).roundToInt())
-            layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
-            addTextChangedListener(object : TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-                override fun afterTextChanged(s: Editable?) {
-                    val txt = s?.toString() ?: ""
-                    searchClearBtn.setShown(txt.isNotEmpty())
-                    applyFilter(txt)
-                }
-            })
-        }
-        searchClearBtn = GlassClearButton(context) {
-            onHaptic("tick")
-            searchInput.setText("")
-        }
-        searchBox.addView(searchIcon)
-        searchBox.addView(searchInput)
-        searchBox.addView(searchClearBtn)
-        panelCard.addView(searchBox)
 
         // Liquid Glass Permission / Empty Card
         permissionBox = GlassSectionCard(context, padHdp = 16f, padVdp = 20f).apply {
             gravity = Gravity.CENTER_HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.TOP).apply {
                 topMargin = (6f * dens).roundToInt()
+                leftMargin = (2f * dens).roundToInt()
+                rightMargin = (2f * dens).roundToInt()
             }
             visibility = GONE
         }
@@ -409,9 +391,9 @@ class MusicLibraryOverlayView(
         permissionBox.addView(permMsgView)
         permissionBox.addView(permGrantBtn)
         permissionBox.addView(manualPickBtn)
-        panelCard.addView(permissionBox)
+        listStage.addView(permissionBox)
 
-        // Virtualized Liquid Glass Track List with elastic rubber-band overscroll
+        // Silky 120fps Track List with elastic rubber-band overscroll
         listView = RubberMusicListView(context).apply {
             divider = null
             dividerHeight = 0
@@ -419,10 +401,13 @@ class MusicLibraryOverlayView(
             cacheColorHint = Color.TRANSPARENT
             isVerticalScrollBarEnabled = false
             clipToPadding = false
-            setPadding(0, (2f * dens).roundToInt(), 0, (12f * dens).roundToInt())
-            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f)
+            setPadding(0, (4f * dens).roundToInt(), 0, baseListBottomPadPx)
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
             adapter = trackAdapter
-            onScrollOrRubber = { invalidateVisibleGlass(this) }
+            onScrollOrRubber = { searchBox.markBackdropDirty() }
+            addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                searchBox.markBackdropDirty()
+            }
             setOnItemClickListener { _, view, position, _ ->
                 if (position !in filteredIndices.indices) return@setOnItemClickListener
                 val realIdx = filteredIndices[position]
@@ -430,15 +415,71 @@ class MusicLibraryOverlayView(
                 onHaptic("pop")
                 hideKeyboard()
                 media.playDeviceTrack(realIdx, keepShuffle = false)
+                syncPlaybackState()
                 close()
             }
         }
-        panelCard.addView(listView)
+        listStage.addView(listView)
+
+        // Detached Floating Liquid Glass Search Capsule with live refraction + blur + rubbery spring
+        searchBox = GlassSearchBar(context).apply {
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, (54f * dens).roundToInt(), Gravity.BOTTOM).apply {
+                leftMargin = (8f * dens).roundToInt()
+                rightMargin = (8f * dens).roundToInt()
+                bottomMargin = (12f * dens).roundToInt()
+            }
+        }
+        val searchIcon = object : View(context) {
+            override fun onDraw(canvas: Canvas) {
+                drawLibraryGlyph(canvas, "search", width * 0.5f, height * 0.5f, min(width, height) * 0.64f, Color.argb(215, 255, 255, 255))
+            }
+        }.apply {
+            val sz = (22f * dens).roundToInt()
+            layoutParams = LinearLayout.LayoutParams(sz, sz).apply { marginEnd = (10f * dens).roundToInt() }
+        }
+        searchInput = EditText(context).apply {
+            hint = "ابحث عن أغنية أو فنان..."
+            setHintTextColor(Color.argb(165, 255, 255, 255))
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
+            setShadowLayer(2.5f * dens, 0f, 1f * dens, Color.argb(130, 0, 0, 0))
+            isSingleLine = true
+            imeOptions = EditorInfo.IME_ACTION_DONE
+            background = null
+            setPadding(0, (6f * dens).roundToInt(), 0, (6f * dens).roundToInt())
+            layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+            setOnFocusChangeListener { _, hasFocus ->
+                searchBox.setFocusActive(hasFocus)
+            }
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(s: Editable?) {
+                    val txt = s?.toString() ?: ""
+                    searchClearBtn.setShown(txt.isNotEmpty())
+                    applyFilter(txt)
+                }
+            })
+        }
+        searchClearBtn = GlassClearButton(context) {
+            onHaptic("tick")
+            searchInput.setText("")
+        }
+        searchBox.addView(searchIcon)
+        searchBox.addView(searchInput)
+        searchBox.addView(searchClearBtn)
+        listStage.addView(searchBox)
+
+        panelCard.addView(listStage)
         addView(panelCard)
     }
 
     fun refreshGlass() {
-        if (visibility == VISIBLE) invalidateVisibleGlass(panelCard)
+        if (visibility == VISIBLE) {
+            searchBox.markBackdropDirty()
+            invalidateVisibleGlass(panelCard)
+        }
     }
 
     override fun onDetachedFromWindow() {
@@ -447,6 +488,7 @@ class MusicLibraryOverlayView(
         Choreographer.getInstance().removeFrameCallback(sheetSpringCallback)
         scrimAnim?.cancel()
         listView.abortScrolling()
+        searchBox.abortSpring()
     }
 
     private fun computeShellOrigin(view: View): Pair<Float, Float> {
@@ -465,7 +507,7 @@ class MusicLibraryOverlayView(
     private fun invalidateVisibleGlass(v: View) {
         if (v.visibility != View.VISIBLE) return
         if (v is GlassSheetCard || v is GlassPillButton || v is GlassActionButton ||
-            v is GlassSearchBar || v is GlassSectionCard || v is GlassTrackRowCard
+            v is GlassSearchBar || v is GlassSectionCard
         ) {
             if (v === panelCard || v.getLocalVisibleRect(tmpVisRect)) {
                 v.invalidate()
@@ -489,6 +531,7 @@ class MusicLibraryOverlayView(
         panelCard.scaleY = sheetScale
         val slideFade = (1f - (sheetSlideY / (visH * 0.78f)).coerceIn(0f, 1f)).let { it * it }
         panelCard.alpha = if (sheetClosing || sheetSlideY > 0.5f) slideFade else 1f
+        searchBox.markBackdropDirty()
         invalidateVisibleGlass(panelCard)
     }
 
@@ -520,9 +563,9 @@ class MusicLibraryOverlayView(
 
     private fun bounceView(v: View) {
         v.animate().cancel()
-        v.scaleX = 0.94f
-        v.scaleY = 0.94f
-        v.animate().scaleX(1f).scaleY(1f).setDuration(260L)
+        v.scaleX = 0.96f
+        v.scaleY = 0.96f
+        v.animate().scaleX(1f).scaleY(1f).setDuration(240L)
             .setInterpolator(OvershootInterpolator(1.6f)).start()
     }
 
@@ -616,6 +659,24 @@ class MusicLibraryOverlayView(
         lp.topMargin = max((36f * dens).roundToInt(), safeTop + (12f * dens).roundToInt())
         lp.bottomMargin = max((14f * dens).roundToInt(), safeBottom + (6f * dens).roundToInt())
         panelCard.layoutParams = lp
+        updateImeLift()
+    }
+
+    fun setImeBottomPx(imeBottom: Int) {
+        if (imeBottomPx == imeBottom) return
+        imeBottomPx = max(0, imeBottom)
+        updateImeLift()
+    }
+
+    private fun updateImeLift() {
+        val panelBottomMargin = max((14f * dens).roundToInt(), safeBottomPx + (6f * dens).roundToInt())
+        val newLift = max(0f, imeBottomPx - panelBottomMargin.toFloat())
+        if (abs(imeLiftPx - newLift) > 0.5f) {
+            imeLiftPx = newLift
+            val liftInt = newLift.roundToInt()
+            listView.setPadding(0, (4f * dens).roundToInt(), 0, baseListBottomPadPx + liftInt)
+            searchBox.applyImeLift(imeLiftPx)
+        }
     }
 
     fun open() {
@@ -623,7 +684,9 @@ class MusicLibraryOverlayView(
         isOpen = true
         sheetClosing = false
         listView.abortScrolling()
+        searchBox.abortSpring()
         panelCard.requestFocus()
+        syncPlaybackState(notify = false)
         syncTracks(media.getLibraryTracks())
 
         if (!media.hasAudioPermission()) {
@@ -646,6 +709,7 @@ class MusicLibraryOverlayView(
         applySheetVisualState()
         startSheetSpring()
         animateScrimTo(64, 230L)
+        post { searchBox.markBackdropDirty() }
     }
 
     fun close() {
@@ -654,6 +718,7 @@ class MusicLibraryOverlayView(
         sheetClosing = true
         hideKeyboard()
         listView.abortScrolling()
+        searchBox.abortSpring()
         animateScrimTo(0, 190L)
         val panelH = max(240f, panelCard.height.toFloat().takeIf { it > 0f }
             ?: (resources.displayMetrics.heightPixels * 0.82f))
@@ -673,7 +738,22 @@ class MusicLibraryOverlayView(
         }
     }
 
+    fun syncPlaybackState(notify: Boolean = true) {
+        val uri = media.currentTrack().contentUri
+        val playing = media.isPlaying()
+        if (uri != cachedActiveUri || playing != cachedIsPlaying) {
+            cachedActiveUri = uri
+            cachedIsPlaying = playing
+            if (notify && isOpen) {
+                trackAdapter.notifyDataSetChanged()
+                searchBox.markBackdropDirty()
+            }
+        }
+    }
+
     fun syncTracks(tracks: List<TrackInfo>) {
+        cachedActiveUri = media.currentTrack().contentUri
+        cachedIsPlaying = media.isPlaying()
         allTracks.clear()
         allTracks.addAll(tracks)
         applyFilter(searchInput.text?.toString() ?: "")
@@ -706,6 +786,7 @@ class MusicLibraryOverlayView(
             val suffix = if (shuf) " · تبديل عشوائي" else ""
             subTitleView.text = "${allTracks.size} أغنية على جهازك$suffix"
         }
+        searchBox.markBackdropDirty()
         invalidateVisibleGlass(panelCard)
     }
 
@@ -723,6 +804,14 @@ class MusicLibraryOverlayView(
             }
         }
         trackAdapter.notifyDataSetChanged()
+        searchBox.markBackdropDirty()
+    }
+
+    private fun focusSearchAndShowKeyboard() {
+        searchInput.requestFocus()
+        searchInput.setSelection(searchInput.text?.length ?: 0)
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager ?: return
+        imm.showSoftInput(searchInput, InputMethodManager.SHOW_IMPLICIT)
     }
 
     private fun hideKeyboard() {
@@ -761,7 +850,7 @@ class MusicLibraryOverlayView(
         }
     }
 
-    // ─────────────── Liquid Glass Outer Sheet & Inset Cards (matches EditorSheetView) ───────────────
+    // ─────────────── Liquid Glass Outer Sheet & Inset Cards ───────────────
     private inner class GlassSheetCard(context: Context) : LinearLayout(context) {
         private val glassHelper = LiquidGlassCardHelper(
             backdrop, perf, 30f, 24f, 16f, 1.44f, 0.24f, innerShadow = 0.16f, useBlurredBackdrop = true
@@ -799,20 +888,467 @@ class MusicLibraryOverlayView(
         }
     }
 
+    // ─────────────── Detached Floating Liquid Glass Search Capsule (Live Blur + Refraction + Rubbery Gel) ───────────────
     private inner class GlassSearchBar(context: Context) : LinearLayout(context) {
-        private val glassHelper = LiquidGlassCardHelper(
-            backdrop, perf, 16f, 12f, 8f, 1.38f, 0.15f, innerShadow = 0.13f, useBlurredBackdrop = true
-        )
+        private val touchSlop = min(ViewConfiguration.get(context).scaledTouchSlop.toFloat(), 8f * dens)
+        private val dragSuppressClickDist = 14f * dens
+        private val maxRubberX = 14f * dens
+        private val maxRubberY = 10f * dens
+        private val padDp = 18f
+        private val capScale = (1.35f / dens).coerceIn(0.32f, 0.55f)
+
+        private var runtimeShader: RuntimeShader? =
+            if (Build.VERSION.SDK_INT >= 33) LiquidGlassShaders.createCardShader() else null
+        private val glassPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        private val wallCapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+        private val shaderMatrix = Matrix()
+        private val cpuDstRect = RectF()
+
+        private var rawCapBmp: Bitmap? = null
+        private var blurredCapBmp: Bitmap? = null
+        private var capCanvas: Canvas? = null
+        private var pixBuf = IntArray(0)
+        private var tmpBuf = IntArray(0)
+        private var liveShader: BitmapShader? = null
+        private var cpuOutBmp: Bitmap? = null
+        private var cpuKey = ""
+        private var capW = 0
+        private var capH = 0
+        private var backdropDirty = true
+        private var lastCaptureMs = 0L
+
+        // Rubbery Choreographer gel spring
+        private var rubberX = 0f
+        private var rubberY = 0f
+        private var velX = 0f
+        private var velY = 0f
+        private var targetRubberX = 0f
+        private var targetRubberY = 0f
+
+        private var curScaleX = 1f
+        private var curScaleY = 1f
+        private var velScaleX = 0f
+        private var velScaleY = 0f
+        private var targetScaleX = 1f
+        private var targetScaleY = 1f
+
+        private var touchEnergy = 0f
+        private var targetEnergy = 0f
+        private var pressed = false
+        private var focused = false
+        private var imeLift = 0f
+
+        private var downRawX = 0f
+        private var downRawY = 0f
+        private var maxDragDist = 0f
+        private var didSuppressChildren = false
+        private var springActive = false
+        private var lastFrameNs = 0L
+
+        private val gelSpringCallback = object : Choreographer.FrameCallback {
+            override fun doFrame(frameTimeNanos: Long) {
+                if (!springActive) return
+                val dt = if (lastFrameNs == 0L) 0.016f
+                else ((frameTimeNanos - lastFrameNs) / 1_000_000_000f).coerceIn(0.004f, 0.032f)
+                lastFrameNs = frameTimeNanos
+
+                val omegaPos = if (pressed) 34f else 23.5f
+                val zetaPos = if (pressed) 0.88f else 0.56f
+                val kPos = omegaPos * omegaPos
+                val dPos = 2f * zetaPos * omegaPos
+
+                velX += (kPos * (targetRubberX - rubberX) - dPos * velX) * dt
+                rubberX += velX * dt
+                velY += (kPos * (targetRubberY - rubberY) - dPos * velY) * dt
+                rubberY += velY * dt
+
+                val omegaSc = if (pressed) 32f else 24.5f
+                val zetaSc = if (pressed) 0.86f else 0.54f
+                val kSc = omegaSc * omegaSc
+                val dSc = 2f * zetaSc * omegaSc
+
+                velScaleX += (kSc * (targetScaleX - curScaleX) - dSc * velScaleX) * dt
+                curScaleX = (curScaleX + velScaleX * dt).coerceIn(0.90f, 1.09f)
+                velScaleY += (kSc * (targetScaleY - curScaleY) - dSc * velScaleY) * dt
+                curScaleY = (curScaleY + velScaleY * dt).coerceIn(0.88f, 1.09f)
+
+                touchEnergy += (targetEnergy - touchEnergy) * min(1f, dt * 14f)
+
+                applyTransformAndRefresh()
+
+                val settled = !pressed &&
+                    abs(targetRubberX - rubberX) < 0.25f && abs(velX) < 4f &&
+                    abs(targetRubberY - rubberY) < 0.25f && abs(velY) < 4f &&
+                    abs(targetScaleX - curScaleX) < 0.0015f && abs(velScaleX) < 0.015f &&
+                    abs(targetScaleY - curScaleY) < 0.0015f && abs(velScaleY) < 0.015f &&
+                    abs(targetEnergy - touchEnergy) < 0.01f
+
+                if (settled) {
+                    rubberX = targetRubberX
+                    rubberY = targetRubberY
+                    curScaleX = targetScaleX
+                    curScaleY = targetScaleY
+                    touchEnergy = targetEnergy
+                    velX = 0f
+                    velY = 0f
+                    velScaleX = 0f
+                    velScaleY = 0f
+                    springActive = false
+                    applyTransformAndRefresh()
+                } else {
+                    Choreographer.getInstance().postFrameCallback(this)
+                }
+            }
+        }
+
         init {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutDirection = LAYOUT_DIRECTION_RTL
             setWillNotDraw(false)
-            setPadding((12f * dens).roundToInt(), 0, (10f * dens).roundToInt(), 0)
+            isClickable = true
+            elevation = 10f * dens
+            outlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(v: View, outline: android.graphics.Outline) {
+                    val r = min(v.width, v.height) * 0.5f
+                    outline.setRoundRect(0, 0, v.width, v.height, r)
+                }
+            }
+            setPadding((14f * dens).roundToInt(), 0, (12f * dens).roundToInt(), 0)
         }
+
+        override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+            super.onSizeChanged(w, h, oldw, oldh)
+            pivotX = w * 0.5f
+            pivotY = h * 0.5f
+            markBackdropDirty()
+        }
+
+        fun applyImeLift(liftPx: Float) {
+            imeLift = liftPx
+            translationY = -imeLift + rubberY
+            markBackdropDirty()
+        }
+
+        fun setFocusActive(active: Boolean) {
+            focused = active
+            targetEnergy = if (pressed || focused) 1f else 0f
+            startGelSpring()
+            invalidate()
+        }
+
+        fun markBackdropDirty() {
+            backdropDirty = true
+            if (visibility == VISIBLE) invalidate()
+        }
+
+        fun abortSpring() {
+            springActive = false
+            Choreographer.getInstance().removeFrameCallback(gelSpringCallback)
+            pressed = false
+            rubberX = 0f
+            rubberY = 0f
+            targetRubberX = 0f
+            targetRubberY = 0f
+            velX = 0f
+            velY = 0f
+            curScaleX = 1f
+            curScaleY = 1f
+            targetScaleX = 1f
+            targetScaleY = 1f
+            velScaleX = 0f
+            velScaleY = 0f
+            scaleX = 1f
+            scaleY = 1f
+            translationX = 0f
+            translationY = -imeLift
+        }
+
+        private fun applyTransformAndRefresh() {
+            translationX = rubberX
+            translationY = -imeLift + rubberY
+            scaleX = curScaleX
+            scaleY = curScaleY
+            backdropDirty = true
+            invalidate()
+        }
+
+        private fun startGelSpring() {
+            if (!springActive) {
+                springActive = true
+                lastFrameNs = 0L
+                Choreographer.getInstance().postFrameCallback(gelSpringCallback)
+            }
+        }
+
+        private fun pullRubber(raw: Float, maxDist: Float): Float {
+            val a = abs(raw)
+            return sign(raw) * maxDist * (1f - 1f / (1f + a / (maxDist * 1.25f)))
+        }
+
+        override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    pressed = true
+                    downRawX = ev.rawX
+                    downRawY = ev.rawY
+                    maxDragDist = 0f
+                    didSuppressChildren = false
+                    targetRubberX = 0f
+                    targetRubberY = 0f
+                    targetScaleX = 1.036f
+                    targetScaleY = 0.942f
+                    targetEnergy = 1f
+                    onHaptic("tick")
+                    startGelSpring()
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = ev.rawX - downRawX
+                    val dy = ev.rawY - downRawY
+                    val dist = hypot(dx, dy)
+                    if (dist > maxDragDist) maxDragDist = dist
+                    if (dist > touchSlop) {
+                        val rx = pullRubber(dx * 0.45f, maxRubberX)
+                        val ry = pullRubber(dy * 0.40f, maxRubberY)
+                        targetRubberX = rx
+                        targetRubberY = ry
+                        val stretch = (abs(rx) / maxRubberX) * 0.025f
+                        val compress = (abs(ry) / maxRubberY) * 0.024f
+                        targetScaleX = 1.036f + stretch
+                        targetScaleY = 0.942f - compress
+                        startGelSpring()
+                    }
+                    if (!didSuppressChildren && maxDragDist > dragSuppressClickDist) {
+                        didSuppressChildren = true
+                        val cancel = MotionEvent.obtain(ev).apply { action = MotionEvent.ACTION_CANCEL }
+                        super.dispatchTouchEvent(cancel)
+                        cancel.recycle()
+                        return true
+                    }
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    val wasDrag = didSuppressChildren || maxDragDist > dragSuppressClickDist
+                    pressed = false
+                    targetRubberX = 0f
+                    targetRubberY = 0f
+                    targetScaleX = 1f
+                    targetScaleY = 1f
+                    targetEnergy = if (focused) 1f else 0f
+                    velScaleX += if (wasDrag) 0.14f else 0.22f
+                    velScaleY -= if (wasDrag) 0.14f else 0.18f
+                    startGelSpring()
+                    if (wasDrag) {
+                        didSuppressChildren = false
+                        return true
+                    }
+                    val handledByChild = super.dispatchTouchEvent(ev)
+                    if (ev.actionMasked == MotionEvent.ACTION_UP) {
+                        val hitClear = searchClearBtn.visibility == VISIBLE &&
+                            ev.x >= searchClearBtn.left - 8f * dens && ev.x <= searchClearBtn.right + 8f * dens
+                        if (!hitClear) {
+                            val inEdit = ev.x >= searchInput.left && ev.x <= searchInput.right
+                            if (!inEdit || !searchInput.hasFocus()) {
+                                focusSearchAndShowKeyboard()
+                            } else {
+                                val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                                imm?.showSoftInput(searchInput, InputMethodManager.SHOW_IMPLICIT)
+                            }
+                        }
+                    }
+                    return handledByChild || true
+                }
+            }
+            return super.dispatchTouchEvent(ev)
+        }
+
+        private fun boxBlurPass(src: IntArray, tmp: IntArray, w: Int, h: Int, radius: Int) {
+            if (w <= 1 || h <= 1 || radius <= 0) return
+            val wm1 = w - 1
+            val hm1 = h - 1
+            val win = 2 * radius + 1
+            val half = radius
+            for (y in 0 until h) {
+                val row = y * w
+                var sr = 0
+                var sg = 0
+                var sb = 0
+                for (k in -radius..radius) {
+                    val p = src[row + k.coerceIn(0, wm1)]
+                    sr += (p ushr 16) and 0xff
+                    sg += (p ushr 8) and 0xff
+                    sb += p and 0xff
+                }
+                for (x in 0 until w) {
+                    tmp[row + x] = (0xff shl 24) or
+                        (((sr + half) / win) shl 16) or
+                        (((sg + half) / win) shl 8) or
+                        ((sb + half) / win)
+                    val addP = src[row + min(wm1, x + radius + 1)]
+                    val subP = src[row + max(0, x - radius)]
+                    sr += ((addP ushr 16) and 0xff) - ((subP ushr 16) and 0xff)
+                    sg += ((addP ushr 8) and 0xff) - ((subP ushr 8) and 0xff)
+                    sb += (addP and 0xff) - (subP and 0xff)
+                }
+            }
+            for (x in 0 until w) {
+                var sr = 0
+                var sg = 0
+                var sb = 0
+                for (k in -radius..radius) {
+                    val p = tmp[k.coerceIn(0, hm1) * w + x]
+                    sr += (p ushr 16) and 0xff
+                    sg += (p ushr 8) and 0xff
+                    sb += p and 0xff
+                }
+                for (y in 0 until h) {
+                    src[y * w + x] = (0xff shl 24) or
+                        (((sr + half) / win) shl 16) or
+                        (((sg + half) / win) shl 8) or
+                        ((sb + half) / win)
+                    val addP = tmp[min(hm1, y + radius + 1) * w + x]
+                    val subP = tmp[max(0, y - radius) * w + x]
+                    sr += ((addP ushr 16) and 0xff) - ((subP ushr 16) and 0xff)
+                    sg += ((addP ushr 8) and 0xff) - ((subP ushr 8) and 0xff)
+                    sb += (addP and 0xff) - (subP and 0xff)
+                }
+            }
+        }
+
+        private fun ensureCaptureAndBlur(w: Float, h: Float) {
+            val padPx = padDp * dens
+            val targetW = max(24, ((w + padPx * 2f) * capScale).roundToInt())
+            val targetH = max(24, ((h + padPx * 2f) * capScale).roundToInt())
+            if (rawCapBmp == null || capW != targetW || capH != targetH) {
+                rawCapBmp?.recycle()
+                blurredCapBmp?.recycle()
+                capW = targetW
+                capH = targetH
+                rawCapBmp = Bitmap.createBitmap(capW, capH, Bitmap.Config.ARGB_8888)
+                blurredCapBmp = Bitmap.createBitmap(capW, capH, Bitmap.Config.ARGB_8888)
+                capCanvas = Canvas(rawCapBmp!!)
+                val count = capW * capH
+                pixBuf = IntArray(count)
+                tmpBuf = IntArray(count)
+                backdropDirty = true
+            }
+
+            val nowMs = SystemClock.uptimeMillis()
+            if (!backdropDirty && liveShader != null) return
+            if (!backdropDirty && nowMs - lastCaptureMs < 8L) return
+            lastCaptureMs = nowMs
+            backdropDirty = false
+
+            val rawBmp = rawCapBmp ?: return
+            val blurBmp = blurredCapBmp ?: return
+            val c = capCanvas ?: return
+
+            // 1. Base sheet frosted wallpaper tint behind listStage
+            c.drawColor(Color.rgb(12, 14, 22))
+            val bBmp = backdrop.blurredBitmap
+            val wBmp = bBmp ?: backdrop.wallBitmap
+            if (wBmp != null && !wBmp.isRecycled) {
+                try {
+                    val (ox, oy) = computeShellOrigin(this)
+                    val wl = if (bBmp != null) backdrop.blurredLeft else backdrop.wallLeft
+                    val wt = if (bBmp != null) backdrop.blurredTop else backdrop.wallTop
+                    val wsx = if (bBmp != null) backdrop.blurredScaleX else backdrop.wallScaleX
+                    val wsy = if (bBmp != null) backdrop.blurredScaleY else backdrop.wallScaleY
+                    c.save()
+                    c.scale(capScale, capScale)
+                    c.translate(padPx - ox, padPx - oy)
+                    c.translate(wl, wt)
+                    c.scale(wsx, wsy)
+                    c.drawBitmap(wBmp, 0f, 0f, wallCapPaint)
+                    c.restore()
+                    c.drawColor(Color.argb(198, 12, 14, 22))
+                } catch (_: Throwable) {}
+            }
+
+            // 2. Capture live scrolling song rows + titles + album covers right behind this pill
+            if (listView.visibility == VISIBLE && listView.width > 0 && listView.height > 0) {
+                try {
+                    val relX = this.x - listView.x
+                    val relY = this.y - listView.y
+                    c.save()
+                    c.scale(capScale, capScale)
+                    c.translate(padPx - relX, padPx - relY)
+                    c.clipRect(
+                        relX - padPx - 4f,
+                        relY - padPx - 4f,
+                        relX + w + padPx + 4f,
+                        relY + h + padPx + 4f
+                    )
+                    listView.draw(c)
+                    c.restore()
+                } catch (_: Throwable) {}
+            }
+
+            // 3. Two-pass separable optical Gaussian-like blur (~2.4dp creamy frosting)
+            rawBmp.getPixels(pixBuf, 0, capW, 0, 0, capW, capH)
+            boxBlurPass(pixBuf, tmpBuf, capW, capH, 3)
+            boxBlurPass(pixBuf, tmpBuf, capW, capH, 4)
+            blurBmp.setPixels(pixBuf, 0, capW, 0, 0, capW, capH)
+
+            val sh = BitmapShader(blurBmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+            shaderMatrix.reset()
+            shaderMatrix.setScale(1f / capScale, 1f / capScale)
+            shaderMatrix.postTranslate(-padPx, -padPx)
+            sh.setLocalMatrix(shaderMatrix)
+            liveShader = sh
+        }
+
         override fun onDraw(canvas: Canvas) {
-            val (ox, oy) = computeShellOrigin(this)
-            glassHelper.draw(this, canvas, Color.argb(156, 14, 17, 27), ox, oy)
+            val w = width.toFloat()
+            val h = height.toFloat()
+            if (w <= 1f || h <= 1f) return
+
+            ensureCaptureAndBlur(w, h)
+
+            val padPx = padDp * dens
+            val radPx = min(w, h) * 0.5f
+            val bzPx = 24f * dens
+            val thPx = 18f * dens
+            val ior = 1.52f
+            val bgA = (72f + 16f * touchEnergy).roundToInt()
+            val bgR = (18f + 8f * touchEnergy).roundToInt()
+            val bgG = (23f + 13f * touchEnergy).roundToInt()
+            val bgB = (36f + 20f * touchEnergy).roundToInt()
+            val bgCol = Color.argb(bgA, bgR, bgG, bgB)
+            val rimSh = 0.34f + 0.10f * touchEnergy
+            val innerGlow = 0.30f + 0.14f * touchEnergy
+
+            val sh = runtimeShader
+            val lShader = liveShader
+            if (Build.VERSION.SDK_INT >= 33 && sh != null && lShader != null) {
+                val t0 = SystemClock.elapsedRealtimeNanos()
+                LiquidGlassShaders.configureCardShader(
+                    sh, lShader, 0f, 0f, w, h, radPx, bzPx, thPx, ior, bgCol, rimSh, innerGlow
+                )
+                glassPaint.shader = sh
+                canvas.drawRect(0f, 0f, w, h, glassPaint)
+                glassPaint.shader = null
+                perf.recordWork("cardsDraw", (SystemClock.elapsedRealtimeNanos() - t0) / 1_000_000.0)
+            } else {
+                val blurBmp = blurredCapBmp ?: return
+                val bw = max(16, (w * 0.5f).roundToInt())
+                val bh = max(16, (h * 0.5f).roundToInt())
+                val key = "$bw|$bh|$bgCol|${(rimSh * 100).roundToInt()}|${liveShader.hashCode()}"
+                var out = cpuOutBmp?.takeIf { it.width == bw && it.height == bh }
+                if (out == null || cpuKey != key) {
+                    if (out == null) {
+                        out = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
+                        cpuOutBmp = out
+                    }
+                    NativeGlass.renderCardCpuFallback(
+                        blurBmp, out, 0f, 0f, w, h, radPx,
+                        -padPx, -padPx, 1f / capScale, 1f / capScale,
+                        bzPx, thPx, ior, bgCol, max(rimSh, innerGlow * 0.85f)
+                    )
+                    cpuKey = key
+                }
+                cpuDstRect.set(0f, 0f, w, h)
+                canvas.drawBitmap(out, null, cpuDstRect, glassPaint)
+            }
         }
     }
 
@@ -820,12 +1356,12 @@ class MusicLibraryOverlayView(
         context: Context,
         private val onClick: () -> Unit
     ) : View(context) {
-        private val bgP = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(42, 255, 255, 255) }
+        private val bgP = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(52, 255, 255, 255) }
         private val strokeP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             strokeWidth = max(1.4f, 1.5f * dens)
             strokeCap = Paint.Cap.ROUND
-            color = Color.argb(215, 255, 255, 255)
+            color = Color.argb(230, 255, 255, 255)
         }
         private var shown = false
 
@@ -1025,30 +1561,75 @@ class MusicLibraryOverlayView(
         }
     }
 
+    // Ultra-lightweight pure-Canvas glass row (zero per-row AGSL/CPU blur overhead -> locked 120fps scrolling)
     private inner class GlassTrackRowCard(context: Context) : LinearLayout(context) {
-        private val glassHelper = LiquidGlassCardHelper(
-            backdrop, perf, 18f, 12f, 9f, 1.40f, 0.16f, innerShadow = 0.12f, useBlurredBackdrop = true
-        )
+        private val radiusPx = 18f * dens
+        private val cardRect = RectF()
+        private val rimRect = RectF()
+        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = max(1f, 0.95f * dens)
+        }
+        private var rimDirty = true
+
         var isActiveTrack = false
+            set(value) {
+                if (field != value) {
+                    field = value
+                    rimDirty = true
+                    invalidate()
+                }
+            }
+
+        var isRowPressed = false
             set(value) {
                 if (field != value) {
                     field = value
                     invalidate()
                 }
             }
+
         init {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutDirection = LAYOUT_DIRECTION_LTR
             setWillNotDraw(false)
-            setPadding((10f * dens).roundToInt(), (8f * dens).roundToInt(), (12f * dens).roundToInt(), (8f * dens).roundToInt())
+            setPadding((10f * dens).roundToInt(), (7f * dens).roundToInt(), (12f * dens).roundToInt(), (7f * dens).roundToInt())
         }
+
+        override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+            super.onSizeChanged(w, h, oldw, oldh)
+            val halfStroke = rimPaint.strokeWidth * 0.5f
+            cardRect.set(0f, 0f, w.toFloat(), h.toFloat())
+            rimRect.set(halfStroke, halfStroke, max(halfStroke, w - halfStroke), max(halfStroke, h - halfStroke))
+            rimDirty = true
+        }
+
         override fun onDraw(canvas: Canvas) {
-            val (ox, oy) = computeShellOrigin(this)
-            val bg = if (isActiveTrack) Color.argb(166, 22, 68, 118) else Color.argb(162, 17, 20, 31)
-            val sh = if (isActiveTrack) 0.32f else 0.15f
-            val inn = if (isActiveTrack) 0.24f else 0.11f
-            glassHelper.draw(this, canvas, bg, ox, oy, shadowOverride = sh, innerOverride = inn)
+            val w = width.toFloat()
+            val h = height.toFloat()
+            if (w <= 1f || h <= 1f) return
+            if (rimDirty) {
+                rimDirty = false
+                rimPaint.shader = LinearGradient(
+                    0f, 0f, 0f, h,
+                    intArrayOf(
+                        if (isActiveTrack) Color.argb(128, 125, 211, 252) else Color.argb(72, 255, 255, 255),
+                        Color.argb(14, 255, 255, 255)
+                    ),
+                    null,
+                    Shader.TileMode.CLAMP
+                )
+            }
+            fillPaint.color = when {
+                isActiveTrack && isRowPressed -> Color.argb(176, 32, 92, 156)
+                isActiveTrack -> Color.argb(148, 24, 74, 132)
+                isRowPressed -> Color.argb(148, 36, 44, 66)
+                else -> Color.argb(114, 22, 27, 41)
+            }
+            canvas.drawRoundRect(cardRect, radiusPx, radiusPx, fillPaint)
+            canvas.drawRoundRect(rimRect, radiusPx, radiusPx, rimPaint)
         }
     }
 
@@ -1134,7 +1715,7 @@ class MusicLibraryOverlayView(
         }
     }
 
-    // ─────────────── Elastic Rubber-Band ListView with Live Glass Refresh ───────────────
+    // ─────────────── Elastic Rubber-Band ListView with Fling-Edge Rebound ───────────────
     private inner class RubberMusicListView(context: Context) : ListView(context) {
         private val touchSlop = min(ViewConfiguration.get(context).scaledTouchSlop.toFloat(), 8f * dens)
         private val maxPullPx = 56f * dens
@@ -1149,7 +1730,13 @@ class MusicLibraryOverlayView(
         private var velRubber = 0f
         private var springReboundRunning = false
         private var reboundLastNs = 0L
-        private var pressedRow: View? = null
+        private var pressedCard: GlassTrackRowCard? = null
+
+        private var curScrollState = OnScrollListener.SCROLL_STATE_IDLE
+        private var lastFlingVelY = 0f
+        private var flingStartMs = 0L
+        private var didScrollDuringFling = false
+        private var flingBounceUsed = false
         var onScrollOrRubber: (() -> Unit)? = null
 
         private val reboundCallback = object : Choreographer.FrameCallback {
@@ -1159,8 +1746,8 @@ class MusicLibraryOverlayView(
                 else ((frameTimeNanos - reboundLastNs) / 1_000_000_000f).coerceIn(0.004f, 0.032f)
                 reboundLastNs = frameTimeNanos
 
-                val omega = 22.5f
-                val zeta = 0.80f
+                val omega = 22.0f
+                val zeta = 0.78f
                 val acc = -(omega * omega) * rubberY - (2f * zeta * omega) * velRubber
                 velRubber += acc * dt
                 setRubberY(rubberY + velRubber * dt)
@@ -1178,8 +1765,31 @@ class MusicLibraryOverlayView(
         init {
             overScrollMode = OVER_SCROLL_NEVER
             setOnScrollListener(object : OnScrollListener {
-                override fun onScrollStateChanged(view: AbsListView?, scrollState: Int) {}
+                override fun onScrollStateChanged(view: AbsListView?, scrollState: Int) {
+                    curScrollState = scrollState
+                    if (scrollState != OnScrollListener.SCROLL_STATE_IDLE) {
+                        onScrollOrRubber?.invoke()
+                    }
+                }
                 override fun onScroll(view: AbsListView?, firstVisibleItem: Int, visibleItemCount: Int, totalItemCount: Int) {
+                    if (curScrollState == OnScrollListener.SCROLL_STATE_FLING && !flingBounceUsed) {
+                        val elapsed = SystemClock.uptimeMillis() - flingStartMs
+                        if (elapsed < 1200L) {
+                            val canUp = canScrollVertically(-1)
+                            val canDown = canScrollVertically(1)
+                            if (canUp && canDown) {
+                                didScrollDuringFling = true
+                            } else if (didScrollDuringFling && abs(lastFlingVelY) > 220f * dens) {
+                                val decay = max(0.18f, 1f - elapsed / 1200f)
+                                val atTop = !canUp && lastFlingVelY > 0f
+                                val atBot = !canDown && lastFlingVelY < 0f
+                                if (atTop || atBot) {
+                                    flingBounceUsed = true
+                                    startRubberSpring(lastFlingVelY * 0.22f * decay)
+                                }
+                            }
+                        }
+                    }
                     onScrollOrRubber?.invoke()
                 }
             })
@@ -1190,6 +1800,7 @@ class MusicLibraryOverlayView(
             Choreographer.getInstance().removeFrameCallback(reboundCallback)
             rawPull = 0f
             velRubber = 0f
+            flingBounceUsed = true
             if (rubberY != 0f) setRubberY(0f)
         }
 
@@ -1237,12 +1848,9 @@ class MusicLibraryOverlayView(
             }
         }
 
-        private fun releasePressedRow() {
-            val r = pressedRow ?: return
-            pressedRow = null
-            r.animate().cancel()
-            r.animate().scaleX(1f).scaleY(1f).setDuration(240L)
-                .setInterpolator(OvershootInterpolator(1.6f)).start()
+        private fun releasePressedCard() {
+            pressedCard?.isRowPressed = false
+            pressedCard = null
         }
 
         override fun onTouchEvent(ev: MotionEvent): Boolean {
@@ -1255,6 +1863,9 @@ class MusicLibraryOverlayView(
                     startRawY = ev.rawY
                     lastRawY = ev.rawY
                     pullingRubber = false
+                    didScrollDuringFling = canScrollVertically(-1) && canScrollVertically(1)
+                    flingBounceUsed = false
+                    lastFlingVelY = 0f
                     vt?.recycle()
                     vt = VelocityTracker.obtain()
                     trackRaw(ev)
@@ -1262,10 +1873,10 @@ class MusicLibraryOverlayView(
                     if (pos != INVALID_POSITION) {
                         val idx = pos - firstVisiblePosition
                         val row = if (idx in 0 until childCount) getChildAt(idx) else null
-                        if (row != null) {
-                            pressedRow = row
-                            row.animate().cancel()
-                            row.animate().scaleX(0.965f).scaleY(0.965f).setDuration(80L).start()
+                        val card = (row as? FrameLayout)?.getChildAt(0) as? GlassTrackRowCard
+                        if (card != null) {
+                            pressedCard = card
+                            card.isRowPressed = true
                         }
                     }
                 }
@@ -1276,7 +1887,7 @@ class MusicLibraryOverlayView(
                         val curY = ptrRawY(ev, idx)
                         val dy = curY - lastRawY
                         lastRawY = curY
-                        if (abs(curY - startRawY) > touchSlop) releasePressedRow()
+                        if (abs(curY - startRawY) > touchSlop) releasePressedCard()
                         val atTop = !canScrollVertically(-1)
                         val atBot = !canScrollVertically(1)
                         if (abs(rawPull) > 0.5f || abs(rubberY) > 0.5f) {
@@ -1285,6 +1896,9 @@ class MusicLibraryOverlayView(
                                 rawPull = 0f
                                 setRubberY(0f)
                                 pullingRubber = false
+                                val resync = MotionEvent.obtain(ev).apply { action = MotionEvent.ACTION_DOWN }
+                                super.onTouchEvent(resync)
+                                resync.recycle()
                             } else {
                                 rawPull = nextRaw
                                 setRubberY(pullToRubber(rawPull))
@@ -1301,13 +1915,15 @@ class MusicLibraryOverlayView(
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    releasePressedRow()
+                    releasePressedCard()
                     activePtr = MotionEvent.INVALID_POINTER_ID
                     trackRaw(ev)
                     vt?.computeCurrentVelocity(1000)
                     val vy = vt?.yVelocity ?: 0f
                     vt?.recycle()
                     vt = null
+                    lastFlingVelY = vy
+                    flingStartMs = SystemClock.uptimeMillis()
                     if (abs(rawPull) > 0.5f || abs(rubberY) > 0.5f) {
                         startRubberSpring(vy * 0.24f)
                         if (pullingRubber) {
@@ -1324,7 +1940,7 @@ class MusicLibraryOverlayView(
         override fun onDetachedFromWindow() {
             super.onDetachedFromWindow()
             abortScrolling()
-            pressedRow = null
+            releasePressedCard()
             vt?.recycle()
             vt = null
         }
@@ -1341,6 +1957,7 @@ class MusicLibraryOverlayView(
 
     private inner class TrackAdapter : BaseAdapter() {
         private val artPx = (48f * dens).roundToInt()
+        private val cardHeightPx = (62f * dens).roundToInt()
 
         override fun getCount(): Int = filteredIndices.size
         override fun getItem(position: Int): TrackInfo = allTracks[filteredIndices[position]]
@@ -1354,7 +1971,7 @@ class MusicLibraryOverlayView(
                     setPadding(0, (3f * dens).roundToInt(), 0, (3f * dens).roundToInt())
                 }
                 val card = GlassTrackRowCard(context).apply {
-                    layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+                    layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, cardHeightPx)
                 }
                 val art = ImageView(context).apply {
                     layoutParams = LinearLayout.LayoutParams(artPx, artPx).apply { marginEnd = (12f * dens).roundToInt() }
@@ -1378,7 +1995,7 @@ class MusicLibraryOverlayView(
                     ellipsize = TextUtils.TruncateAt.END
                 }
                 val artist = TextView(context).apply {
-                    setTextColor(Color.argb(170, 255, 255, 255))
+                    setTextColor(Color.argb(182, 255, 255, 255))
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
                     isSingleLine = true
                     ellipsize = TextUtils.TruncateAt.END
@@ -1387,7 +2004,7 @@ class MusicLibraryOverlayView(
                 meta.addView(artist)
 
                 val duration = TextView(context).apply {
-                    setTextColor(Color.argb(178, 255, 255, 255))
+                    setTextColor(Color.argb(185, 255, 255, 255))
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
                     typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
                     fontFeatureSettings = "tnum"
@@ -1408,26 +2025,31 @@ class MusicLibraryOverlayView(
 
             rowView.translationY = listView.rubberY
             val track = getItem(position)
-            val current = media.currentTrack()
-            val isActive = current.contentUri != null && current.contentUri == track.contentUri
+            val isActive = cachedActiveUri != null && cachedActiveUri == track.contentUri
 
             holder.card.isActiveTrack = isActive
+            holder.card.isRowPressed = false
             holder.title.text = track.title
             holder.title.setTextColor(if (isActive) 0xFFE0F2FE.toInt() else Color.WHITE)
             holder.artist.text = if (track.albumName.isNotBlank()) "${track.artist} · ${track.albumName}" else track.artist
-            holder.duration.text = if (isActive && media.isPlaying()) "▶ ${fmtSec(track.durationSec)}" else fmtSec(track.durationSec)
-            holder.duration.setTextColor(if (isActive) 0xFF7DD3FC.toInt() else Color.argb(170, 255, 255, 255))
+            holder.duration.text = if (isActive && cachedIsPlaying) "▶ ${fmtSec(track.durationSec)}" else fmtSec(track.durationSec)
+            holder.duration.setTextColor(if (isActive) 0xFF7DD3FC.toInt() else Color.argb(178, 255, 255, 255))
 
-            holder.boundUri = track.contentUri
+            val targetUri = track.contentUri
+            holder.boundUri = targetUri
             val cached = media.getCachedPoster(track, 112)
             if (cached != null) {
                 holder.art.setImageBitmap(cached)
             } else {
                 holder.art.setImageBitmap(getFallbackArt(track, artPx))
-                val targetUri = track.contentUri
-                media.loadTrackPoster(track, 112) { bmp ->
+                media.loadTrackPoster(
+                    track,
+                    112,
+                    shouldDecode = { isOpen && holder.boundUri == targetUri }
+                ) { bmp ->
                     if (bmp != null && holder.boundUri == targetUri) {
                         holder.art.setImageBitmap(bmp)
+                        searchBox.markBackdropDirty()
                     }
                 }
             }

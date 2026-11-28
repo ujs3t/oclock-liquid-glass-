@@ -59,6 +59,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsAnimationCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import org.json.JSONObject
@@ -314,6 +315,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             }
             if (::island.isInitialized) {
                 island.syncMedia(track, art, playing)
+            }
+            if (::musicLibraryOverlay.isInitialized && musicLibraryOverlay.isOpen) {
+                musicLibraryOverlay.syncPlaybackState()
             }
         }
         media.setLibraryListener { tracks ->
@@ -960,11 +964,35 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val dens = resources.displayMetrics.density
         ViewCompat.setOnApplyWindowInsetsListener(rootFrame) { _, insets ->
             val sys = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
-            safeTopPx = max(sys.top, (14f * dens).roundToInt())
-            safeBottomPx = max(sys.bottom, (14f * dens).roundToInt())
-            layoutScreenPositions()
+            val imeBottom = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+            val newTop = max(sys.top, (14f * dens).roundToInt())
+            val newBottom = max(sys.bottom, (14f * dens).roundToInt())
+            val sysChanged = !hasInitialLayout || newTop != safeTopPx || newBottom != safeBottomPx
+            safeTopPx = newTop
+            safeBottomPx = newBottom
+            if (sysChanged) {
+                layoutScreenPositions()
+            }
+            if (::musicLibraryOverlay.isInitialized) {
+                musicLibraryOverlay.setImeBottomPx(imeBottom)
+            }
             insets
         }
+        ViewCompat.setWindowInsetsAnimationCallback(
+            rootFrame,
+            object : WindowInsetsAnimationCompat.Callback(DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
+                override fun onProgress(
+                    insets: WindowInsetsCompat,
+                    runningAnimations: MutableList<WindowInsetsAnimationCompat>
+                ): WindowInsetsCompat {
+                    if (::musicLibraryOverlay.isInitialized && musicLibraryOverlay.isOpen) {
+                        val imeBottom = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+                        musicLibraryOverlay.setImeBottomPx(imeBottom)
+                    }
+                    return insets
+                }
+            }
+        )
     }
 
     private fun layoutScreenPositions(animatedLayout: Boolean = false) {

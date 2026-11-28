@@ -120,6 +120,8 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(mediaKt.includes('MediaStore.Audio.Media.EXTERNAL_CONTENT_URI'));
   assert.ok(mediaKt.includes('startShuffled'));
   assert.ok(mediaKt.includes('loadTrackPoster'));
+  assert.ok(mediaKt.includes('pendingArtWaiters'));
+  assert.ok(mediaKt.includes('shouldDecode'));
 
   const libKt = readFileSync(ktDir + 'MusicLibraryOverlayView.kt','utf8');
   assert.ok(libKt.includes('مكتبة موسيقى الجهاز'));
@@ -132,6 +134,13 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(libKt.includes('RubberMusicListView'));
   assert.ok(libKt.includes('useBlurredBackdrop = true'));
   assert.ok(libKt.includes('sheetSpringCallback'));
+  assert.ok(libKt.includes('gelSpringCallback'));
+  assert.ok(libKt.includes('boxBlurPass'));
+  assert.ok(libKt.includes('ensureCaptureAndBlur'));
+  assert.ok(libKt.includes('setImeBottomPx'));
+  assert.ok(libKt.includes('listView.draw(c)'));
+  const rowCardSlice = libKt.slice(libKt.indexOf('class GlassTrackRowCard'), libKt.indexOf('fun drawLibraryGlyph'));
+  assert.ok(!rowCardSlice.includes('LiquidGlassCardHelper'));
 
   const manifestXml = readFileSync('android/app/src/main/AndroidManifest.xml','utf8');
   assert.ok(manifestXml.includes('BIND_NOTIFICATION_LISTENER_SERVICE'));
@@ -151,6 +160,8 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(mainCheck.includes('layoutSpringCallback'));
   assert.ok(mainCheck.includes('springTargetNc'));
   assert.ok(mainCheck.includes('setAnimatedRestingOffset'));
+  assert.ok(mainCheck.includes('WindowInsetsAnimationCompat'));
+  assert.ok(mainCheck.includes('setImeBottomPx'));
 
   const notifKt = readFileSync(ktDir + 'NotificationCenterView.kt','utf8');
   assert.ok(notifKt.includes('dismissWithSpring'));
