@@ -503,7 +503,6 @@ class NotificationCenterView(
         )
         post {
             updateCard3DAndPeek()
-            updateMoreHintPill()
         }
     }
 
@@ -978,7 +977,6 @@ class NotificationCenterView(
             for (item in displayItems) {
                 cardViews[item.id]?.bind(item, hub)
             }
-            updateMoreHintPill()
             return
         }
 
