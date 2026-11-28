@@ -144,7 +144,8 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(notifKt.includes('snapBackRubbery'));
   assert.ok(notifKt.includes('nudgeFromMusic'));
   assert.ok(notifKt.includes('LiquidGlassCardHelper'));
-  assert.ok(notifKt.includes('GlassMoreHintPill'));
+  assert.ok(!notifKt.includes('GlassMoreHintPill'));
+  assert.ok(!notifKt.includes('اسحب للأعلى أو للأسفل'));
   assert.ok(!notifKt.includes('GlassShowLessPill'));
   assert.ok(notifKt.includes('configureLayoutBounds'));
   assert.ok(notifKt.includes('setAnimatedRestingOffset'));
@@ -216,6 +217,14 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(passcodeKt.includes('closeSilkEase'));
   assert.ok(notifKt.includes('resetAllTouchAndScroll'));
   assert.ok(notifKt.includes('requestDisallowInterceptTouchEvent'));
+
+  const appStateKt = readFileSync(ktDir + 'AppState.kt', 'utf8');
+  assert.ok(appStateKt.includes('var depth: Boolean = false'));
+  const depthKt = readFileSync(ktDir + 'DepthRevealOverlayView.kt', 'utf8');
+  assert.ok(depthKt.includes('playSeparationReveal'));
+  assert.ok(depthKt.includes('DepthLoadingPill'));
+  assert.ok(mainKt.includes('runLockScreenDepthActivation'));
+  assert.ok(mainKt.includes('playDepthSeparationReveal'));
   assert.ok(mainKt.includes('passcodeProgress / 0.30f'));
   assert.ok(notifKt.includes('clearCascadeActive'));
   assert.ok(notifKt.includes('cardPtrId'));

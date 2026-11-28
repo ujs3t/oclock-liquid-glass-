@@ -79,7 +79,7 @@ data class LockConfig(
     var innerAngle: Float = 59f,
     var innerFade: Int = 100,
     var innerColor: String = "#ffffff",
-    var depth: Boolean = true,
+    var depth: Boolean = false,
     var weather: Boolean = true,
     var music: Boolean = true,
     var notifications: Boolean = true,

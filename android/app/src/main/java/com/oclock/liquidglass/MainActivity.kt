@@ -104,6 +104,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private lateinit var clockContainer: FrameLayout
     private lateinit var clockView: ClockGlassView
     private lateinit var subjectView: ImageView
+    private lateinit var depthRevealView: DepthRevealOverlayView
+    private lateinit var depthLoadingPill: DepthLoadingPill
     private lateinit var resizeOverlay: ClockResizeOverlayView
     private lateinit var npCard: NowPlayingCardView
     private lateinit var notificationCenter: NotificationCenterView
@@ -161,6 +163,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private var hadNotifsInLayout = false
     private var springLastNs = 0L
     private var hasInitialLayout = false
+    private var depthFlowGen = 0
+    private var isDepthRevealAnimating = false
 
     private val layoutSpringCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
@@ -435,6 +439,12 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         }
         phoneShell.addView(subjectView)
+
+        // 3b. iOS Depth Separation Halo & Shimmer Overlay (z = 3.5: directly over clock & cutout)
+        depthRevealView = DepthRevealOverlayView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        }
+        phoneShell.addView(depthRevealView)
 
         // 4. Resize Frame Overlay (z = 4)
         resizeOverlay = ClockResizeOverlayView(
@@ -830,7 +840,12 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         }
         phoneShell.addView(musicLibraryOverlay)
 
-        // 12. Floating Toast Capsule (z = 11)
+        // 12. Floating Toast Capsule + Depth Loading Pill (z = 11)
+        depthLoadingPill = DepthLoadingPill(this).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
+        }
+        phoneShell.addView(depthLoadingPill)
+
         toastView = TextView(this).apply {
             layoutDirection = View.LAYOUT_DIRECTION_RTL
             visibility = View.GONE
@@ -920,6 +935,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         (bottomRow.layoutParams as FrameLayout.LayoutParams).bottomMargin = safeBottomPx + (26f * dens).roundToInt()
         (unlockedBar.layoutParams as FrameLayout.LayoutParams).bottomMargin = safeBottomPx + (28f * dens).roundToInt()
         (homeBar.layoutParams as FrameLayout.LayoutParams).bottomMargin = safeBottomPx + (7f * dens).roundToInt()
+        (depthLoadingPill.layoutParams as FrameLayout.LayoutParams).bottomMargin = safeBottomPx + (102f * dens).roundToInt()
         (toastView.layoutParams as FrameLayout.LayoutParams).topMargin = safeTopPx + (52f * dens).roundToInt()
         passcodeOverlay.applySafeInsets(safeTopPx, safeBottomPx)
         musicLibraryOverlay.applySafeInsets(safeTopPx, safeBottomPx)
@@ -1371,11 +1387,14 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
         // Keep wallpaper & foreground depth subject 100% locked together during notification scroll so depth cutout stays intact!
         val wallZoom = 1f + yDp * 0.00028f + passcodeProgress * 0.015f
-        wallView.scaleX = wallZoom
-        wallView.scaleY = wallZoom
-        subjectView.scaleX = wallZoom
-        subjectView.scaleY = wallZoom
-        subjectView.translationY = 0f
+        if (!isDepthRevealAnimating) {
+            wallView.scaleX = wallZoom
+            wallView.scaleY = wallZoom
+            subjectView.scaleX = wallZoom
+            subjectView.scaleY = wallZoom
+            subjectView.translationY = 0f
+            subjectView.alpha = 1f
+        }
 
         val clockLift = clockRestOffset + pullEff - clockLiftTravel * liftLead
         val artClock = clockView.activeArtifact
@@ -1387,9 +1406,11 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         clockContainer.translationY = clockLift
         clockContainer.rotationX = liftLead * 10f
         val cScale = (1f - 0.11f * liftLead) * clockFitScale * lockScaleMult
-        clockContainer.scaleX = cScale
-        clockContainer.scaleY = cScale
-        clockContainer.alpha = ((1f - clockFade) * lockOverlayAlpha).coerceIn(0f, 1f)
+        if (!isDepthRevealAnimating) {
+            clockContainer.scaleX = cScale
+            clockContainer.scaleY = cScale
+            clockContainer.alpha = ((1f - clockFade) * lockOverlayAlpha).coerceIn(0f, 1f)
+        }
         clockView.pullOffsetYPx = clockLift
 
         val toplineRest = if (clockRestOffset < 0f) max(clockRestOffset * 0.14f, -(3f * dens)) else clockRestOffset
@@ -2121,7 +2142,14 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                                 cfg.hasCustomSubject = store.saveCustomSubject(bmp)
                                 store.save(cfg)
                                 applyWallpaperAndTheme(reRenderClock = false)
+                                editorSheet.syncFromConfig()
                                 editorSheet.setAiStatus("تم تطبيق صورة العمق يدوياً ✓", false)
+                                if (editorSheet.isOpen) editorSheet.close()
+                                mainHandler.postDelayed({
+                                    if (!isDestroyed && cfg.depth && customSubjectBmp === bmp) {
+                                        playDepthSeparationReveal(bmp)
+                                    }
+                                }, 180L)
                             }
                             REQ_ART -> {
                                 media.setCustomArt(bmp)
@@ -2222,9 +2250,11 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
     override fun onWallSelected(wallId: String) {
         haptic("tick")
+        cancelDepthActivationFlow()
         cfg.wall = wallId
         customSubjectBmp = null
         cfg.hasCustomSubject = false
+        cfg.depth = false
         store.clearCustomSubject()
         store.save(cfg)
         applyWallpaperAndTheme(reRenderClock = true)
@@ -2232,17 +2262,103 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
     override fun onPickCustomWall() = launchPhotoPicker(REQ_WALL)
 
-    override fun onExtractAiDepth() {
+    private fun cancelDepthActivationFlow() {
+        depthFlowGen++
+        isDepthRevealAnimating = false
+        if (::depthRevealView.isInitialized) depthRevealView.stopAll()
+        if (::depthLoadingPill.isInitialized) depthLoadingPill.hide(immediate = true)
+    }
+
+    private fun playDepthSeparationReveal(cutout: Bitmap) {
+        if (isDestroyed) return
+        val dens = resources.displayMetrics.density
+        val yDp = pullY / dens
+        val baseWallZoom = 1f + yDp * 0.00028f + passcodeProgress * 0.015f
+        val baseClockScale = clockFitScale
+        val clockCenterY = if (clockContainer.height > 0) {
+            clockContainer.y + clockContainer.height * 0.5f
+        } else {
+            phoneShell.height * 0.34f
+        }
+
+        isDepthRevealAnimating = true
+        subjectView.setImageBitmap(cutout)
+        subjectView.visibility = View.VISIBLE
+        subjectView.alpha = 0f
+        haptic("pop")
+
+        depthRevealView.playSeparationReveal(
+            subjectBmp = cutout,
+            baseScale = baseWallZoom,
+            clockCenterY = clockCenterY,
+            onFrameProgress = { t, liftAlpha, liftScale, liftTyPx, wallDip, clockDip ->
+                subjectView.alpha = liftAlpha
+                subjectView.scaleX = liftScale
+                subjectView.scaleY = liftScale
+                subjectView.translationY = liftTyPx
+
+                wallView.scaleX = wallDip
+                wallView.scaleY = wallDip
+
+                val sc = baseClockScale * clockDip
+                clockContainer.scaleX = sc
+                clockContainer.scaleY = sc
+                clockContainer.alpha = (1f - 0.12f * kotlin.math.sin((t / 0.55f).coerceIn(0f, 1f) * kotlin.math.PI).toFloat()).coerceIn(0f, 1f)
+            },
+            onFinished = {
+                isDepthRevealAnimating = false
+                applyDepthAndLayerTransforms()
+            }
+        )
+    }
+
+    private fun runLockScreenDepthActivation(forceAiExtract: Boolean) {
         val wall = currentWallBmp ?: return
         if (aiDepth.isBusy) return
-        haptic("pop")
+        val myGen = ++depthFlowGen
+        val startMs = SystemClock.uptimeMillis()
+
+        if (editorSheet.isOpen) editorSheet.close()
+        if (resizeOverlay.isOpen) resizeOverlay.close()
+        if (::notificationCenter.isInitialized && notificationCenter.expandFrac > 0.05f) {
+            notificationCenter.collapseScrollIfExpanded()
+        }
+
+        depthRevealView.startScanning()
+        depthLoadingPill.show("جارٍ عزل الشخصية عن الخلفية…")
+
+        val existingSubject = if (!forceAiExtract) customSubjectBmp else null
+        if (existingSubject != null) {
+            mainHandler.postDelayed({
+                if (myGen != depthFlowGen || isDestroyed) return@postDelayed
+                depthRevealView.stopScanning()
+                depthLoadingPill.hide()
+                cfg.depth = true
+                store.save(cfg)
+                applyWallpaperAndTheme(reRenderClock = false)
+                editorSheet.syncFromConfig()
+                playDepthSeparationReveal(existingSubject)
+                island.pulse("تم تفعيل تأثير العمق ✓", 0xFF38BDF8.toInt(), 1600L)
+            }, 680L)
+            return
+        }
+
         aiDepth.extractSubject(
             wall,
             onProgress = { pct, msg ->
-                mainHandler.post { editorSheet.setAiStatus("$msg ($pct%)", true) }
+                mainHandler.post {
+                    if (myGen != depthFlowGen || isDestroyed) return@post
+                    editorSheet.setAiStatus("$msg ($pct%)", true)
+                    depthLoadingPill.updateStatus("جارٍ عزل الشخصية… $pct%")
+                }
             },
             onReady = { cutout ->
-                mainHandler.post {
+                val elapsed = SystemClock.uptimeMillis() - startMs
+                val remain = (680L - elapsed).coerceAtLeast(0L)
+                mainHandler.postDelayed({
+                    if (myGen != depthFlowGen || isDestroyed) return@postDelayed
+                    depthRevealView.stopScanning()
+                    depthLoadingPill.hide()
                     customSubjectBmp = cutout
                     cfg.depth = true
                     cfg.hasCustomSubject = store.saveCustomSubject(cutout)
@@ -2250,17 +2366,32 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     applyWallpaperAndTheme(reRenderClock = false)
                     editorSheet.syncFromConfig()
                     editorSheet.setAiStatus("تم عزل العنصر بنجاح ✓", false)
-                    island.pulse("تم عزل العمق بنجاح", 0xFFA78BFA.toInt(), 1800L)
-                    showToast("تم عزل العنصر أمام الساعة ✓")
-                }
+                    playDepthSeparationReveal(cutout)
+                    island.pulse("تم عزل العمق بنجاح ✓", 0xFF38BDF8.toInt(), 1800L)
+                }, remain)
             },
             onError = { err ->
                 mainHandler.post {
+                    if (myGen != depthFlowGen || isDestroyed) return@post
+                    depthRevealView.stopScanning()
+                    depthLoadingPill.hide()
+                    cfg.depth = false
+                    store.save(cfg)
+                    applyWallpaperAndTheme(reRenderClock = false)
+                    editorSheet.syncFromConfig()
                     editorSheet.setAiStatus(err, false)
-                    showToast(err)
+                    val tip = if (cfg.wall != "custom") {
+                        "اختر صورة تحتوي على شخصية من «صور جهازي» لعزلها أمام الساعة"
+                    } else err
+                    showToast(tip)
                 }
             }
         )
+    }
+
+    override fun onExtractAiDepth() {
+        haptic("pop")
+        runLockScreenDepthActivation(forceAiExtract = true)
     }
 
     override fun onPickManualSubject() = launchPhotoPicker(REQ_SUBJECT)
@@ -2310,13 +2441,26 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     }
 
     override fun onToggleDepth() {
-        cfg.depth = !cfg.depth
-        store.save(cfg)
-        applyWallpaperAndTheme(reRenderClock = false)
-        if (cfg.depth && customSubjectBmp == null && cfg.wall == "custom") {
-            onExtractAiDepth()
+        if (!cfg.depth) {
+            if (aiDepth.isBusy) return
+            haptic("pop")
+            cfg.depth = true
+            store.save(cfg)
+            runLockScreenDepthActivation(forceAiExtract = false)
+        } else {
+            cancelDepthActivationFlow()
+            cfg.depth = false
+            store.save(cfg)
+            if (subjectView.visibility == View.VISIBLE) {
+                subjectView.animate().cancel()
+                subjectView.animate().alpha(0f).setDuration(220L).withEndAction {
+                    if (!cfg.depth) applyWallpaperAndTheme(reRenderClock = false)
+                }.start()
+            } else {
+                applyWallpaperAndTheme(reRenderClock = false)
+            }
+            haptic("tick")
         }
-        haptic("tick")
     }
 
     override fun onToggleDnd() {
@@ -2425,6 +2569,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
     override fun onDestroy() {
         super.onDestroy()
+        cancelDepthActivationFlow()
         springRunning = false
         Choreographer.getInstance().removeFrameCallback(layoutSpringCallback)
         if (Build.VERSION.SDK_INT >= 33 && backCallback != null) {

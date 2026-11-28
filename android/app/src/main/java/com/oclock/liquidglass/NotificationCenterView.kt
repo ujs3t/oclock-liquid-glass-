@@ -59,7 +59,6 @@ class NotificationCenterView(
     private val clearBtn: GlassClearCircleButton
     private val scrollView: RubberScrollView
     private val listCol: LinearLayout
-    private val moreHintPill: GlassMoreHintPill
     private val dismissLayer: FrameLayout
 
     private val cardViews = HashMap<String, NotificationCardRow>()
@@ -381,7 +380,6 @@ class NotificationCenterView(
             if ((bot - top) != (oBot - oTop)) {
                 scrollView.post {
                     updateCard3DAndPeek()
-                    updateMoreHintPill()
                 }
             }
         }
@@ -396,18 +394,8 @@ class NotificationCenterView(
         }
         listCol.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             updateCard3DAndPeek()
-            updateMoreHintPill()
         }
         scrollView.addView(listCol)
-
-        moreHintPill = GlassMoreHintPill(context, backdrop, perf, getRootShell) {
-            onHaptic("pop")
-            animateExpandTo(1f)
-        }.apply {
-            translationZ = 24f * dens
-            layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, (25f * dens).roundToInt(), Gravity.TOP or Gravity.CENTER_HORIZONTAL)
-            visibility = GONE
-        }
 
         dismissLayer = FrameLayout(context).apply {
             clipChildren = false
@@ -418,7 +406,6 @@ class NotificationCenterView(
         containerCol.addView(headerRow)
         containerCol.addView(scrollView)
         addView(containerCol)
-        addView(moreHintPill)
         addView(dismissLayer)
         refreshPermissionBadge()
     }
@@ -467,7 +454,6 @@ class NotificationCenterView(
             }
         }
 
-        if (isInsideViewOnScreen(moreHintPill, rawX, rawY, padPx = 0f)) return true
         return false
     }
 
@@ -526,7 +512,6 @@ class NotificationCenterView(
         restingOffsetPx = max(0f, offsetPx)
         containerCol.translationY = restingOffsetPx * (1f - expandFrac)
         updateCard3DAndPeek()
-        updateMoreHintPill()
     }
 
     fun collapseScrollIfExpanded() {
@@ -548,7 +533,6 @@ class NotificationCenterView(
         containerCol.translationY = restingOffsetPx * (1f - expandFrac)
         onScrollExpandChanged(expandFrac)
         updateCard3DAndPeek()
-        updateMoreHintPill()
         scrollView.invalidate()
     }
 
@@ -607,7 +591,6 @@ class NotificationCenterView(
         clearBtn.uiInk = ink
         clearBtn.glassBg = gBg
         clearBtn.invalidate()
-        moreHintPill.applyTheme(ink, gBg)
         for (i in 0 until listCol.childCount) {
             (listCol.getChildAt(i) as? NotificationCardRow)?.applyTheme(ink, dim, gBg)
         }
@@ -623,13 +606,11 @@ class NotificationCenterView(
             .translationY(baseTy)
             .setDuration(420L)
             .setInterpolator(OvershootInterpolator(1.75f))
-            .setUpdateListener { updateMoreHintPill() }
             .start()
     }
 
     fun invalidateCards() {
         clearBtn.invalidate()
-        moreHintPill.invalidate()
         for (i in 0 until listCol.childCount) {
             listCol.getChildAt(i)?.invalidate()
         }
@@ -719,14 +700,12 @@ class NotificationCenterView(
                             deckShift = startShift * (1f - t)
                             heightCompOffset = startComp * (1f - t)
                             updateCard3DAndPeek()
-                            updateMoreHintPill()
                         }
                         addListener(object : AnimatorListenerAdapter() {
                             override fun onAnimationEnd(animation: Animator) {
                                 deckShift = 0f
                                 heightCompOffset = 0f
                                 updateCard3DAndPeek()
-                                updateMoreHintPill()
                             }
                         })
                         start()
@@ -823,7 +802,6 @@ class NotificationCenterView(
             expandGapShift = 0f
             expandGapStartIdx = Int.MAX_VALUE
             onScrollExpandChanged(0f)
-            moreHintPill.visibility = GONE
             currentItems = emptyList()
             cardViews.clear()
             listCol.removeAllViews()
@@ -1146,26 +1124,7 @@ class NotificationCenterView(
         updateCard3DAndPeek()
         post {
             updateCard3DAndPeek()
-            updateMoreHintPill()
         }
-    }
-
-    private fun updateMoreHintPill() {
-        val hiddenCount = currentItems.size - 1
-        if (isLandscapeCompact || hiddenCount <= 0 || expandFrac > 0.24f) {
-            moreHintPill.visibility = GONE
-            return
-        }
-        val firstRow = listCol.getChildAt(0)
-        val firstBot = (if (firstRow != null && firstRow.height > 0) firstRow.bottom.toFloat() else (70f * dens)) + heightCompOffset
-        val peekSpan = if (currentItems.size >= 3) 20f * dens else 11f * dens
-        val stackBotInContainer = scrollView.top.toFloat() + firstBot + peekSpan
-        val cycleArcYield = sin(deckCycleProg.coerceIn(0f, 1f) * PI).toFloat() * 24f * dens
-        moreHintPill.visibility = VISIBLE
-        moreHintPill.translationY = containerCol.translationY + stackBotInContainer + 4f * dens + cycleArcYield
-        moreHintPill.alpha = (1f - expandFrac * 4.5f).coerceIn(0f, 1f)
-        moreHintPill.setCount(hiddenCount)
-        moreHintPill.invalidate()
     }
 
     private fun canCycleDeck(): Boolean =
@@ -1180,7 +1139,6 @@ class NotificationCenterView(
             deckCycleProg = 0f
             deckCycleCommitting = false
             updateCard3DAndPeek()
-            updateMoreHintPill()
         } else if (deckCycleAnim?.isRunning == true) {
             deckCycleAnim?.cancel()
         }
@@ -1197,7 +1155,6 @@ class NotificationCenterView(
             onDragMusicCoupling(0f)
         }
         updateCard3DAndPeek()
-        updateMoreHintPill()
     }
 
     private fun rotateFrontCardToBack() {
@@ -1240,7 +1197,6 @@ class NotificationCenterView(
             deckCycleProg = 0f
             deckCycleCommitting = false
             updateCard3DAndPeek()
-            updateMoreHintPill()
             return
         }
         val shouldCommit = !cancelled && (
@@ -1262,7 +1218,6 @@ class NotificationCenterView(
                 addUpdateListener { a ->
                     deckCycleProg = a.animatedValue as Float
                     updateCard3DAndPeek()
-                    updateMoreHintPill()
                 }
                 addListener(object : AnimatorListenerAdapter() {
                     override fun onAnimationEnd(animation: Animator) {
@@ -1271,7 +1226,6 @@ class NotificationCenterView(
                             deckCycleProg = 0f
                             deckCycleCommitting = false
                             updateCard3DAndPeek()
-                            updateMoreHintPill()
                             playFrontSettleBounce()
                         }
                     }
@@ -1286,13 +1240,11 @@ class NotificationCenterView(
                 addUpdateListener { a ->
                     deckCycleProg = a.animatedValue as Float
                     updateCard3DAndPeek()
-                    updateMoreHintPill()
                 }
                 addListener(object : AnimatorListenerAdapter() {
                     override fun onAnimationEnd(animation: Animator) {
                         deckCycleProg = 0f
                         updateCard3DAndPeek()
-                        updateMoreHintPill()
                     }
                 })
                 start()
@@ -1575,22 +1527,6 @@ class NotificationCenterView(
         deckCycleProg = 0f
         deckCycleCommitting = false
         deckSettleBounce = 0f
-
-        moreHintPill.animate().cancel()
-        moreHintPill.animate()
-            .alpha(0f)
-            .translationY(moreHintPill.translationY - 12f * dens)
-            .scaleX(0.86f)
-            .scaleY(0.86f)
-            .setDuration(170L)
-            .setInterpolator(iosEase)
-            .withEndAction {
-                moreHintPill.visibility = GONE
-                moreHintPill.alpha = 1f
-                moreHintPill.scaleX = 1f
-                moreHintPill.scaleY = 1f
-            }
-            .start()
 
         clearBtn.animate().cancel()
         clearBtn.animate()
@@ -2124,96 +2060,6 @@ class NotificationCenterView(
                 }
             }
             return super.onTouchEvent(ev)
-        }
-    }
-
-    @SuppressLint("ClickableViewAccessibility")
-    private class GlassMoreHintPill(
-        context: Context,
-        backdrop: LiquidGlassShaders.BackdropState,
-        perf: PerfMonitor,
-        private val getRootShell: () -> View?,
-        private val onClick: () -> Unit
-    ) : LinearLayout(context) {
-        private val dens = resources.displayMetrics.density
-        private val glassHelper = LiquidGlassCardHelper(backdrop, perf, 14f, 12f, 9f, 1.44f, 0.24f)
-        private val label: TextView
-        var uiInk = Color.WHITE
-        var glassBg = Color.argb(30, 18, 22, 30)
-
-        init {
-            orientation = HORIZONTAL
-            gravity = Gravity.CENTER
-            setWillNotDraw(false)
-            setPadding((12f * dens).roundToInt(), 0, (12f * dens).roundToInt(), 0)
-            label = TextView(context).apply {
-                setTextColor(uiInk)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-                text = "↑ اسحب للأعلى"
-            }
-            addView(label)
-            var pillDownY = 0f
-            val pillSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
-            setOnTouchListener { _, ev ->
-                when (ev.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        pillDownY = ev.rawY
-                        animate().cancel()
-                        animate().scaleX(0.90f).scaleY(0.90f).setDuration(90L).start()
-                        true
-                    }
-                    MotionEvent.ACTION_UP -> {
-                        animate().cancel()
-                        animate().scaleX(1f).scaleY(1f).setDuration(360L).setInterpolator(OvershootInterpolator(1.9f)).start()
-                        val dy = ev.rawY - pillDownY
-                        if (dy <= pillSlop) {
-                            onClick()
-                        }
-                        true
-                    }
-                    MotionEvent.ACTION_CANCEL -> {
-                        animate().cancel()
-                        animate().scaleX(1f).scaleY(1f).setDuration(220L).start()
-                        true
-                    }
-                    else -> false
-                }
-            }
-        }
-
-        fun setCount(hidden: Int) {
-            label.text = if (hidden == 1) {
-                "↕ إشعار إضافي • اسحب للأعلى أو للأسفل"
-            } else {
-                "↕ +$hidden إشعارات • اسحب للأعلى أو للأسفل"
-            }
-        }
-
-        fun applyTheme(ink: Int, gBg: Int) {
-            uiInk = ink
-            glassBg = gBg
-            label.setTextColor(ink)
-            invalidate()
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            val rootShell = getRootShell()
-            var ox = x
-            var oy = y
-            var p = parent as? View
-            while (p != null && p !== rootShell) {
-                ox += p.x - p.scrollX
-                oy += p.y - p.scrollY
-                p = p.parent as? View
-            }
-            val smoked = Color.argb(
-                max(36, Color.alpha(glassBg)),
-                (Color.red(glassBg) * 0.45f).roundToInt(),
-                (Color.green(glassBg) * 0.45f).roundToInt(),
-                (Color.blue(glassBg) * 0.50f).roundToInt()
-            )
-            glassHelper.draw(this, canvas, smoked, ox, oy)
         }
     }
 
