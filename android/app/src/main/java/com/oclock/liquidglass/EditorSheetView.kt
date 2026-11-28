@@ -2676,30 +2676,46 @@ class EditorSheetView(
         bevelSeek.progress = cfg.clockBevel.coerceIn(0, 220)
         bevelVal.text = "${cfg.clockBevel}%"
 
-        val barPad = (10f * dens).roundToInt()
+        val barPad = (7f * dens).roundToInt()
+        val trackStroke = max(1, (0.6f * dens).roundToInt())
+        hueSeek.progressTintList = null
+        hueSeek.progressBackgroundTintList = null
         hueSeek.progressDrawable = android.graphics.drawable.InsetDrawable(
             GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
                 intArrayOf(0xFFFF3B30.toInt(), 0xFFFFCC00.toInt(), 0xFF34C759.toInt(), 0xFF00C7BE.toInt(), 0xFF007AFF.toInt(), 0xFFAF52DE.toInt(), 0xFFFF2D55.toInt(), 0xFFFF3B30.toInt())
-            ).apply { cornerRadius = 99f },
+            ).apply {
+                cornerRadius = 99f
+                setStroke(trackStroke, Color.argb(48, 255, 255, 255))
+            },
             0, barPad, 0, barPad
         )
 
         val pureHue = AppConstants.hslToRgbInt(proHue, 86f, 52f)
+        toneSeek.progressTintList = null
+        toneSeek.progressBackgroundTintList = null
         toneSeek.progressDrawable = android.graphics.drawable.InsetDrawable(
             GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
                 intArrayOf(Color.BLACK, pureHue, Color.WHITE)
-            ).apply { cornerRadius = 99f },
+            ).apply {
+                cornerRadius = 99f
+                setStroke(trackStroke, Color.argb(48, 255, 255, 255))
+            },
             0, barPad, 0, barPad
         )
 
         val opTarget = if (isAuto) Color.WHITE else col
+        opacitySeek.progressTintList = null
+        opacitySeek.progressBackgroundTintList = null
         opacitySeek.progressDrawable = android.graphics.drawable.InsetDrawable(
             GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(Color.argb(18, Color.red(opTarget), Color.green(opTarget), Color.blue(opTarget)), opTarget)
-            ).apply { cornerRadius = 99f },
+                intArrayOf(Color.argb(38, Color.red(opTarget), Color.green(opTarget), Color.blue(opTarget)), opTarget)
+            ).apply {
+                cornerRadius = 99f
+                setStroke(trackStroke, Color.argb(48, 255, 255, 255))
+            },
             0, barPad, 0, barPad
         )
     }

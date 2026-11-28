@@ -381,8 +381,13 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(layerKt.includes('liveGlassModeOverride'));
   assert.ok(wallAiKt.includes('glassPreset'));
   assert.ok(wallAiKt.includes('clockBevel'));
+  assert.ok(wallAiKt.includes('clockOpacity = 8'));
+  assert.ok(wallAiKt.includes('clockGlass = 45'));
+  assert.ok(wallAiKt.includes('clockRefraction = 150'));
+  assert.ok(wallAiKt.includes('clockBevel = 0'));
   assert.ok(sheetKt.includes('togClockGlass'));
   assert.ok(sheetKt.includes('bevelSeek'));
+  assert.ok(sheetKt.includes('7f * dens'));
   assert.ok(sheetKt.includes('"Glass"'));
   assert.ok(sheetKt.includes('onToggleClockGlassPreset'));
   assert.ok(mainKt.includes('onToggleClockGlassPreset'));
