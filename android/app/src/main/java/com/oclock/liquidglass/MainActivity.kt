@@ -1862,7 +1862,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val startCfg = prevConfigOverride ?: cfg.copy()
 
         bgExecutor.execute {
-            val style = WallpaperThemeAI.analyze(bmp)
+            val style = WallpaperThemeAI.analyze(bmp, startCfg)
             mainHandler.post {
                 if (myToken != smartWallToken || isDestroyed) return@post
 
@@ -1870,9 +1870,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 cfg.clockOpacity = style.clockOpacity
                 cfg.innerColor = style.innerColorHex
                 cfg.innerOpacity = style.innerOpacity
-                cfg.innerThickness = style.innerThickness
                 cfg.innerAngle = style.innerAngle
-                cfg.innerFade = style.innerFade
                 cfg.clockGlass = style.clockGlass
                 cfg.clockRefraction = style.clockRefraction
                 store.save(cfg)

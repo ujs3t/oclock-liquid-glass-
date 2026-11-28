@@ -334,12 +334,16 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(wallAiKt.includes('class WallpaperHarmonyAuraView'));
   assert.ok(wallAiKt.includes('class WallpaperHarmonyPill'));
   assert.ok(wallAiKt.includes('paletteDots'));
+  assert.ok(wallAiKt.includes('baseCfg.innerThickness'));
+  assert.ok(wallAiKt.includes('clockLumP15'));
   assert.ok(!wallAiKt.includes('مجاني'));
   assert.ok(appStateKt.includes('smartWallTheme'));
   assert.ok(appStateKt.includes('clockGlass'));
   assert.ok(appStateKt.includes('clockRefraction'));
   assert.ok(shadersKt.includes('uGlassAmt'));
+  assert.ok(shadersKt.includes('rimStrength'));
   assert.ok(jniCpp.includes('glassAmt'));
+  assert.ok(jniCpp.includes('rimStrength'));
   assert.ok(layerKt.includes('effMaxAbsPx'));
   assert.ok(layerKt.includes('uGlassAmt'));
   assert.ok(sheetKt.includes('togSmartWallTheme'));

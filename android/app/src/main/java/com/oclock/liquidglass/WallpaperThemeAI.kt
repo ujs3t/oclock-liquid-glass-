@@ -51,7 +51,7 @@ data class SmartClockStyle(
 
 object WallpaperThemeAI {
 
-    fun analyze(bmp: Bitmap): SmartClockStyle {
+    fun analyze(bmp: Bitmap, baseCfg: LockConfig = LockConfig()): SmartClockStyle {
         val w = 48
         val h = 88
         val safeBmp = if (bmp.config == Bitmap.Config.HARDWARE) {
@@ -70,6 +70,7 @@ object WallpaperThemeAI {
         if (safeBmp !== bmp) safeBmp.recycle()
 
         val lums = FloatArray(tw * th)
+        val clockZoneLums = ArrayList<Float>(tw * th / 2)
         val bins = 24
         val binWeight = FloatArray(bins)
         val binCos = FloatArray(bins)
@@ -80,12 +81,10 @@ object WallpaperThemeAI {
 
         var clockLumSum = 0f
         var clockWeightSum = 0f
-        var clockBrightW = 0f
         var globalLumSum = 0f
         var brightCount = 0f
         var darkCount = 0f
         var satSum = 0f
-        var chromaSum = 0f
 
         var lightDx = 0f
         var lightDy = 0f
@@ -96,7 +95,7 @@ object WallpaperThemeAI {
         for (y in 0 until th) {
             val ny = y.toFloat() / max(1, th - 1)
             val inClockY = ny in 0.05f..0.52f
-            val inHeroY = ny in 0.16f..0.84f
+            val inHeroY = ny in 0.16f..0.86f
             for (x in 0 until tw) {
                 val nx = x.toFloat() / max(1, tw - 1)
                 val c = px[y * tw + x]
@@ -114,7 +113,6 @@ object WallpaperThemeAI {
 
                 globalLumSum += lum
                 satSum += sat
-                chromaSum += chroma
                 if (lum > 0.72f) brightCount += 1f
                 if (lum < 0.16f) darkCount += 1f
 
@@ -122,7 +120,7 @@ object WallpaperThemeAI {
                     val cw = if (ny in 0.10f..0.44f && nx in 0.18f..0.82f) 1.6f else 1.0f
                     clockLumSum += lum * cw
                     clockWeightSum += cw
-                    if (lum > 0.70f) clockBrightW += cw
+                    clockZoneLums.add(lum)
                 }
 
                 if (ny < 0.62f) {
@@ -141,9 +139,9 @@ object WallpaperThemeAI {
                     if (hue < 0f) hue += 360f
                     if (hue >= 360f) hue -= 360f
 
-                    val centerBias = if (inHeroY && nx in 0.14f..0.86f) 1.65f else 0.85f
-                    val clockBias = if (inClockY) 1.25f else 1.0f
-                    val midToneBias = 1f - abs(lit - 0.48f) * 0.42f
+                    val centerBias = if (inHeroY && nx in 0.14f..0.86f) 1.65f else 0.90f
+                    val clockBias = if (inClockY) 1.15f else 1.0f
+                    val midToneBias = 1f - abs(lit - 0.52f) * 0.38f
                     val hw = chroma * chroma * (0.35f + 0.65f * sat) * centerBias * clockBias * midToneBias
 
                     val bin = ((hue / 15f).toInt()).coerceIn(0, bins - 1)
@@ -174,13 +172,17 @@ object WallpaperThemeAI {
             }
         }
 
+        clockZoneLums.sort()
+        val czSize = clockZoneLums.size
+        val clockLumP15 = if (czSize > 0) clockZoneLums[(czSize * 0.15f).toInt().coerceIn(0, czSize - 1)] else 0.3f
+        val clockLumP85 = if (czSize > 0) clockZoneLums[(czSize * 0.85f).toInt().coerceIn(0, czSize - 1)] else 0.7f
+        val clockSpread = (clockLumP85 - clockLumP15).coerceIn(0f, 1f)
+
         val pixelCount = (tw * th).toFloat().coerceAtLeast(1f)
         val clockLum = if (clockWeightSum > 0f) clockLumSum / clockWeightSum else globalLumSum / pixelCount
         val globalLum = globalLumSum / pixelCount
         val brightFrac = brightCount / pixelCount
-        val darkFrac = darkCount / pixelCount
         val meanSat = satSum / pixelCount
-        val meanChroma = chromaSum / pixelCount
         val clockDetail = if (detailN > 0) detailSum / detailN else 0f
 
         // Smooth 3-neighbor circular histogram to locate hero dominant & secondary hues
@@ -195,7 +197,7 @@ object WallpaperThemeAI {
         for (i in 1 until bins) {
             if (smoothW[i] > smoothW[peakBin]) peakBin = i
         }
-        val peakHasColor = totalHueWeight > 0.4f && smoothW[peakBin] > 0.01f
+        val peakHasColor = totalHueWeight > 0.35f && smoothW[peakBin] > 0.01f
 
         var heroHue = peakBin * 15f + 7.5f
         var heroSat = 0f
@@ -248,149 +250,120 @@ object WallpaperThemeAI {
             }
         }
 
-        // Light-source angle in upper wallpaper mapped smoothly onto spec bevel direction
+        // Light-source angle in upper wallpaper mapped smoothly onto crisp diagonal spec bevel (36..144 deg)
         var innerAngle = 59f
-        if (lightW > 0.05f) {
-            val lnx = (lightDx / lightW).coerceIn(-0.45f, 0.45f)
-            val lny = (lightDy / lightW).coerceIn(-0.45f, 0.45f)
-            if (hypot(lnx, lny) > 0.05f) {
+        if (lightW > 0.04f) {
+            val lnx = (lightDx / lightW).coerceIn(-0.48f, 0.48f)
+            val lny = (lightDy / lightW).coerceIn(-0.48f, 0.48f)
+            if (hypot(lnx, lny) > 0.04f) {
                 var rawDeg = atan2(lny, lnx) * (180f / PI.toFloat())
                 if (rawDeg < 0f) rawDeg += 360f
-                // Fold into flattering specular bevel angle range 32..148 deg
                 val normDeg = ((rawDeg % 180f) + 180f) % 180f
-                innerAngle = normDeg.coerceIn(32f, 148f)
+                // Keep away from dead 90 deg perpendicular and extremes so every glyph stem & arch gleams
+                innerAngle = if (normDeg in 84f..96f) {
+                    if (lnx >= 0f) 66f else 114f
+                } else {
+                    normDeg.coerceIn(36f, 144f)
+                }
             }
         }
 
-        // Decision tree calibrated across dramatic accent, pearlescent high-key, crystal sky, and smoky monochrome scenes
+        // Preserve default/user inner shadow thickness, fade, and pure crisp white intensity; ONLY adapt angle!
+        val innerThickness = baseCfg.innerThickness
+        val innerFade = baseCfg.innerFade
+        val innerColorInt = Color.WHITE
+        val innerOpacity = 100
+
+        // Choose harmonious translucent crystal tint & refraction that NEVER blends invisibly into background
         var targetHue = heroHue
         var targetSatPct: Float
         var targetLitPct: Float
         var clockOpacity: Int
-        var innerColorInt = Color.WHITE
-        var innerOpacity: Int
-        var innerThickness: Float
-        var innerFade: Int
         var clockGlass: Int
         var clockRefraction: Int
         val profileLabel: String
 
-        val isDramaticHeroOnDark = clockLum < 0.35f && heroChroma > 0.14f && heroSat > 0.36f && peakHasColor
-        val isPearlescentHighContrast = (brightFrac > 0.22f || clockLum > 0.58f) && (meanSat < 0.29f || heroSat < 0.45f)
-        val isScenicColorful = peakHasColor && (meanSat >= 0.22f || (heroChroma > 0.15f && clockLum >= 0.32f))
+        val isTrueDarkHeroScene = clockLum < 0.25f && clockLumP85 < 0.34f && heroChroma > 0.16f && heroSat > 0.38f && peakHasColor
+        val isUniformBrightClockBg = clockLumP15 > 0.54f && clockLum > 0.66f
+        val isColorfulOrSplitLight = peakHasColor && (meanSat >= 0.15f || heroChroma > 0.11f || clockSpread > 0.28f)
+
+        val detailBoost = (clockDetail * 145f + clockSpread * 16f).coerceIn(0f, 26f)
 
         when {
-            isDramaticHeroOnDark -> {
-                // Deep tinted dramatic look matched to hero accent (e.g. crimson red in dark moody scene)
-                targetSatPct = (heroSat * 100f).coerceIn(66f, 88f)
-                targetLitPct = (heroLit * 78f + 12f).coerceIn(24f, 44f)
-                val darknessBoost = ((0.35f - clockLum) / 0.35f).coerceIn(0f, 1f)
-                clockOpacity = (66f + darknessBoost * 18f).roundToInt().coerceIn(62, 86)
-                innerColorInt = Color.WHITE
-                innerOpacity = (20f + brightFrac * 48f).roundToInt().coerceIn(20, 46)
-                innerThickness = (0.28f + brightFrac * 0.28f).coerceIn(0.25f, 0.52f)
-                innerFade = 92
-                clockGlass = (40f + brightFrac * 24f + clockDetail * 45f).roundToInt().coerceIn(38, 62)
-                clockRefraction = (72f + clockDetail * 145f).roundToInt().coerceIn(68, 98)
-                profileLabel = "تناغم درامي مع لون خلفيتك"
+            isTrueDarkHeroScene -> {
+                // Rich dramatic accent tint over deep dark background (e.g. crimson red in dark forest)
+                targetSatPct = (heroSat * 100f).coerceIn(68f, 88f)
+                targetLitPct = (heroLit * 82f + 14f).coerceIn(34f, 48f)
+                clockOpacity = (46f + (0.25f - clockLum).coerceIn(0f, 0.25f) * 72f).roundToInt().coerceIn(44, 62)
+                clockGlass = (64f + detailBoost * 0.65f).roundToInt().coerceIn(62, 82)
+                clockRefraction = (98f + detailBoost * 0.95f).roundToInt().coerceIn(96, 126)
+                profileLabel = "تناغم درامي مع ألوان خلفيتك"
             }
 
-            isPearlescentHighContrast -> {
-                // Luminous pearl/satin Liquid Glass with glowing 3D inner white bevel (e.g. angel feathers / sunlit snow)
-                if (peakHasColor && heroChroma > 0.045f) {
-                    targetSatPct = (heroSat * 72f + 14f).coerceIn(22f, 52f)
-                    targetLitPct = if (clockLum > 0.66f) 46f else 66f
-                } else {
-                    targetHue = 216f
-                    targetSatPct = 14f
-                    targetLitPct = if (clockLum > 0.66f) 40f else 68f
-                }
-                clockOpacity = (46f + clockLum * 14f).roundToInt().coerceIn(44, 62)
-                innerColorInt = Color.WHITE
-                innerOpacity = (86f + brightFrac * 14f).roundToInt().coerceIn(86, 100)
-                innerThickness = (0.82f + brightFrac * 0.45f).coerceIn(0.75f, 1.25f)
-                innerFade = 98
-                clockGlass = 78
-                clockRefraction = (112f + clockDetail * 90f).roundToInt().coerceIn(108, 132)
-                profileLabel = "بريق لؤلؤي وظل أبيض داخلي"
+            isUniformBrightClockBg -> {
+                // Bright white/snow everywhere behind clock: cool deep crystal contrast so numerals read effortlessly
+                targetHue = if (peakHasColor) heroHue else 214f
+                targetSatPct = if (peakHasColor) (heroSat * 68f + 18f).coerceIn(28f, 72f) else 22f
+                targetLitPct = 36f
+                clockOpacity = (30f + (clockLum - 0.66f).coerceIn(0f, 0.34f) * 32f).roundToInt().coerceIn(28, 42)
+                clockGlass = (80f + detailBoost * 0.50f).roundToInt().coerceIn(78, 94)
+                clockRefraction = (118f + detailBoost * 0.90f).roundToInt().coerceIn(115, 142)
+                profileLabel = "تباين بلوري واضح مع الخلفية المضيئة"
             }
 
-            isScenicColorful -> {
-                // Translucent Liquid Glass sky/aurora tint with crisp icy refraction (e.g. alpine blue sky)
-                targetSatPct = (heroSat * 82f + 18f).coerceIn(54f, 82f)
-                targetLitPct = if (clockLum > 0.50f) {
-                    (58f + (clockLum - 0.50f) * 14f).coerceIn(55f, 68f)
+            isColorfulOrSplitLight -> {
+                // Luminous translucent Liquid Glass (e.g. sunlit golden room, cyan glacier sky, angelic rose feathers)
+                val isHighKeyPastel = (brightFrac > 0.22f || clockLum > 0.48f) && meanSat < 0.26f
+                if (isHighKeyPastel) {
+                    targetSatPct = (heroSat * 60f + 16f).coerceIn(26f, 56f)
+                    targetLitPct = 76f
+                    clockOpacity = (26f + brightFrac * 18f).roundToInt().coerceIn(24, 38)
                 } else {
-                    (64f + heroLit * 12f).coerceIn(60f, 74f)
+                    targetSatPct = (heroSat * 76f + 22f).coerceIn(52f, 84f)
+                    // Bright crisp crystal lift so colored digits pop against shadows AND refract light beams cleanly
+                    targetLitPct = (74f + clockSpread * 12f).coerceIn(72f, 86f)
+                    clockOpacity = (20f + meanSat * 14f).roundToInt().coerceIn(18, 30)
                 }
-                clockOpacity = (22f + meanSat * 20f).roundToInt().coerceIn(22, 38)
-                innerColorInt = if (heroHue in 175f..235f) Color.rgb(240, 249, 255) else Color.WHITE
-                innerOpacity = (72f + clockLum * 26f).roundToInt().coerceIn(72, 94)
-                innerThickness = (0.45f + clockLum * 0.35f).coerceIn(0.42f, 0.80f)
-                innerFade = 94
-                clockGlass = (82f + meanSat * 16f).roundToInt().coerceIn(80, 96)
-                clockRefraction = (118f + clockDetail * 115f).roundToInt().coerceIn(115, 144)
-                profileLabel = "زجاج سائل شفاف بألوان المشهد"
+                clockGlass = (78f + detailBoost * 0.65f).roundToInt().coerceIn(76, 95)
+                clockRefraction = (116f + detailBoost * 1.05f).roundToInt().coerceIn(114, 145)
+                profileLabel = "زجاج سائل متناغم وانكسار واضح"
             }
 
             else -> {
-                // Dark atmospheric, smoky hallway, or stark monochrome minimalism
-                if (clockLum < 0.14f && brightFrac > 0.12f) {
-                    // Stark monochrome (obsidian top + luminous subject below)
-                    targetHue = 218f
-                    targetSatPct = 9f
-                    targetLitPct = 31f
-                    clockOpacity = 42
-                    innerColorInt = Color.WHITE
-                    innerOpacity = 46
-                    innerThickness = 0.35f
-                    innerFade = 90
-                    clockGlass = 64
-                    clockRefraction = 96
-                    profileLabel = "تناغم أحادي داكن متوازن"
-                } else {
-                    // Smoky foggy corridor glass
-                    targetHue = if (peakHasColor && heroChroma > 0.03f) heroHue else 214f
-                    targetSatPct = if (peakHasColor) (heroSat * 26f).coerceIn(4f, 16f) else 8f
-                    targetLitPct = (68f + clockLum * 18f).coerceIn(66f, 78f)
-                    clockOpacity = (18f + (1f - clockLum).coerceIn(0f, 1f) * 10f).roundToInt().coerceIn(18, 30)
-                    innerColorInt = Color.WHITE
-                    innerOpacity = (48f + clockDetail * 65f).roundToInt().coerceIn(46, 68)
-                    innerThickness = 0.38f
-                    innerFade = 88
-                    clockGlass = 84
-                    clockRefraction = (108f + clockDetail * 85f).roundToInt().coerceIn(104, 128)
-                    profileLabel = "زجاج دخاني شفاف بإطار مضيء"
-                }
+                // Moody smoky corridor or monochrome minimalism
+                targetHue = if (peakHasColor && heroChroma > 0.03f) heroHue else 214f
+                targetSatPct = if (peakHasColor) (heroSat * 22f).coerceIn(6f, 18f) else 10f
+                targetLitPct = 80f
+                clockOpacity = (18f + (0.35f - clockLum).coerceIn(0f, 0.35f) * 26f).roundToInt().coerceIn(16, 28)
+                clockGlass = (80f + detailBoost * 0.55f).roundToInt().coerceIn(78, 94)
+                clockRefraction = (114f + detailBoost * 0.90f).roundToInt().coerceIn(110, 138)
+                profileLabel = "زجاج دخاني شفاف بإطار أبيض"
             }
         }
 
         var chosenColor = AppConstants.hslToRgbInt(targetHue, targetSatPct, targetLitPct)
 
-        // Contrast & legibility guard against clock-zone background luminance
-        val clockColorLum = relativeLuminance(chosenColor)
-        val effBlendLum = clockLum * (1f - clockOpacity / 100f) + clockColorLum * (clockOpacity / 100f)
-        val interiorDiff = abs(effBlendLum - clockLum)
-        if (interiorDiff < 0.10f && innerOpacity < 52) {
-            innerOpacity = max(innerOpacity, 56)
-            innerThickness = max(innerThickness, 0.42f)
+        // Strict readability guard: never allow chosen clock color to camouflage into background luminance behind digits
+        val cLum = relativeLuminance(chosenColor)
+        if (abs(cLum - clockLum) < 0.22f && !isTrueDarkHeroScene) {
+            if (clockLum < 0.50f) {
+                targetLitPct = max(targetLitPct, 82f)
+                chosenColor = AppConstants.hslToRgbInt(targetHue, min(targetSatPct, 66f), targetLitPct)
+                clockOpacity = max(clockOpacity, 24)
+            } else {
+                targetLitPct = min(targetLitPct, 34f)
+                chosenColor = AppConstants.hslToRgbInt(targetHue, max(targetSatPct, 32f), targetLitPct)
+                clockOpacity = max(clockOpacity, 32)
+            }
         }
-        if (clockLum > 0.80f && clockOpacity < 34 && innerOpacity < 72) {
-            targetLitPct = min(targetLitPct, 42f)
-            chosenColor = AppConstants.hslToRgbInt(targetHue, targetSatPct, targetLitPct)
-            clockOpacity = max(clockOpacity, 38)
-        }
-
-        // Round thickness nicely to 0.05 steps matching editor feel
-        val cleanThick = ((innerThickness * 20f).roundToInt() / 20f).coerceIn(0.1f, 2.0f)
 
         val dotHero = if (peakHasColor) {
-            AppConstants.hslToRgbInt(heroHue, (heroSat * 100f).coerceIn(32f, 92f), (heroLit * 100f).coerceIn(34f, 64f))
+            AppConstants.hslToRgbInt(heroHue, (heroSat * 100f).coerceIn(32f, 92f), (heroLit * 100f).coerceIn(36f, 68f))
         } else {
-            AppConstants.hslToRgbInt(215f, 12f, (globalLum * 100f).coerceIn(28f, 62f))
+            AppConstants.hslToRgbInt(215f, 12f, (globalLum * 100f).coerceIn(32f, 64f))
         }
         val dotSecondary = if (secPeakVal > 0.01f) {
-            AppConstants.hslToRgbInt(secHue, (secSat * 100f).coerceIn(24f, 88f), (secLit * 100f).coerceIn(36f, 72f))
+            AppConstants.hslToRgbInt(secHue, (secSat * 100f).coerceIn(28f, 88f), (secLit * 100f).coerceIn(38f, 74f))
         } else {
             innerColorInt
         }
@@ -402,9 +375,9 @@ object WallpaperThemeAI {
             innerColorHex = AppConstants.toHex(innerColorInt),
             innerColorInt = innerColorInt,
             innerOpacity = innerOpacity.coerceIn(0, 100),
-            innerThickness = cleanThick,
+            innerThickness = innerThickness,
             innerAngle = innerAngle,
-            innerFade = innerFade.coerceIn(0, 100),
+            innerFade = innerFade,
             clockGlass = clockGlass.coerceIn(0, 100),
             clockRefraction = clockRefraction.coerceIn(0, 150),
             paletteDots = intArrayOf(dotHero, chosenColor, dotSecondary),

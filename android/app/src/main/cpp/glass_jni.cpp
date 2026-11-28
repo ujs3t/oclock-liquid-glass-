@@ -389,7 +389,7 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
                 g = g * (1.f - shadowOp) + shG * shadowOp;
                 b = b * (1.f - shadowOp) + shB * shadowOp;
             }
-            // Silky fading iOS 26 inner glass shadow (scales smoothly from ultra-fine 0.9dp at 0.1 to deep glow, fades to 0 on unlit edges)
+            // TOPMOST LAYER: Silky white inner glass shadow strictly ABOVE tint, glaze, and glass layers
             if (innerOp > 0.001f && innerThick > 0.01f && depthPx < fallLimit) {
                 float gx = (float(aRow[size_t(x) * 4 + 1]) - 128.f) / 127.f;
                 float gy = (float(aRow[size_t(x) * 4 + 2]) - 128.f) / 127.f;
@@ -398,15 +398,23 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
                     float ridgeFade = clamp01f(gl * 1.40f);
                     float k = std::fabs((gx / gl) * ax + (gy / gl) * ay);
                     float t = clamp01f(depthPx / fallLimit);
-                    float decay = std::pow(1.f - t, 2.75f);
+                    float fillOp = clamp01f(std::max(tA, shadowOp));
+                    float decay = std::pow(1.f - t, 2.40f + (1.72f - 2.40f) * fillOp);
                     float fadeAmt = clamp01f(innerFade);
-                    float lit = std::pow(clamp01f((k - 0.28f) / 0.72f), 1.85f);
+                    float lit = std::pow(clamp01f((k - 0.24f) / 0.76f), 1.75f);
                     float dirTerm = (1.f - fadeAmt) + fadeAmt * lit;
-                    float rimA = clamp01f(dirTerm * decay * ridgeFade * innerOp * 0.68f);
-                    rimA = std::min(rimA, 0.80f);
+                    float rimStrength = 0.76f + (1.00f - 0.76f) * fillOp;
+                    float rimA = clamp01f(dirTerm * decay * ridgeFade * innerOp * rimStrength);
+                    rimA = std::min(rimA, 0.96f);
                     r = r * (1.f - rimA) + inR * rimA;
                     g = g * (1.f - rimA) + inG * rimA;
                     b = b * (1.f - rimA) + inB * rimA;
+                    if (fillOp > 0.12f) {
+                        float pop = rimA * fillOp * 0.22f;
+                        r = std::min(255.f, r + inR * pop);
+                        g = std::min(255.f, g + inG * pop);
+                        b = std::min(255.f, b + inB * pop);
+                    }
                 }
             }
             float a = alphaByte / 255.f;
