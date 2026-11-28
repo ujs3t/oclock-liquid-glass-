@@ -18,7 +18,12 @@ test('local fonts and pure native Kotlin assets are packaged', () => {
   const gradle = readFileSync('android/app/build.gradle','utf8');
   assert.ok(gradle.includes("id 'org.jetbrains.kotlin.android'"));
   assert.ok(!gradle.includes('androidx.webkit'));
-  for (const ttf of ['bebas_neue.ttf','oswald.ttf','inter.ttf','sf_rounded.ttf','ios_classic.ttf','ios_slab.ttf','ios_stencil.ttf','ios_rails.ttf','ios_heavy.ttf']) {
+  for (const ttf of [
+    'bebas_neue.ttf','oswald.ttf','inter.ttf','sf_rounded.ttf',
+    'ios_classic.ttf','ios_slab.ttf','ios_stencil.ttf','ios_rails.ttf','ios_heavy.ttf',
+    'thin.ttf','light.ttf','cyber.ttf','mono.ttf','retro.ttf',
+    'editorial.ttf','tech.ttf','black.ttf','poster.ttf','bubble.ttf'
+  ]) {
     assert.ok(existsSync('android/app/src/main/assets/fonts/'+ttf), 'missing bundled font '+ttf);
   }
 });
@@ -241,7 +246,10 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(!aiKt.includes('مجاني'));
 
   // Split dark Liquid Glass Clock vs Wallpaper customizers + iPhone fonts + live preview stage
-  for (const fontId of ['ROUNDED','CLASSIC','SLAB','STENCIL','RAILS','HEAVY']) {
+  for (const fontId of [
+    'ROUNDED','CLASSIC','SLAB','STENCIL','RAILS','HEAVY',
+    'THIN','LIGHT','CYBER','MONO','RETRO','EDITORIAL','TECH','BLACK','POSTER','BUBBLE'
+  ]) {
     assert.ok(appStateKt.includes(fontId));
   }
   assert.ok(sheetKt.includes('enum class Mode { CLOCK, WALLPAPER }'));
@@ -255,6 +263,13 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(sheetKt.includes('IosWallActionTile'));
   assert.ok(sheetKt.includes('IosCapsuleButton'));
   assert.ok(sheetKt.includes('makeIosActionRow'));
+  assert.ok(sheetKt.includes('EditorRubberScrollView'));
+  assert.ok(sheetKt.includes('RubberHorizontalScrollView'));
+  assert.ok(sheetKt.includes('sheetSpringCallback'));
+  assert.ok(sheetKt.includes('morphTopPx'));
+  assert.ok(sheetKt.includes('fun setLabel'));
+  assert.ok(viewsKt.includes('drawTopOffsetPx'));
+  assert.ok(mainKt.includes('editorStageSpringCallback'));
   assert.ok(sheetKt.includes('widthSeek'));
   assert.ok(sheetKt.includes('العرض'));
   assert.ok(!sheetKt.includes('مجاني'));

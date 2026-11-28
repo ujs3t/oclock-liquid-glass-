@@ -68,8 +68,8 @@ data class ClockArtifact(
 }
 
 class ClockGlyphRenderer(private val context: Context) {
-    private val typefaceCache = HashMap<String, Typeface>(12)
-    private val metricsCache = HashMap<String, NumeralMetrics>(12)
+    private val typefaceCache = HashMap<String, Typeface>(24)
+    private val metricsCache = HashMap<String, NumeralMetrics>(24)
     private val glyphCache = object : LinkedHashMap<String, StretchedGlyph>(28, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, StretchedGlyph>?): Boolean {
             return size > 24

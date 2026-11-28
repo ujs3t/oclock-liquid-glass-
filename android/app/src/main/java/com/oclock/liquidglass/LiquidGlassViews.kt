@@ -62,11 +62,14 @@ class LiquidGlassCardHelper(
         originY: Float,
         shadowOverride: Float = shadowInt,
         innerOverride: Float = innerShadow,
-        thickOverride: Float = thickDp
+        thickOverride: Float = thickDp,
+        drawTopOffsetPx: Float = 0f
     ) {
         val w = view.width.toFloat()
         val h = view.height.toFloat()
         if (w <= 1f || h <= 1f) return
+        val topOff = drawTopOffsetPx.coerceIn(0f, max(0f, h - 4f))
+        val effH = (h - topOff).coerceAtLeast(2f)
         val dens = view.resources.displayMetrics.density
         val radPx = radiusDp * dens
         val bzPx = bezelDp * dens
@@ -81,21 +84,28 @@ class LiquidGlassCardHelper(
             val t0 = SystemClock.elapsedRealtimeNanos()
             val sh = shader!!
             LiquidGlassShaders.configureCardShader(
-                sh, shaderSrc, originX, originY, w, h, radPx, bzPx, thPx, ior, glassBgColor, shadowOverride, innerOverride
+                sh, shaderSrc, originX, originY + topOff, w, effH, radPx, bzPx, thPx, ior, glassBgColor, shadowOverride, innerOverride
             )
             paint.shader = sh
-            canvas.drawRect(0f, 0f, w, h, paint)
+            if (topOff > 0.1f) {
+                canvas.save()
+                canvas.translate(0f, topOff)
+                canvas.drawRect(0f, 0f, w, effH, paint)
+                canvas.restore()
+            } else {
+                canvas.drawRect(0f, 0f, w, h, paint)
+            }
             paint.shader = null
             perf.recordWork("cardsDraw", (SystemClock.elapsedRealtimeNanos() - t0) / 1_000_000.0)
         } else {
             val blurBmp = if (useBlurredBackdrop) backdrop.blurredBitmap else null
             val wall = blurBmp ?: backdrop.compositedBitmap ?: backdrop.wallBitmap ?: return
-            val fullRes = w <= 120f * dens && h <= 120f * dens
+            val fullRes = w <= 120f * dens && effH <= 120f * dens
             val bw = max(16, if (fullRes) w.roundToInt() else (w / 2f).roundToInt())
-            val bh = max(16, if (fullRes) h.roundToInt() else (h / 2f).roundToInt())
+            val bh = max(16, if (fullRes) effH.roundToInt() else (effH / 2f).roundToInt())
             val cpuShadow = max(shadowOverride, innerOverride * 0.85f)
             val srcId = if (blurBmp != null) 2 else if (backdrop.compositedBitmap != null) 1 else 0
-            val key = "$srcId|${originX.roundToInt()}|${originY.roundToInt()}|$bw|$bh|$glassBgColor|${(cpuShadow * 100).roundToInt()}|${(thickOverride * 10).roundToInt()}|${(backdrop.wallScaleX * 100).roundToInt()}"
+            val key = "$srcId|${originX.roundToInt()}|${(originY + topOff).roundToInt()}|$bw|$bh|$glassBgColor|${(cpuShadow * 100).roundToInt()}|${(thickOverride * 10).roundToInt()}|${(backdrop.wallScaleX * 100).roundToInt()}"
             var out = cpuBmp?.takeIf { it.width == bw && it.height == bh }
             if (out == null || cpuKey != key) {
                 if (out == null) {
@@ -117,13 +127,13 @@ class LiquidGlassCardHelper(
                     else -> backdrop.wallScaleY
                 }
                 NativeGlass.renderCardCpuFallback(
-                    wall, out, originX, originY, w, h, radPx,
+                    wall, out, originX, originY + topOff, w, effH, radPx,
                     wLeft, wTop, scX, scY,
                     bzPx, thPx, ior, glassBgColor, cpuShadow
                 )
                 cpuKey = key
             }
-            dstRect.set(0f, 0f, w, h)
+            dstRect.set(0f, topOff, w, h)
             canvas.drawBitmap(out, null, dstRect, paint)
         }
     }

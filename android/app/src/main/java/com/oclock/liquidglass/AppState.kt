@@ -17,12 +17,22 @@ enum class ClockFont(val id: String, val label: String, val assetPath: String?) 
     OSWALD("oswald", "Oswald", "fonts/oswald.ttf"),
     INTER("inter", "Inter", "fonts/inter.ttf"),
     SF("sf", "SF", null),
+    THIN("thin", "Thin", "fonts/thin.ttf"),
+    LIGHT("light", "Light", "fonts/light.ttf"),
+    RAILS("rails", "Rails", "fonts/ios_rails.ttf"),
+    CYBER("cyber", "Cyber", "fonts/cyber.ttf"),
+    MONO("mono", "Mono", "fonts/mono.ttf"),
     ROUNDED("rounded", "Rounded", "fonts/sf_rounded.ttf"),
     CLASSIC("classic", "Classic", "fonts/ios_classic.ttf"),
+    EDITORIAL("editorial", "Editorial", "fonts/editorial.ttf"),
+    RETRO("retro", "Retro", "fonts/retro.ttf"),
     SLAB("slab", "Slab", "fonts/ios_slab.ttf"),
     STENCIL("stencil", "Stencil", "fonts/ios_stencil.ttf"),
-    RAILS("rails", "Rails", "fonts/ios_rails.ttf"),
-    HEAVY("heavy", "Heavy", "fonts/ios_heavy.ttf");
+    TECH("tech", "Tech", "fonts/tech.ttf"),
+    HEAVY("heavy", "Heavy", "fonts/ios_heavy.ttf"),
+    BLACK("black", "Black", "fonts/black.ttf"),
+    POSTER("poster", "Poster", "fonts/poster.ttf"),
+    BUBBLE("bubble", "Bubble", "fonts/bubble.ttf");
 
     companion object {
         fun fromId(id: String?): ClockFont = entries.firstOrNull { it.id == id } ?: BEBAS

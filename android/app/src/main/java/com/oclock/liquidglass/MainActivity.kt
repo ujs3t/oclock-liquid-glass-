@@ -148,7 +148,12 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private var wallHoldPendingRunnable: Runnable? = null
     private var clockEditorStageFrac = 0f
     private var wallEditorStageFrac = 0f
-    private var editorStageAnim: ValueAnimator? = null
+    private var editorStageTargetClock = 0f
+    private var editorStageTargetWall = 0f
+    private var editorStageVelClock = 0f
+    private var editorStageVelWall = 0f
+    private var editorStageSpringRunning = false
+    private var editorStageLastNs = 0L
     private var springTargetClock = 0f
     private var springTargetClockFit = 1f
     private var springTargetNp = 0f
@@ -1193,26 +1198,67 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         editorSheet.open(EditorSheetView.Mode.WALLPAPER)
     }
 
+    private val editorStageSpringCallback = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            if (!editorStageSpringRunning) return
+            val dt = if (editorStageLastNs == 0L) 0.016f
+            else ((frameTimeNanos - editorStageLastNs) / 1_000_000_000f).coerceIn(0.004f, 0.032f)
+            editorStageLastNs = frameTimeNanos
+
+            val omega = 21.5f
+            val zeta = 0.88f
+            val stiffness = omega * omega
+            val damping = 2f * zeta * omega
+
+            val aClock = stiffness * (editorStageTargetClock - clockEditorStageFrac) - damping * editorStageVelClock
+            editorStageVelClock += aClock * dt
+            clockEditorStageFrac = (clockEditorStageFrac + editorStageVelClock * dt).coerceIn(0f, 1.05f)
+
+            val aWall = stiffness * (editorStageTargetWall - wallEditorStageFrac) - damping * editorStageVelWall
+            editorStageVelWall += aWall * dt
+            wallEditorStageFrac = (wallEditorStageFrac + editorStageVelWall * dt).coerceIn(0f, 1.05f)
+
+            applyDepthAndLayerTransforms()
+
+            val settled =
+                abs(editorStageTargetClock - clockEditorStageFrac) < 0.002f &&
+                abs(editorStageVelClock) < 0.01f &&
+                abs(editorStageTargetWall - wallEditorStageFrac) < 0.002f &&
+                abs(editorStageVelWall) < 0.01f
+
+            if (settled) {
+                clockEditorStageFrac = editorStageTargetClock
+                wallEditorStageFrac = editorStageTargetWall
+                editorStageVelClock = 0f
+                editorStageVelWall = 0f
+                editorStageSpringRunning = false
+                applyDepthAndLayerTransforms()
+            } else {
+                Choreographer.getInstance().postFrameCallback(this)
+            }
+        }
+    }
+
     private fun animateEditorStage(clockTarget: Float, wallTarget: Float) {
-        val startClock = clockEditorStageFrac
-        val startWall = wallEditorStageFrac
-        editorStageAnim?.cancel()
-        if (abs(startClock - clockTarget) < 0.005f && abs(startWall - wallTarget) < 0.005f) {
+        editorStageTargetClock = clockTarget
+        editorStageTargetWall = wallTarget
+        if (abs(clockEditorStageFrac - clockTarget) < 0.003f &&
+            abs(wallEditorStageFrac - wallTarget) < 0.003f &&
+            abs(editorStageVelClock) < 0.01f && abs(editorStageVelWall) < 0.01f
+        ) {
+            editorStageSpringRunning = false
+            Choreographer.getInstance().removeFrameCallback(editorStageSpringCallback)
             clockEditorStageFrac = clockTarget
             wallEditorStageFrac = wallTarget
+            editorStageVelClock = 0f
+            editorStageVelWall = 0f
             applyDepthAndLayerTransforms()
             return
         }
-        editorStageAnim = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 360L
-            interpolator = DecelerateInterpolator(2.2f)
-            addUpdateListener { a ->
-                val f = a.animatedValue as Float
-                clockEditorStageFrac = startClock + (clockTarget - startClock) * f
-                wallEditorStageFrac = startWall + (wallTarget - startWall) * f
-                applyDepthAndLayerTransforms()
-            }
-            start()
+        if (!editorStageSpringRunning) {
+            editorStageSpringRunning = true
+            editorStageLastNs = 0L
+            Choreographer.getInstance().postFrameCallback(editorStageSpringCallback)
         }
     }
 
@@ -1477,8 +1523,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val npLiftTravel = ncTravel + 52f * dens
 
         val anyEditStage = max(clockEditorStageFrac, wallEditorStageFrac).coerceIn(0f, 1f)
+        val editFadeOut = (1f - (anyEditStage / 0.45f).coerceIn(0f, 1f)).let { it * it * (3f - 2f * it) }
         val baseLockAlpha = if (isUnlocked) 0f else (1f - passFadeT) * (1f - unlockedFrac)
-        val lockOverlayAlpha = (baseLockAlpha * (1f - anyEditStage)).coerceIn(0f, 1f)
+        val lockOverlayAlpha = (baseLockAlpha * editFadeOut).coerceIn(0f, 1f)
         val clockStageAlpha = ((1f - clockFade) * max(baseLockAlpha, anyEditStage) * (1f - passFadeT)).coerceIn(0f, 1f)
         val toplineStageAlpha = ((1f - fastFade) * max(baseLockAlpha, anyEditStage) * (1f - passFadeT)).coerceIn(0f, 1f)
         val lockScaleMult = 1f - 0.055f * passcodeProgress - 0.04f * unlockedFrac
@@ -1486,7 +1533,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val hideLockChrome = if (fullyUnlocked || passFadeT >= 0.995f) View.INVISIBLE else View.VISIBLE
 
         // Keep wallpaper & foreground depth subject 100% locked together during notification scroll so depth cutout stays intact!
-        val wallZoom = (1f + yDp * 0.00028f + passcodeProgress * 0.015f) * (1f - 0.012f * wallEditorStageFrac)
+        val wallZoom = (1f + yDp * 0.00028f + passcodeProgress * 0.015f) * (1f - 0.018f * wallEditorStageFrac)
         if (!isDepthRevealAnimating) {
             wallView.scaleX = wallZoom
             wallView.scaleY = wallZoom
@@ -2708,7 +2755,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     override fun onDestroy() {
         super.onDestroy()
         cancelDepthActivationFlow()
-        editorStageAnim?.cancel()
+        editorStageSpringRunning = false
+        Choreographer.getInstance().removeFrameCallback(editorStageSpringCallback)
         clockHoldPendingRunnable?.let { mainHandler.removeCallbacks(it) }
         wallHoldPendingRunnable?.let { mainHandler.removeCallbacks(it) }
         springRunning = false

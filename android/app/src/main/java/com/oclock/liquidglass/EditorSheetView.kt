@@ -8,30 +8,38 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.text.InputType
 import android.text.TextUtils
 import android.util.TypedValue
+import android.view.Choreographer
 import android.view.Gravity
 import android.view.MotionEvent
+import android.view.VelocityTracker
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.OvershootInterpolator
+import android.view.animation.PathInterpolator
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.OverScroller
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sign
 import kotlin.math.sin
 
 class EditorSheetView(
@@ -78,15 +86,19 @@ class EditorSheetView(
 
     private val dens = resources.displayMetrics.density
     private val sheetCard: GlassSheetCard
+    private val grabberWrap: FrameLayout
+    private val hdr: LinearLayout
     private val titleView: TextView
     private val switchModeBtn: GlassPillButton
     private val doneBtn: GlassPillButton
-    private val scrollView: ScrollView
+    private val scrollHost: FrameLayout
+    private val clockScrollView: EditorRubberScrollView
+    private val wallScrollView: EditorRubberScrollView
     private val clockBody: LinearLayout
     private val wallBody: LinearLayout
 
     // Clock customizer controls
-    private lateinit var fontScroll: HorizontalScrollView
+    private lateinit var fontScroll: RubberHorizontalScrollView
     private val fontBtns = HashMap<String, GlassFontChip>()
     private lateinit var sizeSeek: SeekBar
     private lateinit var sizeVal: TextView
@@ -144,15 +156,104 @@ class EditorSheetView(
     private var suppressSeek = false
     private var proHue = 210f
     private var proTone = 50f
-    private var heightAnim: ValueAnimator? = null
     private var scrimAnim: ValueAnimator? = null
     private var currentScrimAlpha = 0
+
+    // Unified Choreographer spring state for buttery 60/120fps open / close / height-morph
+    private var morphSpanPx = 0f
+    private var morphTopPx = 0f
+    private var targetMorphTop = 0f
+    private var velMorphTop = 0f
+    private var sheetSlideY = 0f
+    private var targetSlideY = 0f
+    private var velSlideY = 0f
+    private var sheetScale = 1f
+    private var targetScale = 1f
+    private var velScale = 0f
+    private var sheetClosing = false
+    private var springRunning = false
+    private var springLastNs = 0L
+    private var isDraggingSheet = false
+    private val tmpVisRect = Rect()
+    private val crossSlideEase = PathInterpolator(0.22f, 1f, 0.36f, 1f)
+
+    private val sheetSpringCallback = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            if (!springRunning) return
+            val dt = if (springLastNs == 0L) 0.016f
+            else ((frameTimeNanos - springLastNs) / 1_000_000_000f).coerceIn(0.004f, 0.032f)
+            springLastNs = frameTimeNanos
+
+            val omegaSlide = if (sheetClosing) 26.0f else 23.5f
+            val zetaSlide = if (sheetClosing) 0.94f else 0.86f
+            val kSlide = omegaSlide * omegaSlide
+            val dSlide = 2f * zetaSlide * omegaSlide
+
+            val aSlide = kSlide * (targetSlideY - sheetSlideY) - dSlide * velSlideY
+            velSlideY += aSlide * dt
+            sheetSlideY += velSlideY * dt
+
+            val omegaMorph = 22.0f
+            val zetaMorph = 0.87f
+            val kMorph = omegaMorph * omegaMorph
+            val dMorph = 2f * zetaMorph * omegaMorph
+
+            val aMorph = kMorph * (targetMorphTop - morphTopPx) - dMorph * velMorphTop
+            velMorphTop += aMorph * dt
+            morphTopPx = (morphTopPx + velMorphTop * dt).coerceIn(0f, max(0f, morphSpanPx + 18f * dens))
+
+            val aScale = kSlide * (targetScale - sheetScale) - dSlide * velScale
+            velScale += aScale * dt
+            sheetScale = (sheetScale + velScale * dt).coerceIn(0.92f, 1.04f)
+
+            applySheetVisualState()
+
+            val slideOutLimit = max(120f, sheetHeightFor(currentMode) * 0.72f)
+            if (sheetClosing && (sheetSlideY >= slideOutLimit || sheetCard.alpha <= 0.03f)) {
+                springRunning = false
+                sheetClosing = false
+                velSlideY = 0f
+                velMorphTop = 0f
+                velScale = 0f
+                visibility = GONE
+                sheetSlideY = 0f
+                sheetScale = 1f
+                sheetCard.translationY = 0f
+                sheetCard.scaleX = 1f
+                sheetCard.scaleY = 1f
+                sheetCard.alpha = 1f
+                callbacks.onClose()
+                return
+            }
+
+            val settled = !sheetClosing &&
+                abs(targetSlideY - sheetSlideY) < 0.45f && abs(velSlideY) < 6f &&
+                abs(targetMorphTop - morphTopPx) < 0.45f && abs(velMorphTop) < 6f &&
+                abs(targetScale - sheetScale) < 0.002f && abs(velScale) < 0.02f
+
+            if (settled) {
+                sheetSlideY = targetSlideY
+                morphTopPx = targetMorphTop
+                sheetScale = targetScale
+                velSlideY = 0f
+                velMorphTop = 0f
+                velScale = 0f
+                springRunning = false
+                applySheetVisualState()
+            } else {
+                Choreographer.getInstance().postFrameCallback(this)
+            }
+        }
+    }
 
     init {
         visibility = GONE
         layoutDirection = LAYOUT_DIRECTION_RTL
         setBackgroundColor(Color.TRANSPARENT)
         setOnClickListener { close() }
+
+        val maxSheetH = sheetHeightFor(Mode.WALLPAPER)
+        morphSpanPx = (maxSheetH - sheetHeightFor(Mode.CLOCK)).toFloat().coerceAtLeast(0f)
 
         sheetCard = GlassSheetCard(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -163,10 +264,11 @@ class EditorSheetView(
             clipToOutline = true
             outlineProvider = object : android.view.ViewOutlineProvider() {
                 override fun getOutline(v: View, outline: android.graphics.Outline) {
-                    outline.setRoundRect(0, 0, v.width, v.height, 30f * dens)
+                    val topY = topInsetPx.roundToInt().coerceIn(0, max(0, v.height - 8))
+                    outline.setRoundRect(0, topY, v.width, v.height, 30f * dens)
                 }
             }
-            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, sheetHeightFor(Mode.WALLPAPER), Gravity.BOTTOM).apply {
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, maxSheetH, Gravity.BOTTOM).apply {
                 val side = (8f * dens).roundToInt()
                 leftMargin = side
                 rightMargin = side
@@ -175,21 +277,21 @@ class EditorSheetView(
         }
 
         // Grabber + swipe down dismiss
-        val grabberWrap = FrameLayout(context).apply {
+        grabberWrap = FrameLayout(context).apply {
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, (18f * dens).roundToInt())
         }
         val grabber = View(context).apply {
             layoutParams = LayoutParams((36f * dens).roundToInt(), (4f * dens).roundToInt(), Gravity.CENTER)
             background = GradientDrawable().apply {
-                setColor(Color.argb(96, 255, 255, 255))
+                setColor(Color.argb(104, 255, 255, 255))
                 cornerRadius = 99f
             }
         }
         grabberWrap.addView(grabber)
         attachSwipeDismiss(grabberWrap)
 
-        // Sticky Liquid Glass Header (keeps "تم" and switch pill intact)
-        val hdr = LinearLayout(context).apply {
+        // Sticky Liquid Glass Header (keeps "تم" and full unclipped "الساعة"/"الخلفية" pill)
+        hdr = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
@@ -198,12 +300,16 @@ class EditorSheetView(
         }
         titleView = TextView(context).apply {
             text = "تخصيص الخلفية"
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16.5f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-            layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+            layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = (6f * dens).roundToInt()
+            }
         }
-        switchModeBtn = GlassPillButton(context, "الساعة", radiusDp = 999f, isAccent = false) {
+        switchModeBtn = GlassPillButton(context, "الساعة", radiusDp = 999f, isAccent = false, minWidthDp = 76f) {
             val next = if (currentMode == Mode.CLOCK) Mode.WALLPAPER else Mode.CLOCK
             switchMode(next)
         }.apply {
@@ -211,7 +317,7 @@ class EditorSheetView(
                 marginEnd = (6f * dens).roundToInt()
             }
         }
-        doneBtn = GlassPillButton(context, "تم", radiusDp = 999f, isAccent = true) {
+        doneBtn = GlassPillButton(context, "تم", radiusDp = 999f, isAccent = true, minWidthDp = 52f) {
             close()
         }.apply {
             layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, (32f * dens).roundToInt())
@@ -221,50 +327,77 @@ class EditorSheetView(
         hdr.addView(doneBtn)
         attachSwipeDismiss(hdr)
 
-        scrollView = ScrollView(context).apply {
+        scrollHost = FrameLayout(context).apply {
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f)
-            isVerticalScrollBarEnabled = false
-            overScrollMode = View.OVER_SCROLL_ALWAYS
         }
-        val bodyHost = FrameLayout(context).apply {
-            layoutParams = FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+        clockScrollView = EditorRubberScrollView(context).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+            visibility = GONE
+            onScrollOrRubber = { invalidateVisibleGlass(this@EditorSheetView.sheetCard) }
+        }
+        wallScrollView = EditorRubberScrollView(context).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+            visibility = VISIBLE
+            onScrollOrRubber = { invalidateVisibleGlass(this@EditorSheetView.sheetCard) }
         }
         clockBody = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, 0, 0, (12f * dens).roundToInt())
-            visibility = GONE
+            setPadding(0, 0, 0, morphSpanPx.roundToInt() + (18f * dens).roundToInt())
         }
         wallBody = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, 0, 0, (12f * dens).roundToInt())
-            visibility = VISIBLE
+            setPadding(0, 0, 0, (16f * dens).roundToInt())
         }
 
         buildClockBody(clockBody)
         buildWallpaperBody(wallBody)
 
-        bodyHost.addView(clockBody)
-        bodyHost.addView(wallBody)
-        scrollView.addView(bodyHost)
-        scrollView.setOnScrollChangeListener { _, _, _, _, _ ->
-            invalidateGlassTree(sheetCard)
-        }
+        clockScrollView.addView(clockBody)
+        wallScrollView.addView(wallBody)
+        scrollHost.addView(clockScrollView)
+        scrollHost.addView(wallScrollView)
 
         sheetCard.addView(grabberWrap)
         sheetCard.addView(hdr)
-        sheetCard.addView(scrollView)
+        sheetCard.addView(scrollHost)
         addView(sheetCard)
 
         syncFromConfig()
     }
 
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        springRunning = false
+        Choreographer.getInstance().removeFrameCallback(sheetSpringCallback)
+        scrimAnim?.cancel()
+        clockScrollView.abortScrolling()
+        wallScrollView.abortScrolling()
+    }
+
     fun applySafeInsets(bottomPx: Int) {
         safeBottomPx = bottomPx
+        val maxSheetH = sheetHeightFor(Mode.WALLPAPER)
+        morphSpanPx = (maxSheetH - sheetHeightFor(Mode.CLOCK)).toFloat().coerceAtLeast(0f)
         val lp = sheetCard.layoutParams as LayoutParams
         val targetBottom = safeBottomPx + (6f * dens).roundToInt()
+        var layoutDirty = false
         if (lp.bottomMargin != targetBottom) {
             lp.bottomMargin = targetBottom
-            sheetCard.layoutParams = lp
+            layoutDirty = true
+        }
+        if (lp.height != maxSheetH) {
+            lp.height = maxSheetH
+            layoutDirty = true
+        }
+        if (layoutDirty) sheetCard.layoutParams = lp
+        val targetClockPad = morphSpanPx.roundToInt() + (18f * dens).roundToInt()
+        if (clockBody.paddingBottom != targetClockPad) {
+            clockBody.setPadding(0, 0, 0, targetClockPad)
+        }
+        if (isOpen && !springRunning) {
+            targetMorphTop = if (currentMode == Mode.CLOCK) morphSpanPx else 0f
+            morphTopPx = targetMorphTop
+            applySheetVisualState()
         }
     }
 
@@ -291,17 +424,47 @@ class EditorSheetView(
         return ox to oy
     }
 
-    private fun invalidateGlassTree(v: View) {
-        if (v is GlassPillButton || v is GlassFontChip || v is GlassSectionCard ||
-            v is GlassSheetCard || v is IosWallActionTile || v is IosSegmentedControl ||
+    private fun invalidateVisibleGlass(v: View) {
+        if (v.visibility != View.VISIBLE) return
+        if (v is GlassSheetCard || v is GlassPillButton || v is GlassSectionCard ||
+            v is GlassFontChip || v is IosWallActionTile || v is IosSegmentedControl ||
             v is IosCapsuleButton
         ) {
-            v.invalidate()
+            if (v === sheetCard || v.getLocalVisibleRect(tmpVisRect)) {
+                v.invalidate()
+            }
         }
         if (v is ViewGroup) {
             for (i in 0 until v.childCount) {
-                invalidateGlassTree(v.getChildAt(i))
+                val child = v.getChildAt(i)
+                if (child.visibility == View.VISIBLE) invalidateVisibleGlass(child)
             }
+        }
+    }
+
+    private fun applySheetVisualState() {
+        val visH = max(120f, sheetHeightFor(currentMode).toFloat())
+        sheetCard.topInsetPx = morphTopPx
+        sheetCard.invalidateOutline()
+        grabberWrap.translationY = morphTopPx
+        hdr.translationY = morphTopPx
+        scrollHost.translationY = morphTopPx
+
+        sheetCard.pivotX = sheetCard.width * 0.5f
+        sheetCard.pivotY = sheetCard.height.toFloat()
+        sheetCard.translationY = sheetSlideY
+        sheetCard.scaleX = sheetScale
+        sheetCard.scaleY = sheetScale
+        val slideFade = (1f - (sheetSlideY / (visH * 0.78f)).coerceIn(0f, 1f)).let { it * it }
+        sheetCard.alpha = if (sheetClosing || sheetSlideY > 0.5f) slideFade else 1f
+        invalidateVisibleGlass(sheetCard)
+    }
+
+    private fun startSheetSpring() {
+        if (!springRunning) {
+            springRunning = true
+            springLastNs = 0L
+            Choreographer.getInstance().postFrameCallback(sheetSpringCallback)
         }
     }
 
@@ -310,12 +473,558 @@ class EditorSheetView(
         private val glassHelper = LiquidGlassCardHelper(
             backdrop, perf, 30f, 24f, 16f, 1.44f, 0.24f, innerShadow = 0.16f, useBlurredBackdrop = true
         )
+        var topInsetPx: Float = 0f
         init {
             setWillNotDraw(false)
         }
+        override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+            if (ev.actionMasked == MotionEvent.ACTION_DOWN && ev.y < topInsetPx) {
+                return false
+            }
+            return super.dispatchTouchEvent(ev)
+        }
         override fun onDraw(canvas: Canvas) {
             val (ox, oy) = computeShellOrigin(this)
-            glassHelper.draw(this, canvas, Color.argb(198, 12, 14, 22), ox, oy)
+            glassHelper.draw(this, canvas, Color.argb(198, 12, 14, 22), ox, oy, drawTopOffsetPx = topInsetPx)
+        }
+    }
+
+    // ─────────────── Elastic Rubber-Band Vertical & Horizontal Scrollers ───────────────
+    private inner class EditorRubberScrollView(context: Context) : ScrollView(context) {
+        private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+        private val vertSlop = min(touchSlop, 8f * dens)
+        private val scroller = OverScroller(context)
+        private val maxPullPx = 68f * dens
+        private var activePtrId = MotionEvent.INVALID_POINTER_ID
+        private var startRawX = 0f
+        private var startRawY = 0f
+        private var lastRawY = 0f
+        private var dragging = false
+        private var disallowFromChild = false
+        private var vt: VelocityTracker? = null
+        private var rawPull = 0f
+        private var rubberY = 0f
+        private var velRubber = 0f
+        private var springReboundRunning = false
+        private var reboundLastNs = 0L
+        var onScrollOrRubber: (() -> Unit)? = null
+
+        private val reboundCallback = object : Choreographer.FrameCallback {
+            override fun doFrame(frameTimeNanos: Long) {
+                if (!springReboundRunning) return
+                val dt = if (reboundLastNs == 0L) 0.016f
+                else ((frameTimeNanos - reboundLastNs) / 1_000_000_000f).coerceIn(0.004f, 0.032f)
+                reboundLastNs = frameTimeNanos
+
+                val omega = 21.5f
+                val zeta = 0.78f
+                val acc = -(omega * omega) * rubberY - (2f * zeta * omega) * velRubber
+                velRubber += acc * dt
+                val next = rubberY + velRubber * dt
+                setRubberY(next)
+                if (abs(rubberY) < 0.35f && abs(velRubber) < 4f) {
+                    setRubberY(0f)
+                    rawPull = 0f
+                    velRubber = 0f
+                    springReboundRunning = false
+                } else {
+                    Choreographer.getInstance().postFrameCallback(this)
+                }
+            }
+        }
+
+        init {
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            isFillViewport = false
+            setOnScrollChangeListener { _, _, _, _, _ -> onScrollOrRubber?.invoke() }
+        }
+
+        private fun ptrRawX(ev: MotionEvent, idx: Int): Float = ev.getX(idx) + (ev.rawX - ev.x)
+        private fun ptrRawY(ev: MotionEvent, idx: Int): Float = ev.getY(idx) + (ev.rawY - ev.y)
+
+        private fun trackRaw(ev: MotionEvent) {
+            val copy = MotionEvent.obtain(ev)
+            copy.setLocation(ev.rawX, ev.rawY)
+            vt?.addMovement(copy)
+            copy.recycle()
+        }
+
+        private fun setRubberY(y: Float) {
+            rubberY = y
+            getChildAt(0)?.translationY = y
+            onScrollOrRubber?.invoke()
+        }
+
+        private fun pullToRubber(raw: Float): Float {
+            val a = abs(raw)
+            val mapped = maxPullPx * (1f - 1f / (1f + a / (maxPullPx * 1.25f)))
+            return sign(raw) * mapped
+        }
+
+        private fun startRubberSpring(initVel: Float = 0f) {
+            velRubber = initVel
+            if (abs(rubberY) < 0.4f && abs(velRubber) < 12f) {
+                setRubberY(0f)
+                rawPull = 0f
+                velRubber = 0f
+                springReboundRunning = false
+                return
+            }
+            if (!springReboundRunning) {
+                springReboundRunning = true
+                reboundLastNs = 0L
+                Choreographer.getInstance().postFrameCallback(reboundCallback)
+            }
+        }
+
+        fun abortScrolling() {
+            if (!scroller.isFinished) scroller.abortAnimation()
+            springReboundRunning = false
+            Choreographer.getInstance().removeFrameCallback(reboundCallback)
+            if (rubberY != 0f || rawPull != 0f) {
+                rawPull = 0f
+                velRubber = 0f
+                setRubberY(0f)
+            }
+        }
+
+        override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
+            disallowFromChild = disallowIntercept
+            if (disallowIntercept) {
+                dragging = false
+                activePtrId = MotionEvent.INVALID_POINTER_ID
+                vt?.recycle()
+                vt = null
+            }
+            super.requestDisallowInterceptTouchEvent(disallowIntercept)
+        }
+
+        override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    disallowFromChild = false
+                    if (!scroller.isFinished) scroller.abortAnimation()
+                    springReboundRunning = false
+                    Choreographer.getInstance().removeFrameCallback(reboundCallback)
+                    activePtrId = ev.getPointerId(0)
+                    startRawX = ev.rawX
+                    startRawY = ev.rawY
+                    lastRawY = ev.rawY
+                    dragging = false
+                    vt?.recycle()
+                    vt = VelocityTracker.obtain()
+                    trackRaw(ev)
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (disallowFromChild) return false
+                    val idx = ev.findPointerIndex(activePtrId)
+                    if (idx < 0) return false
+                    trackRaw(ev)
+                    val curX = ptrRawX(ev, idx)
+                    val curY = ptrRawY(ev, idx)
+                    val dx = curX - startRawX
+                    val dy = curY - startRawY
+                    if (abs(dy) > vertSlop && abs(dy) > abs(dx) * 1.25f) {
+                        dragging = true
+                        lastRawY = curY
+                        parent?.requestDisallowInterceptTouchEvent(true)
+                        return true
+                    }
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    activePtrId = MotionEvent.INVALID_POINTER_ID
+                    dragging = false
+                    disallowFromChild = false
+                    vt?.recycle()
+                    vt = null
+                    if (abs(rubberY) > 0.5f) startRubberSpring()
+                }
+            }
+            return super.onInterceptTouchEvent(ev)
+        }
+
+        @SuppressLint("ClickableViewAccessibility")
+        override fun onTouchEvent(ev: MotionEvent): Boolean {
+            val child = getChildAt(0)
+            val maxScroll = max(0, (child?.height ?: 0) - height)
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    if (!scroller.isFinished) scroller.abortAnimation()
+                    springReboundRunning = false
+                    Choreographer.getInstance().removeFrameCallback(reboundCallback)
+                    activePtrId = ev.getPointerId(0)
+                    startRawX = ev.rawX
+                    startRawY = ev.rawY
+                    lastRawY = ev.rawY
+                    dragging = false
+                    vt?.recycle()
+                    vt = VelocityTracker.obtain()
+                    trackRaw(ev)
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val idx = ev.findPointerIndex(activePtrId)
+                    if (idx < 0) return true
+                    trackRaw(ev)
+                    val curY = ptrRawY(ev, idx)
+                    val dy = curY - lastRawY
+                    lastRawY = curY
+                    if (!dragging) {
+                        if (abs(curY - startRawY) > vertSlop) dragging = true else return true
+                    }
+                    if (abs(rawPull) > 0.5f) {
+                        if ((rawPull > 0f && dy < 0f) || (rawPull < 0f && dy > 0f)) {
+                            rawPull += dy
+                            if (sign(rawPull) != sign(rubberY)) {
+                                val rem = -rawPull
+                                rawPull = 0f
+                                setRubberY(0f)
+                                scrollBy(0, rem.roundToInt())
+                            } else {
+                                setRubberY(pullToRubber(rawPull))
+                            }
+                        } else {
+                            rawPull += dy
+                            setRubberY(pullToRubber(rawPull))
+                        }
+                        return true
+                    }
+
+                    val targetScroll = scrollY - dy.roundToInt()
+                    when {
+                        targetScroll < 0 -> {
+                            val overflow = (-targetScroll).toFloat()
+                            if (scrollY != 0) scrollTo(0, 0)
+                            rawPull += overflow
+                            setRubberY(pullToRubber(rawPull))
+                        }
+                        targetScroll > maxScroll -> {
+                            val overflow = (targetScroll - maxScroll).toFloat()
+                            if (scrollY != maxScroll) scrollTo(0, maxScroll)
+                            rawPull -= overflow
+                            setRubberY(pullToRubber(rawPull))
+                        }
+                        else -> scrollTo(0, targetScroll)
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    activePtrId = MotionEvent.INVALID_POINTER_ID
+                    trackRaw(ev)
+                    vt?.computeCurrentVelocity(1000)
+                    val vy = vt?.yVelocity ?: 0f
+                    vt?.recycle()
+                    vt = null
+                    dragging = false
+                    if (abs(rawPull) > 0.5f || abs(rubberY) > 0.5f) {
+                        startRubberSpring(vy * 0.24f)
+                    } else if (ev.actionMasked == MotionEvent.ACTION_UP && abs(vy) > 90f * dens && maxScroll > 0) {
+                        val over = (54f * dens).roundToInt()
+                        scroller.fling(0, scrollY, 0, (-vy).roundToInt(), 0, 0, -over, maxScroll + over)
+                        postInvalidateOnAnimation()
+                    }
+                    return true
+                }
+            }
+            return super.onTouchEvent(ev)
+        }
+
+        override fun onDetachedFromWindow() {
+            super.onDetachedFromWindow()
+            abortScrolling()
+            vt?.recycle()
+            vt = null
+        }
+
+        override fun computeScroll() {
+            if (scroller.computeScrollOffset()) {
+                val maxScroll = max(0, (getChildAt(0)?.height ?: 0) - height)
+                val cy = scroller.currY
+                when {
+                    cy < 0 -> {
+                        val currVel = scroller.currVelocity
+                        scroller.abortAnimation()
+                        if (scrollY != 0) scrollTo(0, 0)
+                        startRubberSpring(min(currVel * 0.42f, 900f * dens))
+                        return
+                    }
+                    cy > maxScroll -> {
+                        val currVel = scroller.currVelocity
+                        scroller.abortAnimation()
+                        if (scrollY != maxScroll) scrollTo(0, maxScroll)
+                        startRubberSpring(-min(currVel * 0.42f, 900f * dens))
+                        return
+                    }
+                    else -> {
+                        if (scrollY != cy) scrollTo(0, cy)
+                    }
+                }
+                postInvalidateOnAnimation()
+            }
+        }
+    }
+
+    private inner class RubberHorizontalScrollView(context: Context) : HorizontalScrollView(context) {
+        private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+        private val horizSlop = min(touchSlop, 7f * dens)
+        private val scroller = OverScroller(context)
+        private val maxPullPx = 46f * dens
+        private var activePtrId = MotionEvent.INVALID_POINTER_ID
+        private var startRawX = 0f
+        private var startRawY = 0f
+        private var lastRawX = 0f
+        private var dragging = false
+        private var vt: VelocityTracker? = null
+        private var rawPull = 0f
+        private var rubberX = 0f
+        private var velRubber = 0f
+        private var springReboundRunning = false
+        private var reboundLastNs = 0L
+        var onScrollOrRubber: (() -> Unit)? = null
+
+        private val reboundCallback = object : Choreographer.FrameCallback {
+            override fun doFrame(frameTimeNanos: Long) {
+                if (!springReboundRunning) return
+                val dt = if (reboundLastNs == 0L) 0.016f
+                else ((frameTimeNanos - reboundLastNs) / 1_000_000_000f).coerceIn(0.004f, 0.032f)
+                reboundLastNs = frameTimeNanos
+
+                val omega = 22.5f
+                val zeta = 0.80f
+                val acc = -(omega * omega) * rubberX - (2f * zeta * omega) * velRubber
+                velRubber += acc * dt
+                setRubberX(rubberX + velRubber * dt)
+                if (abs(rubberX) < 0.35f && abs(velRubber) < 4f) {
+                    setRubberX(0f)
+                    rawPull = 0f
+                    velRubber = 0f
+                    springReboundRunning = false
+                } else {
+                    Choreographer.getInstance().postFrameCallback(this)
+                }
+            }
+        }
+
+        init {
+            layoutDirection = LAYOUT_DIRECTION_LTR
+            isHorizontalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            setOnScrollChangeListener { _, _, _, _, _ -> onScrollOrRubber?.invoke() }
+        }
+
+        private fun ptrRawX(ev: MotionEvent, idx: Int): Float = ev.getX(idx) + (ev.rawX - ev.x)
+        private fun ptrRawY(ev: MotionEvent, idx: Int): Float = ev.getY(idx) + (ev.rawY - ev.y)
+
+        private fun trackRaw(ev: MotionEvent) {
+            val copy = MotionEvent.obtain(ev)
+            copy.setLocation(ev.rawX, ev.rawY)
+            vt?.addMovement(copy)
+            copy.recycle()
+        }
+
+        private fun setRubberX(x: Float) {
+            rubberX = x
+            getChildAt(0)?.translationX = x
+            onScrollOrRubber?.invoke()
+        }
+
+        private fun pullToRubber(raw: Float): Float {
+            val a = abs(raw)
+            val mapped = maxPullPx * (1f - 1f / (1f + a / (maxPullPx * 1.25f)))
+            return sign(raw) * mapped
+        }
+
+        private fun startRubberSpring(initVel: Float = 0f) {
+            velRubber = initVel
+            if (abs(rubberX) < 0.4f && abs(velRubber) < 12f) {
+                setRubberX(0f)
+                rawPull = 0f
+                velRubber = 0f
+                springReboundRunning = false
+                return
+            }
+            if (!springReboundRunning) {
+                springReboundRunning = true
+                reboundLastNs = 0L
+                Choreographer.getInstance().postFrameCallback(reboundCallback)
+            }
+        }
+
+        fun smoothScrollToX(targetX: Int) {
+            if (!scroller.isFinished) scroller.abortAnimation()
+            val maxScroll = max(0, (getChildAt(0)?.width ?: 0) - width)
+            val clamped = targetX.coerceIn(0, maxScroll)
+            if (clamped != scrollX) {
+                scroller.startScroll(scrollX, 0, clamped - scrollX, 0, 320)
+                postInvalidateOnAnimation()
+            }
+        }
+
+        override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    if (!scroller.isFinished) scroller.abortAnimation()
+                    springReboundRunning = false
+                    Choreographer.getInstance().removeFrameCallback(reboundCallback)
+                    activePtrId = ev.getPointerId(0)
+                    startRawX = ev.rawX
+                    startRawY = ev.rawY
+                    lastRawX = ev.rawX
+                    dragging = false
+                    vt?.recycle()
+                    vt = VelocityTracker.obtain()
+                    trackRaw(ev)
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val idx = ev.findPointerIndex(activePtrId)
+                    if (idx < 0) return false
+                    trackRaw(ev)
+                    val curX = ptrRawX(ev, idx)
+                    val curY = ptrRawY(ev, idx)
+                    val dx = curX - startRawX
+                    val dy = curY - startRawY
+                    if (abs(dx) > horizSlop && abs(dx) >= abs(dy) * 0.9f) {
+                        dragging = true
+                        lastRawX = curX
+                        parent?.requestDisallowInterceptTouchEvent(true)
+                        return true
+                    }
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    activePtrId = MotionEvent.INVALID_POINTER_ID
+                    dragging = false
+                    vt?.recycle()
+                    vt = null
+                    if (abs(rubberX) > 0.5f) startRubberSpring()
+                }
+            }
+            return super.onInterceptTouchEvent(ev)
+        }
+
+        @SuppressLint("ClickableViewAccessibility")
+        override fun onTouchEvent(ev: MotionEvent): Boolean {
+            val child = getChildAt(0)
+            val maxScroll = max(0, (child?.width ?: 0) - width)
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    if (!scroller.isFinished) scroller.abortAnimation()
+                    springReboundRunning = false
+                    Choreographer.getInstance().removeFrameCallback(reboundCallback)
+                    activePtrId = ev.getPointerId(0)
+                    startRawX = ev.rawX
+                    startRawY = ev.rawY
+                    lastRawX = ev.rawX
+                    dragging = false
+                    vt?.recycle()
+                    vt = VelocityTracker.obtain()
+                    trackRaw(ev)
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val idx = ev.findPointerIndex(activePtrId)
+                    if (idx < 0) return true
+                    trackRaw(ev)
+                    val curX = ptrRawX(ev, idx)
+                    val dx = curX - lastRawX
+                    lastRawX = curX
+                    if (!dragging) {
+                        if (abs(curX - startRawX) > horizSlop) {
+                            dragging = true
+                            parent?.requestDisallowInterceptTouchEvent(true)
+                        } else return true
+                    }
+                    if (abs(rawPull) > 0.5f) {
+                        if ((rawPull > 0f && dx < 0f) || (rawPull < 0f && dx > 0f)) {
+                            rawPull += dx
+                            if (sign(rawPull) != sign(rubberX)) {
+                                val rem = -rawPull
+                                rawPull = 0f
+                                setRubberX(0f)
+                                scrollBy(rem.roundToInt(), 0)
+                            } else {
+                                setRubberX(pullToRubber(rawPull))
+                            }
+                        } else {
+                            rawPull += dx
+                            setRubberX(pullToRubber(rawPull))
+                        }
+                        return true
+                    }
+
+                    val targetScroll = scrollX - dx.roundToInt()
+                    when {
+                        targetScroll < 0 -> {
+                            val overflow = (-targetScroll).toFloat()
+                            if (scrollX != 0) scrollTo(0, 0)
+                            rawPull += overflow
+                            setRubberX(pullToRubber(rawPull))
+                        }
+                        targetScroll > maxScroll -> {
+                            val overflow = (targetScroll - maxScroll).toFloat()
+                            if (scrollX != maxScroll) scrollTo(0, maxScroll)
+                            rawPull -= overflow
+                            setRubberX(pullToRubber(rawPull))
+                        }
+                        else -> scrollTo(targetScroll, 0)
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    activePtrId = MotionEvent.INVALID_POINTER_ID
+                    trackRaw(ev)
+                    vt?.computeCurrentVelocity(1000)
+                    val vx = vt?.xVelocity ?: 0f
+                    vt?.recycle()
+                    vt = null
+                    dragging = false
+                    if (abs(rawPull) > 0.5f || abs(rubberX) > 0.5f) {
+                        startRubberSpring(vx * 0.24f)
+                    } else if (ev.actionMasked == MotionEvent.ACTION_UP && abs(vx) > 90f * dens && maxScroll > 0) {
+                        val over = (44f * dens).roundToInt()
+                        scroller.fling(scrollX, 0, (-vx).roundToInt(), 0, -over, maxScroll + over, 0, 0)
+                        postInvalidateOnAnimation()
+                    }
+                    return true
+                }
+            }
+            return super.onTouchEvent(ev)
+        }
+
+        override fun onDetachedFromWindow() {
+            super.onDetachedFromWindow()
+            if (!scroller.isFinished) scroller.abortAnimation()
+            springReboundRunning = false
+            Choreographer.getInstance().removeFrameCallback(reboundCallback)
+            vt?.recycle()
+            vt = null
+        }
+
+        override fun computeScroll() {
+            if (scroller.computeScrollOffset()) {
+                val maxScroll = max(0, (getChildAt(0)?.width ?: 0) - width)
+                val cx = scroller.currX
+                when {
+                    cx < 0 -> {
+                        val currVel = scroller.currVelocity
+                        scroller.abortAnimation()
+                        if (scrollX != 0) scrollTo(0, 0)
+                        startRubberSpring(min(currVel * 0.42f, 800f * dens))
+                        return
+                    }
+                    cx > maxScroll -> {
+                        val currVel = scroller.currVelocity
+                        scroller.abortAnimation()
+                        if (scrollX != maxScroll) scrollTo(0, maxScroll)
+                        startRubberSpring(-min(currVel * 0.42f, 800f * dens))
+                        return
+                    }
+                    else -> {
+                        if (scrollX != cx) scrollTo(cx, 0)
+                    }
+                }
+                postInvalidateOnAnimation()
+            }
         }
     }
 
@@ -343,13 +1052,14 @@ class EditorSheetView(
         }
     }
 
-    // Header pill ("تم", "الساعة"/"الخلفية") kept clean as requested
+    // Header pill ("تم", "الساعة"/"الخلفية") kept clean & never truncated
     @SuppressLint("ClickableViewAccessibility")
     private inner class GlassPillButton(
         context: Context,
         label: String,
         radiusDp: Float = 999f,
         private val isAccent: Boolean = false,
+        minWidthDp: Float = 0f,
         private val onClick: () -> Unit
     ) : FrameLayout(context) {
         private val glassHelper = LiquidGlassCardHelper(
@@ -359,40 +1069,48 @@ class EditorSheetView(
         init {
             setWillNotDraw(false)
             isClickable = true
+            if (minWidthDp > 0f) minimumWidth = (minWidthDp * dens).roundToInt()
             tv = TextView(context).apply {
                 text = label
                 gravity = Gravity.CENTER
                 maxLines = 1
-                ellipsize = TextUtils.TruncateAt.END
-                setTextColor(if (isAccent) 0xFFE0F2FE.toInt() else Color.argb(232, 255, 255, 255))
+                isSingleLine = true
+                setTextColor(if (isAccent) 0xFFE0F2FE.toInt() else Color.argb(240, 255, 255, 255))
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
                 typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
                 setPadding((14f * dens).roundToInt(), (6f * dens).roundToInt(), (14f * dens).roundToInt(), (6f * dens).roundToInt())
-                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.CENTER)
+                layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.CENTER)
             }
             addView(tv)
             setOnTouchListener { _, ev ->
                 when (ev.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
                         animate().cancel()
-                        animate().scaleX(0.93f).scaleY(0.93f).setDuration(85L).start()
+                        animate().scaleX(0.92f).scaleY(0.92f).setDuration(80L).start()
                         false
                     }
                     MotionEvent.ACTION_UP -> {
                         animate().cancel()
-                        animate().scaleX(1f).scaleY(1f).setDuration(280L)
+                        animate().scaleX(1f).scaleY(1f).setDuration(260L)
                             .setInterpolator(OvershootInterpolator(1.7f)).start()
                         false
                     }
                     MotionEvent.ACTION_CANCEL -> {
                         animate().cancel()
-                        animate().scaleX(1f).scaleY(1f).setDuration(200L).start()
+                        animate().scaleX(1f).scaleY(1f).setDuration(180L).start()
                         false
                     }
                     else -> false
                 }
             }
             setOnClickListener { onClick() }
+        }
+        fun setLabel(txt: String) {
+            if (tv.text.toString() == txt) return
+            tv.text = txt
+            tv.requestLayout()
+            requestLayout()
+            invalidate()
         }
         override fun onDraw(canvas: Canvas) {
             val (ox, oy) = computeShellOrigin(this)
@@ -1185,28 +1903,49 @@ class EditorSheetView(
     private fun attachSwipeDismiss(v: View) {
         var y0 = 0f
         var dy = 0f
+        var dragVt: VelocityTracker? = null
         v.setOnTouchListener { _, ev ->
             when (ev.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { y0 = ev.rawY; dy = 0f; false }
+                MotionEvent.ACTION_DOWN -> {
+                    springRunning = false
+                    Choreographer.getInstance().removeFrameCallback(sheetSpringCallback)
+                    y0 = ev.rawY
+                    dy = 0f
+                    isDraggingSheet = false
+                    dragVt?.recycle()
+                    dragVt = VelocityTracker.obtain()
+                    val c = MotionEvent.obtain(ev); c.setLocation(ev.rawX, ev.rawY); dragVt?.addMovement(c); c.recycle()
+                    false
+                }
                 MotionEvent.ACTION_MOVE -> {
+                    val c = MotionEvent.obtain(ev); c.setLocation(ev.rawX, ev.rawY); dragVt?.addMovement(c); c.recycle()
                     dy = max(0f, ev.rawY - y0)
                     if (dy > 6f * dens) {
-                        sheetCard.translationY = dy
-                        sheetCard.invalidate()
+                        isDraggingSheet = true
+                        sheetSlideY = dy
+                        applySheetVisualState()
                         true
                     } else false
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (dy > 64f * dens) {
+                    dragVt?.computeCurrentVelocity(1000)
+                    val vy = dragVt?.yVelocity ?: 0f
+                    dragVt?.recycle()
+                    dragVt = null
+                    val wasDrag = isDraggingSheet
+                    isDraggingSheet = false
+                    if (wasDrag && (dy > 58f * dens || vy > 520f * dens)) {
+                        velSlideY = max(vy * 0.65f, 360f * dens)
                         close()
                         true
-                    } else {
-                        sheetCard.animate().translationY(0f).setDuration(250L)
-                            .setInterpolator(OvershootInterpolator(0.9f))
-                            .setUpdateListener { sheetCard.invalidate() }
-                            .start()
-                        false
-                    }
+                    } else if (wasDrag || sheetSlideY > 0.5f) {
+                        sheetClosing = false
+                        targetSlideY = 0f
+                        targetScale = 1f
+                        velSlideY = vy * 0.25f
+                        startSheetSpring()
+                        true
+                    } else false
                 }
                 else -> false
             }
@@ -1222,10 +1961,9 @@ class EditorSheetView(
             layoutDirection = LAYOUT_DIRECTION_LTR
             gravity = Gravity.CENTER_VERTICAL
         }
-        fontScroll = HorizontalScrollView(context).apply {
-            isHorizontalScrollBarEnabled = false
+        fontScroll = RubberHorizontalScrollView(context).apply {
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
-            setOnScrollChangeListener { _, _, _, _, _ -> invalidateGlassTree(this) }
+            onScrollOrRubber = { invalidateVisibleGlass(this@EditorSheetView.sheetCard) }
         }
         for (f in ClockFont.entries) {
             val chip = GlassFontChip(context, f) {
@@ -1246,8 +1984,7 @@ class EditorSheetView(
             layoutDirection = LAYOUT_DIRECTION_LTR
             gravity = Gravity.CENTER_VERTICAL
         }
-        val colScroll = HorizontalScrollView(context).apply {
-            isHorizontalScrollBarEnabled = false
+        val colScroll = RubberHorizontalScrollView(context).apply {
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
         }
         for (cId in AppConstants.CLOCK_COLORS) {
@@ -1443,8 +2180,7 @@ class EditorSheetView(
         }
         innerCard.addView(inFadeSeek)
 
-        val inColScroll = HorizontalScrollView(context).apply {
-            isHorizontalScrollBarEnabled = false
+        val inColScroll = RubberHorizontalScrollView(context).apply {
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
                 topMargin = (8f * dens).roundToInt()
             }
@@ -1476,9 +2212,8 @@ class EditorSheetView(
         // 1. Wallpapers + Depth iOS Card
         body.addView(secHeader("الخلفية والعمق"))
         val wallCard = GlassSectionCard(context, padHdp = 12f, padVdp = 10f)
-        val wallScroll = HorizontalScrollView(context).apply {
-            isHorizontalScrollBarEnabled = false
-            setOnScrollChangeListener { _, _, _, _, _ -> invalidateGlassTree(this) }
+        val wallScroll = RubberHorizontalScrollView(context).apply {
+            onScrollOrRubber = { invalidateVisibleGlass(this@EditorSheetView.sheetCard) }
         }
         val wallRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1818,157 +2553,157 @@ class EditorSheetView(
         currentMode = mode
         if (mode == Mode.CLOCK) {
             titleView.text = "تخصيص الساعة"
-            switchModeBtn.tv.text = "الخلفية"
-            clockBody.visibility = VISIBLE
-            wallBody.visibility = GONE
+            switchModeBtn.setLabel("الخلفية")
+            clockScrollView.visibility = VISIBLE
+            clockScrollView.alpha = 1f
+            clockScrollView.translationX = 0f
+            wallScrollView.visibility = GONE
         } else {
             titleView.text = "تخصيص الخلفية"
-            switchModeBtn.tv.text = "الساعة"
-            wallBody.visibility = VISIBLE
-            clockBody.visibility = GONE
+            switchModeBtn.setLabel("الساعة")
+            wallScrollView.visibility = VISIBLE
+            wallScrollView.alpha = 1f
+            wallScrollView.translationX = 0f
+            clockScrollView.visibility = GONE
         }
     }
 
     fun open(mode: Mode = Mode.WALLPAPER) {
-        if (isOpen) {
+        if (isOpen && !sheetClosing) {
             if (currentMode != mode) switchMode(mode)
             return
         }
         isOpen = true
-        heightAnim?.cancel()
+        sheetClosing = false
+        clockScrollView.animate().cancel()
+        wallScrollView.animate().cancel()
+        clockScrollView.abortScrolling()
+        wallScrollView.abortScrolling()
         applyModeHeaderAndVisibility(mode)
 
-        val targetH = sheetHeightFor(mode)
+        val maxSheetH = sheetHeightFor(Mode.WALLPAPER)
+        morphSpanPx = (maxSheetH - sheetHeightFor(Mode.CLOCK)).toFloat().coerceAtLeast(0f)
         val lp = sheetCard.layoutParams as LayoutParams
-        lp.height = targetH
-        lp.bottomMargin = safeBottomPx + (6f * dens).roundToInt()
-        sheetCard.layoutParams = lp
+        if (lp.height != maxSheetH) {
+            lp.height = maxSheetH
+            lp.bottomMargin = safeBottomPx + (6f * dens).roundToInt()
+            sheetCard.layoutParams = lp
+        }
 
-        scrollView.scrollTo(0, 0)
+        clockScrollView.scrollTo(0, 0)
+        wallScrollView.scrollTo(0, 0)
         syncFromConfig()
         updatePerfUi(perf.snapshot())
         if (mode == Mode.CLOCK) {
             fontScroll.post {
                 val activeChip = fontBtns[cfg.font]
                 if (activeChip != null) {
-                    val targetX = (activeChip.left - (fontScroll.width - activeChip.width) / 2).coerceAtLeast(0)
-                    fontScroll.smoothScrollTo(targetX, 0)
+                    val maxX = max(0, (fontScroll.getChildAt(0)?.width ?: 0) - fontScroll.width)
+                    val targetX = (activeChip.left - (fontScroll.width - activeChip.width) / 2).coerceIn(0, maxX)
+                    fontScroll.smoothScrollToX(targetX)
                 }
             }
         }
 
+        val visH = sheetHeightFor(mode).toFloat()
+        targetMorphTop = if (mode == Mode.CLOCK) morphSpanPx else 0f
+        morphTopPx = targetMorphTop
+        velMorphTop = 0f
+
+        val wasMidClose = visibility == VISIBLE && sheetSlideY > 0f
         visibility = VISIBLE
-        alpha = 0f
-        sheetCard.animate().cancel()
-        sheetCard.translationY = targetH * 0.55f + 40f * dens
-        sheetCard.scaleX = 0.965f
-        sheetCard.scaleY = 0.965f
+        alpha = 1f
+        sheetSlideY = if (wasMidClose) sheetSlideY else (visH * 0.44f + 22f * dens)
+        targetSlideY = 0f
+        velSlideY = if (wasMidClose) min(0f, velSlideY) else (-120f * dens)
+        sheetScale = if (wasMidClose) sheetScale else 0.96f
+        targetScale = 1f
+        velScale = 0f
+        applySheetVisualState()
+        startSheetSpring()
 
-        animateScrimTo(if (mode == Mode.CLOCK) 0 else 44, 260L)
-        animate().alpha(1f).setDuration(220L).start()
-        sheetCard.animate()
-            .translationY(0f)
-            .scaleX(1f)
-            .scaleY(1f)
-            .setDuration(400L)
-            .setInterpolator(DecelerateInterpolator(2.2f))
-            .setUpdateListener { invalidateGlassTree(sheetCard) }
-            .start()
-
+        animateScrimTo(if (mode == Mode.CLOCK) 0 else 44, 230L)
         callbacks.onModeChanged(mode)
         callbacks.onHaptic("tick")
     }
 
     fun switchMode(mode: Mode) {
-        if (!isOpen) {
+        if (!isOpen || sheetClosing) {
             open(mode)
             return
         }
         if (currentMode == mode) return
-        val outBody = if (currentMode == Mode.CLOCK) clockBody else wallBody
-        val inBody = if (mode == Mode.CLOCK) clockBody else wallBody
+        val toClock = mode == Mode.CLOCK
+        val outScroll = if (toClock) wallScrollView else clockScrollView
+        val inScroll = if (toClock) clockScrollView else wallScrollView
         currentMode = mode
         callbacks.onModeChanged(mode)
         callbacks.onHaptic("tick")
 
-        val startH = sheetCard.height.takeIf { it > 0 } ?: (sheetCard.layoutParams as LayoutParams).height
-        val targetH = sheetHeightFor(mode)
-        heightAnim?.cancel()
-        heightAnim = ValueAnimator.ofInt(startH, targetH).apply {
-            duration = 320L
-            interpolator = DecelerateInterpolator(2.1f)
-            addUpdateListener { a ->
-                val lp = sheetCard.layoutParams as LayoutParams
-                lp.height = a.animatedValue as Int
-                sheetCard.layoutParams = lp
-                invalidateGlassTree(sheetCard)
-            }
-            start()
-        }
-        animateScrimTo(if (mode == Mode.CLOCK) 0 else 44, 240L)
+        targetMorphTop = if (toClock) morphSpanPx else 0f
+        startSheetSpring()
+        animateScrimTo(if (toClock) 0 else 44, 210L)
 
-        titleView.text = if (mode == Mode.CLOCK) "تخصيص الساعة" else "تخصيص الخلفية"
-        switchModeBtn.tv.text = if (mode == Mode.CLOCK) "الخلفية" else "الساعة"
+        titleView.text = if (toClock) "تخصيص الساعة" else "تخصيص الخلفية"
+        switchModeBtn.setLabel(if (toClock) "الخلفية" else "الساعة")
+        switchModeBtn.animate().cancel()
+        switchModeBtn.scaleX = 0.92f
+        switchModeBtn.scaleY = 0.92f
+        switchModeBtn.animate().scaleX(1f).scaleY(1f).setDuration(240L)
+            .setInterpolator(OvershootInterpolator(1.6f)).start()
 
-        outBody.animate().cancel()
-        inBody.animate().cancel()
-        outBody.animate()
+        val shift = 20f * dens * (if (toClock) -1f else 1f)
+        outScroll.animate().cancel()
+        inScroll.animate().cancel()
+        outScroll.abortScrolling()
+        inScroll.abortScrolling()
+
+        outScroll.animate()
             .alpha(0f)
-            .translationY(8f * dens)
-            .setDuration(120L)
+            .translationX(-shift)
+            .setDuration(155L)
+            .setInterpolator(DecelerateInterpolator(1.4f))
             .withEndAction {
-                outBody.visibility = GONE
-                outBody.alpha = 1f
-                outBody.translationY = 0f
-                scrollView.scrollTo(0, 0)
-                inBody.visibility = VISIBLE
-                inBody.alpha = 0f
-                inBody.translationY = 10f * dens
-                inBody.animate()
-                    .alpha(1f)
-                    .translationY(0f)
-                    .setDuration(220L)
-                    .setInterpolator(DecelerateInterpolator(1.9f))
-                    .setUpdateListener { invalidateGlassTree(inBody) }
-                    .start()
-                if (mode == Mode.CLOCK) {
-                    fontScroll.post {
-                        val activeChip = fontBtns[cfg.font]
-                        if (activeChip != null) {
-                            val targetX = (activeChip.left - (fontScroll.width - activeChip.width) / 2).coerceAtLeast(0)
-                            fontScroll.smoothScrollTo(targetX, 0)
-                        }
-                    }
-                }
+                if (currentMode != mode) return@withEndAction
+                outScroll.visibility = GONE
+                outScroll.alpha = 1f
+                outScroll.translationX = 0f
             }
             .start()
+
+        inScroll.visibility = VISIBLE
+        inScroll.alpha = 0f
+        inScroll.translationX = shift
+        inScroll.animate()
+            .alpha(1f)
+            .translationX(0f)
+            .setDuration(235L)
+            .setInterpolator(crossSlideEase)
+            .setUpdateListener { invalidateVisibleGlass(inScroll) }
+            .start()
+
+        if (toClock) {
+            fontScroll.post {
+                val activeChip = fontBtns[cfg.font]
+                if (activeChip != null) {
+                    val maxX = max(0, (fontScroll.getChildAt(0)?.width ?: 0) - fontScroll.width)
+                    val targetX = (activeChip.left - (fontScroll.width - activeChip.width) / 2).coerceIn(0, maxX)
+                    fontScroll.smoothScrollToX(targetX)
+                }
+            }
+        }
     }
 
     fun close() {
-        if (!isOpen) return
+        if (!isOpen && !sheetClosing) return
         isOpen = false
-        heightAnim?.cancel()
-        animateScrimTo(0, 200L)
-        animate().alpha(0f).setDuration(210L).start()
-        val slideOut = (sheetCard.height.takeIf { it > 0 } ?: sheetHeightFor(currentMode)) * 0.72f + 44f * dens
-        sheetCard.animate().cancel()
-        sheetCard.animate()
-            .translationY(slideOut)
-            .scaleX(0.97f)
-            .scaleY(0.97f)
-            .setDuration(240L)
-            .setInterpolator(DecelerateInterpolator(1.9f))
-            .setUpdateListener { sheetCard.invalidate() }
-            .withEndAction {
-                if (!isOpen) {
-                    visibility = GONE
-                    sheetCard.translationY = 0f
-                    sheetCard.scaleX = 1f
-                    sheetCard.scaleY = 1f
-                    callbacks.onClose()
-                }
-            }
-            .start()
+        sheetClosing = true
+        animateScrimTo(0, 190L)
+        val slideOut = max(160f, sheetHeightFor(currentMode).toFloat() * 0.84f + 36f * dens)
+        targetSlideY = slideOut
+        targetScale = 0.965f
+        if (velSlideY < 160f * dens) velSlideY = 160f * dens
+        startSheetSpring()
     }
 
     private fun secHeader(txt: String): TextView {
@@ -2017,9 +2752,13 @@ class EditorSheetView(
         return SeekBar(context).apply {
             if (android.os.Build.VERSION.SDK_INT >= 26) min = minV
             max = maxV
+            minimumHeight = (30f * dens).roundToInt()
+            val hPad = (10f * dens).roundToInt()
+            val vPad = (5f * dens).roundToInt()
+            setPadding(hPad, vPad, hPad, vPad)
             thumb = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setSize((18f * dens).roundToInt(), (18f * dens).roundToInt())
+                setSize((19f * dens).roundToInt(), (19f * dens).roundToInt())
                 setColor(Color.WHITE)
                 setStroke((2f * dens).roundToInt(), Color.argb(72, 0, 0, 0))
             }
