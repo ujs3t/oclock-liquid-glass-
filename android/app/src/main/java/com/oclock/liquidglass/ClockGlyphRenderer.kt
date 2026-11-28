@@ -215,7 +215,7 @@ class ClockGlyphRenderer(context: Context) {
         val tbH = max(8, tb.height())
         val padBox = 8
         val sw = ceil((tbW + padBox * 2) * sx).toInt().coerceAtLeast(16)
-        val sh = ceil((tbH + padBox * 2) * vSub).toInt().coerceAtLeast(16)
+        val sh = ((tbH + padBox * 2) * vSub).coerceAtLeast(16)
         val tbMidX = (tb.left + tb.right) * 0.5f
         val tbMidY = (tb.top + tb.bottom) * 0.5f
         val drawX = (sw * 0.5f / sx) - tbMidX
