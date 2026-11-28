@@ -48,6 +48,7 @@ import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.OvershootInterpolator
+import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -102,6 +103,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private lateinit var phoneShell: FrameLayout
     private lateinit var wallView: ImageView
     private lateinit var clockContainer: FrameLayout
+    private lateinit var clockGhostView: ClockGhostView
     private lateinit var clockView: ClockGlassView
     private lateinit var subjectView: ImageView
     private lateinit var depthRevealView: DepthRevealOverlayView
@@ -174,6 +176,10 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private var hasInitialLayout = false
     private var depthFlowGen = 0
     private var isDepthRevealAnimating = false
+    private var stageGlideAnim: ValueAnimator? = null
+    private var stageCurOffsetY = 0f
+    private var stageCurFit = 1f
+    private var hasStageSmoothState = false
 
     private val layoutSpringCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
@@ -442,9 +448,13 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             clipToPadding = false
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP)
         }
+        clockGhostView = ClockGhostView(this, backdrop).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+        }
         clockView = ClockGlassView(this, glyphRenderer, backdrop, perf).apply {
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
         }
+        clockView.attachGhostView(clockGhostView)
         clockView.addOnLayoutChangeListener { _, _, top, _, bottom, _, oTop, _, oBottom ->
             if ((bottom - top) != (oBottom - oTop)) {
                 clockView.post {
@@ -455,15 +465,21 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 resizeOverlay.post { if (resizeOverlay.isOpen) resizeOverlay.layoutAroundClock() }
             }
         }
-        clockView.setOnArtifactCommitted {
+        clockView.setOnArtifactCommitted { _, isFontSwitch ->
             if (resizeOverlay.isOpen) {
                 resizeOverlay.post { resizeOverlay.layoutAroundClock() }
             }
+            if (clockEditorStageFrac > 0.01f && isFontSwitch && hasStageSmoothState) {
+                glideEditorStageToLatest()
+            } else {
+                stageGlideAnim?.cancel()
+                if (clockEditorStageFrac > 0.01f) applyDepthAndLayerTransforms()
+            }
             updateMusicAndNotificationsLayout(animated = hasInitialLayout)
-            if (clockEditorStageFrac > 0.01f) applyDepthAndLayerTransforms()
             refreshAllGlass()
         }
         attachClockLongPressAndPull(clockView)
+        clockContainer.addView(clockGhostView)
         clockContainer.addView(clockView)
         phoneShell.addView(clockContainer)
 
@@ -1602,25 +1618,20 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         var stageOffsetY = 0f
         var stageFit = 1f
         if (clockEditorStageFrac > 0.001f) {
-            val shellHPx = (phoneShell.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels).toFloat()
-            val sheetHPx = if (::editorSheet.isInitialized) editorSheet.currentSheetHeightPx().toFloat() else shellHPx * 0.44f
-            val stageTop = safeTopPx + 74f * dens
-            val stageBot = max(stageTop + 110f * dens, shellHPx - sheetHPx - safeBottomPx - 18f * dens)
-            val stageH = max(90f * dens, stageBot - stageTop)
-
-            val rawViewH = if (clockView.height > 0) clockView.height.toFloat() else (artClock?.hDp ?: 210f) * dens
-            val inkBotInCont = ((artClock?.inkBottomDp ?: max(48f, rawViewH / dens - 18f)) * dens) * max(0.35f, clockView.scaleY)
-            val inkH = max(40f * dens, inkBotInCont - inkTopPx)
-            val rawViewW = if (clockView.width > 0) clockView.width.toFloat() else (artClock?.wDp ?: 260f) * dens
-            val inkW = max(60f * dens, (((artClock?.inkRightDp ?: (rawViewW / dens - 18f)) - (artClock?.inkLeftDp ?: 18f)) * dens) * max(0.35f, clockView.scaleX))
-            val maxStageW = max(140f * dens, (phoneShell.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels) - 32f * dens)
-
-            stageFit = min(1f, min((stageH * 0.92f) / inkH, maxStageW / inkW)).coerceIn(0.45f, 1f)
-            val clockNaturalTop = safeTopPx + ((78f + cfg.clockY) * dens)
-            val natInkTop = clockNaturalTop + inkTopPx
-            val scaledInkH = inkH * stageFit
-            val clampedInkTop = natInkTop.coerceIn(stageTop, max(stageTop, stageBot - scaledInkH))
-            stageOffsetY = clampedInkTop - natInkTop
+            if (stageGlideAnim?.isRunning == true && hasStageSmoothState) {
+                stageOffsetY = stageCurOffsetY
+                stageFit = stageCurFit
+            } else {
+                val (targetY, targetFit) = computeEditorStageTarget()
+                stageOffsetY = targetY
+                stageFit = targetFit
+                stageCurOffsetY = targetY
+                stageCurFit = targetFit
+                hasStageSmoothState = true
+            }
+        } else {
+            stageGlideAnim?.cancel()
+            hasStageSmoothState = false
         }
 
         val effClockRest = clockRestOffset * (1f - clockEditorStageFrac) + stageOffsetY * clockEditorStageFrac
@@ -1801,8 +1812,63 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         statusBar.applyTheme(currentColors?.uiInk ?: Color.WHITE, cfg.dnd)
     }
 
+    private fun computeEditorStageTarget(): Pair<Float, Float> {
+        val dens = resources.displayMetrics.density
+        val artClock = clockView.activeArtifact
+        val inkTopPx = ((artClock?.inkTopDp ?: 18f) * dens) * max(0.35f, clockView.scaleY)
+        val shellHPx = (phoneShell.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels).toFloat()
+        val sheetHPx = if (::editorSheet.isInitialized) editorSheet.currentSheetHeightPx().toFloat() else shellHPx * 0.44f
+        val stageTop = safeTopPx + 74f * dens
+        val stageBot = max(stageTop + 110f * dens, shellHPx - sheetHPx - safeBottomPx - 18f * dens)
+        val stageH = max(90f * dens, stageBot - stageTop)
+
+        val rawViewH = (artClock?.hDp ?: 210f) * dens
+        val inkBotInCont = ((artClock?.inkBottomDp ?: max(48f, rawViewH / dens - 18f)) * dens) * max(0.35f, clockView.scaleY)
+        val inkH = max(40f * dens, inkBotInCont - inkTopPx)
+        val rawViewW = (artClock?.wDp ?: 260f) * dens
+        val inkW = max(60f * dens, (((artClock?.inkRightDp ?: (rawViewW / dens - 18f)) - (artClock?.inkLeftDp ?: 18f)) * dens) * max(0.35f, clockView.scaleX))
+        val maxStageW = max(140f * dens, (phoneShell.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels) - 32f * dens)
+
+        val fit = min(1f, min((stageH * 0.92f) / inkH, maxStageW / inkW)).coerceIn(0.45f, 1f)
+        val clockNaturalTop = safeTopPx + ((78f + cfg.clockY) * dens)
+        val natInkTop = clockNaturalTop + inkTopPx
+        val scaledInkH = inkH * fit
+        val clampedInkTop = natInkTop.coerceIn(stageTop, max(stageTop, stageBot - scaledInkH))
+        return (clampedInkTop - natInkTop) to fit
+    }
+
+    private fun glideEditorStageToLatest() {
+        val (targetY, targetFit) = computeEditorStageTarget()
+        val startY = stageCurOffsetY
+        val startFit = stageCurFit
+        if (abs(targetY - startY) < 1f && abs(targetFit - startFit) < 0.004f) {
+            stageGlideAnim?.cancel()
+            stageCurOffsetY = targetY
+            stageCurFit = targetFit
+            applyDepthAndLayerTransforms()
+            return
+        }
+        stageGlideAnim?.cancel()
+        stageGlideAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 220L
+            interpolator = PathInterpolator(0.22f, 1f, 0.36f, 1f)
+            addUpdateListener { a ->
+                val t = (a.animatedValue as Float).coerceIn(0f, 1f)
+                stageCurOffsetY = startY + (targetY - startY) * t
+                stageCurFit = startFit + (targetFit - startFit) * t
+                applyDepthAndLayerTransforms()
+                clockView.invalidate()
+                if (clockGhostView.visibility == View.VISIBLE) clockGhostView.invalidate()
+            }
+            start()
+        }
+    }
+
     private fun refreshAllGlass() {
         clockView.invalidate()
+        if (::clockGhostView.isInitialized && clockGhostView.visibility == View.VISIBLE) {
+            clockGhostView.invalidate()
+        }
         npCard.invalidate()
         if (::notificationCenter.isInitialized) notificationCenter.invalidateCards()
         dndPill.invalidate()
@@ -2829,6 +2895,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     override fun onDestroy() {
         super.onDestroy()
         cancelDepthActivationFlow()
+        stageGlideAnim?.cancel()
         editorStageSpringRunning = false
         Choreographer.getInstance().removeFrameCallback(editorStageSpringCallback)
         clockHoldPendingRunnable?.let { mainHandler.removeCallbacks(it) }

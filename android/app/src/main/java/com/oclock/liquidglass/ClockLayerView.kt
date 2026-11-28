@@ -6,7 +6,6 @@ import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -25,7 +24,6 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
-import android.view.animation.DecelerateInterpolator
 import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -38,6 +36,7 @@ import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
@@ -78,22 +77,16 @@ class ClockGlassView(
     private val worker = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // Light, silky iOS-style cross-dissolve when switching clock fonts
+    // Silky, zero-jump iOS-style optical cross-dissolve when switching clock fonts
     private val fontEase = PathInterpolator(0.22f, 1f, 0.36f, 1f)
     private var fontChangeRequested = false
-    private var fontPrepAnim: ValueAnimator? = null
     private var fontCrossAnim: ValueAnimator? = null
-    private var fontPrepScale = 1f
-    private var fontPrepAlpha = 1f
-    private var fontSwapStartScale = 1f
-    private var fontSwapStartAlpha = 1f
-    private var fontCrossProg = 1f
-    private var outgoingArtifact: ClockArtifact? = null
-    private var outgoingCpuBmp: Bitmap? = null
+    private var fontInAlpha = 1f
+    private var ghostView: ClockGhostView? = null
 
     private var hostWDp = 390f
     private var availableHDp = 400f
-    private var onArtifactCommitted: ((ClockArtifact) -> Unit)? = null
+    private var onArtifactCommitted: ((ClockArtifact, Boolean) -> Unit)? = null
 
     init {
         if (Build.VERSION.SDK_INT >= 33) {
@@ -101,7 +94,11 @@ class ClockGlassView(
         }
     }
 
-    fun setOnArtifactCommitted(cb: ((ClockArtifact) -> Unit)?) {
+    fun attachGhostView(ghost: ClockGhostView) {
+        ghostView = ghost
+    }
+
+    fun setOnArtifactCommitted(cb: ((ClockArtifact, Boolean) -> Unit)?) {
         onArtifactCommitted = cb
     }
 
@@ -111,21 +108,6 @@ class ClockGlassView(
 
     fun beginFontTransition() {
         fontChangeRequested = true
-        if (activeArtifact == null) return
-        fontPrepAnim?.cancel()
-        val s0 = fontPrepScale
-        val a0 = fontPrepAlpha
-        fontPrepAnim = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 95L
-            interpolator = DecelerateInterpolator(1.5f)
-            addUpdateListener { anim ->
-                val t = anim.animatedValue as Float
-                fontPrepScale = s0 + (0.972f - s0) * t
-                fontPrepAlpha = a0 + (0.78f - a0) * t
-                invalidate()
-            }
-            start()
-        }
     }
 
     fun updatePreviewTransform(sx: Float, sy: Float) {
@@ -168,27 +150,27 @@ class ClockGlassView(
         scaleX = 1f
         scaleY = 1f
 
+        val prevCpu = cpuFallbackBmp?.takeIf { prevArt != null && !it.isRecycled && it.width == prevArt.wPx && it.height == prevArt.hPx }
+        cpuFallbackBmp = null
+        cpuFallbackKey = ""
+
         if (isFontSwitch && prevArt != null) {
-            val swapScale = fontPrepScale
-            val swapAlpha = fontPrepAlpha
-            fontPrepAnim?.cancel()
             fontCrossAnim?.cancel()
-            fontPrepScale = 1f
-            fontPrepAlpha = 1f
-            fontSwapStartScale = swapScale
-            fontSwapStartAlpha = swapAlpha
-            outgoingArtifact = prevArt
-            outgoingCpuBmp = cpuFallbackBmp?.takeIf { !it.isRecycled && it.width == prevArt.wPx && it.height == prevArt.hPx }
-            cpuFallbackBmp = null
-            cpuFallbackKey = ""
-            fontCrossProg = 0f
+            val ghost = ghostView
+            val cols = colors
+            val ghostStartAlpha = fontInAlpha.coerceIn(0.25f, 1f)
+            ghost?.showArtifact(prevArt, prevCpu, cols, config, ghostStartAlpha)
+            fontInAlpha = 0f
 
             fontCrossAnim = ValueAnimator.ofFloat(0f, 1f).apply {
-                duration = 210L
+                duration = 220L
                 interpolator = fontEase
                 var cancelled = false
                 addUpdateListener { anim ->
-                    fontCrossProg = (anim.animatedValue as Float).coerceIn(0f, 1f)
+                    val t = (anim.animatedValue as Float).coerceIn(0f, 1f)
+                    fontInAlpha = t.pow(0.85f)
+                    val outAlpha = ghostStartAlpha * (1f - t).pow(1.45f)
+                    ghost?.updateAlpha(outAlpha)
                     invalidate()
                 }
                 addListener(object : AnimatorListenerAdapter() {
@@ -197,33 +179,22 @@ class ClockGlassView(
                     }
                     override fun onAnimationEnd(animation: Animator) {
                         if (cancelled) return
-                        outgoingArtifact = null
-                        outgoingCpuBmp = null
-                        fontCrossProg = 1f
-                        requestLayout()
+                        fontInAlpha = 1f
+                        ghost?.clear()
                         invalidate()
                     }
                 })
                 start()
             }
         } else {
-            fontPrepAnim?.cancel()
-            fontPrepScale = 1f
-            fontPrepAlpha = 1f
-            if (outgoingArtifact == null) {
-                cpuFallbackKey = ""
-            } else {
-                fontCrossAnim?.cancel()
-                outgoingArtifact = null
-                outgoingCpuBmp = null
-                fontCrossProg = 1f
-                cpuFallbackKey = ""
-            }
+            fontCrossAnim?.cancel()
+            fontInAlpha = 1f
+            ghostView?.clear()
         }
 
         requestLayout()
         invalidate()
-        onArtifactCommitted?.invoke(art)
+        onArtifactCommitted?.invoke(art, isFontSwitch)
     }
 
     fun scheduleRender(
@@ -335,18 +306,17 @@ class ClockGlassView(
 
     fun shutdown() {
         fontPrepAnim?.cancel()
+    fun shutdown() {
         fontCrossAnim?.cancel()
+        ghostView?.clear()
         worker.shutdownNow()
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val dens = resources.displayMetrics.density
         val art = activeArtifact
-        val out = outgoingArtifact
-        val wDp = if (out != null && fontCrossProg < 1f) max(art?.wDp ?: 260f, out.wDp) else (art?.wDp ?: 260f)
-        val hDp = if (out != null && fontCrossProg < 1f) max(art?.hDp ?: 210f, out.hDp) else (art?.hDp ?: 210f)
-        val w = (wDp * dens).roundToInt().coerceAtLeast(8)
-        val h = (hDp * dens).roundToInt().coerceAtLeast(8)
+        val w = ((art?.wDp ?: 260f) * dens).roundToInt().coerceAtLeast(8)
+        val h = ((art?.hDp ?: 210f) * dens).roundToInt().coerceAtLeast(8)
         setMeasuredDimension(w, h)
     }
 
@@ -357,71 +327,12 @@ class ClockGlassView(
         val dstW = width.toFloat().coerceAtLeast(1f)
         val dstH = height.toFloat().coerceAtLeast(1f)
         val dens = resources.displayMetrics.density
+        val alphaByte = (fontInAlpha.coerceIn(0f, 1f) * 255f).roundToInt()
+        if (alphaByte <= 1) return
 
         // Compute top-left in parent lock-screen coordinates (clockContainer.y already includes pullOffset)
         val originX = (parent as? View)?.x?.plus(x) ?: x
         val originY = (parent as? View)?.y?.plus(y) ?: y
-
-        val outArt = outgoingArtifact
-        if (outArt != null && fontCrossProg < 0.999f) {
-            val t = fontCrossProg.coerceIn(0f, 1f)
-            val outAlpha = fontSwapStartAlpha * (1f - t)
-            val outScale = fontSwapStartScale + (0.945f - fontSwapStartScale) * t
-            val outW = (outArt.wDp * dens).coerceAtLeast(1f)
-            val outH = (outArt.hDp * dens).coerceAtLeast(1f)
-            drawClockArtifact(
-                canvas, outArt, cols, wallShader, dens,
-                originX, originY,
-                offsetX = (dstW - outW) * 0.5f,
-                offsetY = (dstH - outH) * 0.5f,
-                artW = outW, artH = outH,
-                scale = outScale, alpha01 = outAlpha, isOutgoing = true
-            )
-
-            val inW = (art.wDp * dens).coerceAtLeast(1f)
-            val inH = (art.hDp * dens).coerceAtLeast(1f)
-            drawClockArtifact(
-                canvas, art, cols, wallShader, dens,
-                originX, originY,
-                offsetX = (dstW - inW) * 0.5f,
-                offsetY = (dstH - inH) * 0.5f,
-                artW = inW, artH = inH,
-                scale = 0.958f + 0.042f * t, alpha01 = t, isOutgoing = false
-            )
-            return
-        }
-
-        drawClockArtifact(
-            canvas, art, cols, wallShader, dens,
-            originX, originY,
-            offsetX = 0f, offsetY = 0f,
-            artW = dstW, artH = dstH,
-            scale = fontPrepScale, alpha01 = fontPrepAlpha, isOutgoing = false
-        )
-    }
-
-    private fun drawClockArtifact(
-        canvas: Canvas,
-        art: ClockArtifact,
-        cols: AdaptiveColors,
-        wallShader: BitmapShader,
-        dens: Float,
-        originX: Float,
-        originY: Float,
-        offsetX: Float,
-        offsetY: Float,
-        artW: Float,
-        artH: Float,
-        scale: Float,
-        alpha01: Float,
-        isOutgoing: Boolean
-    ) {
-        val alphaByte = (alpha01.coerceIn(0f, 1f) * 255f).roundToInt()
-        if (alphaByte <= 1) return
-
-        canvas.save()
-        if (offsetX != 0f || offsetY != 0f) canvas.translate(offsetX, offsetY)
-        if (abs(scale - 1f) > 0.0005f) canvas.scale(scale, scale, artW * 0.5f, artH * 0.5f)
 
         if (Build.VERSION.SDK_INT >= 33 && clockShader != null && art.fieldShader != null && art.alphaShader != null) {
             val t0 = SystemClock.elapsedRealtimeNanos()
@@ -429,9 +340,9 @@ class ClockGlassView(
             sh.setInputShader("uBackdrop", wallShader)
             sh.setInputShader("uField", art.fieldShader)
             sh.setInputShader("uMask", art.alphaShader)
-            sh.setFloatUniform("uClockOrigin", originX + offsetX, originY + offsetY + artH * 0.5f * (1f - scale))
-            sh.setFloatUniform("uDstSize", artW, artH)
-            sh.setFloatUniform("uClockScale", previewScaleX * scale, previewScaleY * scale)
+            sh.setFloatUniform("uClockOrigin", originX, originY)
+            sh.setFloatUniform("uDstSize", dstW, dstH)
+            sh.setFloatUniform("uClockScale", previewScaleX, previewScaleY)
             sh.setFloatUniform("uFieldSize", art.wPx.toFloat(), art.hPx.toFloat())
             sh.setFloatUniform("uMaxAbsPx", art.maxAbsCss * dens)
             sh.setFloatUniform("uSS", art.ss)
@@ -454,47 +365,179 @@ class ClockGlassView(
 
             paint.shader = sh
             paint.alpha = alphaByte
-            canvas.drawRect(0f, 0f, artW, artH, paint)
+            canvas.drawRect(0f, 0f, dstW, dstH, paint)
             paint.alpha = 255
             paint.shader = null
-            if (!isOutgoing) perf.recordWork("clockShaderDraw", (SystemClock.elapsedRealtimeNanos() - t0) / 1_000_000.0)
+            perf.recordWork("clockShaderDraw", (SystemClock.elapsedRealtimeNanos() - t0) / 1_000_000.0)
         } else {
-            val wallBmp = backdrop.wallBitmap
-            if (wallBmp == null) {
-                canvas.restore()
-                return
-            }
-            val out: Bitmap? = if (isOutgoing) {
-                outgoingCpuBmp
-            } else {
-                val key = "${art.maskKey}|${(originX + offsetX).roundToInt()}|${(originY + offsetY).roundToInt()}|${cols.clockTintTop}|${cols.clockTintBot}|${config.innerOpacity}|${config.innerThickness}|${config.innerAngle}|${config.innerFade}|${config.innerColor}"
-                var cur = cpuFallbackBmp?.takeIf { it.width == art.wPx && it.height == art.hPx }
-                if (cur == null || cpuFallbackKey != key) {
-                    if (cur == null) {
-                        cur = Bitmap.createBitmap(art.wPx, art.hPx, Bitmap.Config.ARGB_8888)
-                        cpuFallbackBmp = cur
-                    }
-                    val innerCol = AppConstants.parseHexColor(config.innerColor, Color.WHITE)
-                    NativeGlass.renderClockCpuFallback(
-                        art.alphaBmp, art.fieldBmp, wallBmp, cur,
-                        originX + offsetX, originY + offsetY, artW, artH,
-                        backdrop.wallLeft, backdrop.wallTop, backdrop.wallScaleX, backdrop.wallScaleY,
-                        art.maxAbsCss * dens, art.ss,
-                        cols.clockTintTop, cols.clockTintBot, cols.clockShadowOp, cols.clockShadowTopColor,
-                        innerCol, config.innerThickness, (config.innerOpacity / 100f).coerceIn(0f, 1f), config.innerAngle, (config.innerFade / 100f).coerceIn(0f, 1f)
-                    )
-                    cpuFallbackKey = key
+            val wallBmp = backdrop.wallBitmap ?: return
+            val key = "${art.maskKey}|${originX.roundToInt()}|${originY.roundToInt()}|${cols.clockTintTop}|${cols.clockTintBot}|${config.innerOpacity}|${config.innerThickness}|${config.innerAngle}|${config.innerFade}|${config.innerColor}"
+            var out = cpuFallbackBmp?.takeIf { !it.isRecycled && it.width == art.wPx && it.height == art.hPx }
+            if (out == null || cpuFallbackKey != key) {
+                if (out == null) {
+                    out = Bitmap.createBitmap(art.wPx, art.hPx, Bitmap.Config.ARGB_8888)
+                    cpuFallbackBmp = out
                 }
-                cur
+                val innerCol = AppConstants.parseHexColor(config.innerColor, Color.WHITE)
+                NativeGlass.renderClockCpuFallback(
+                    art.alphaBmp, art.fieldBmp, wallBmp, out,
+                    originX, originY, dstW, dstH,
+                    backdrop.wallLeft, backdrop.wallTop, backdrop.wallScaleX, backdrop.wallScaleY,
+                    art.maxAbsCss * dens, art.ss,
+                    cols.clockTintTop, cols.clockTintBot, cols.clockShadowOp, cols.clockShadowTopColor,
+                    innerCol, config.innerThickness, (config.innerOpacity / 100f).coerceIn(0f, 1f), config.innerAngle, (config.innerFade / 100f).coerceIn(0f, 1f)
+                )
+                cpuFallbackKey = key
             }
-            if (out != null && !out.isRecycled) {
+            paint.alpha = alphaByte
+            dstRect.set(0f, 0f, dstW, dstH)
+            canvas.drawBitmap(out, null, dstRect, paint)
+            paint.alpha = 255
+        }
+    }
+
+    @androidx.annotation.RequiresApi(33)
+    private fun setColorUniform(shader: RuntimeShader, name: String, color: Int) {
+        shader.setFloatUniform(
+            name,
+            Color.red(color) / 255f,
+            Color.green(color) / 255f,
+            Color.blue(color) / 255f,
+            Color.alpha(color) / 255f
+        )
+    }
+}
+
+class ClockGhostView(
+    context: Context,
+    private val backdrop: LiquidGlassShaders.BackdropState
+) : View(context) {
+
+    private var ghostArt: ClockArtifact? = null
+    private var ghostCpuBmp: Bitmap? = null
+    private var ghostColors: AdaptiveColors? = null
+    private var ghostConfig: LockConfig = LockConfig()
+    private var ghostAlpha: Float = 0f
+    private var clockShader: RuntimeShader? = null
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val dstRect = RectF()
+
+    init {
+        isClickable = false
+        isFocusable = false
+        visibility = GONE
+        if (Build.VERSION.SDK_INT >= 33) {
+            clockShader = LiquidGlassShaders.createClockShader()
+        }
+    }
+
+    fun showArtifact(
+        art: ClockArtifact,
+        cpuBmp: Bitmap?,
+        cols: AdaptiveColors?,
+        cfg: LockConfig,
+        startAlpha: Float
+    ) {
+        ghostArt = art
+        ghostCpuBmp = cpuBmp?.takeIf { !it.isRecycled }
+        ghostColors = cols
+        ghostConfig = cfg.copy()
+        ghostAlpha = startAlpha.coerceIn(0f, 1f)
+        visibility = VISIBLE
+        requestLayout()
+        invalidate()
+    }
+
+    fun updateAlpha(alpha01: Float) {
+        ghostAlpha = alpha01.coerceIn(0f, 1f)
+        invalidate()
+    }
+
+    fun clear() {
+        ghostArt = null
+        ghostCpuBmp = null
+        ghostAlpha = 0f
+        if (visibility != GONE) visibility = GONE
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val dens = resources.displayMetrics.density
+        val art = ghostArt
+        val w = ((art?.wDp ?: 8f) * dens).roundToInt().coerceAtLeast(8)
+        val h = ((art?.hDp ?: 8f) * dens).roundToInt().coerceAtLeast(8)
+        setMeasuredDimension(w, h)
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        val art = ghostArt ?: return
+        val cols = ghostColors ?: return
+        val wallShader = backdrop.wallShader ?: return
+        val alphaByte = (ghostAlpha.coerceIn(0f, 1f) * 255f).roundToInt()
+        if (alphaByte <= 1) return
+
+        val dstW = width.toFloat().coerceAtLeast(1f)
+        val dstH = height.toFloat().coerceAtLeast(1f)
+        val dens = resources.displayMetrics.density
+        val originX = (parent as? View)?.x?.plus(x) ?: x
+        val originY = (parent as? View)?.y?.plus(y) ?: y
+
+        if (Build.VERSION.SDK_INT >= 33 && clockShader != null && art.fieldShader != null && art.alphaShader != null) {
+            val sh = clockShader!!
+            sh.setInputShader("uBackdrop", wallShader)
+            sh.setInputShader("uField", art.fieldShader)
+            sh.setInputShader("uMask", art.alphaShader)
+            sh.setFloatUniform("uClockOrigin", originX, originY)
+            sh.setFloatUniform("uDstSize", dstW, dstH)
+            sh.setFloatUniform("uClockScale", 1f, 1f)
+            sh.setFloatUniform("uFieldSize", art.wPx.toFloat(), art.hPx.toFloat())
+            sh.setFloatUniform("uMaxAbsPx", art.maxAbsCss * dens)
+            sh.setFloatUniform("uSS", art.ss)
+            setColorUniform(sh, "uTintTop", cols.clockTintTop)
+            setColorUniform(sh, "uTintBot", cols.clockTintBot)
+            val shTop = Color.argb(
+                (cols.clockShadowOp * 255f).roundToInt().coerceIn(0, 255),
+                Color.red(cols.clockShadowTopColor),
+                Color.green(cols.clockShadowTopColor),
+                Color.blue(cols.clockShadowTopColor)
+            )
+            setColorUniform(sh, "uShadowTop", shTop)
+            val innerCol = AppConstants.parseHexColor(ghostConfig.innerColor, Color.WHITE)
+            setColorUniform(sh, "uInnerColor", innerCol)
+            sh.setFloatUniform("uInnerThick", ghostConfig.innerThickness)
+            sh.setFloatUniform("uInnerOp", (ghostConfig.innerOpacity / 100f).coerceIn(0f, 1f))
+            sh.setFloatUniform("uInnerFade", (ghostConfig.innerFade / 100f).coerceIn(0f, 1f))
+            val rad = Math.toRadians(ghostConfig.innerAngle.toDouble())
+            sh.setFloatUniform("uInnerDir", cos(rad).toFloat(), sin(rad).toFloat())
+
+            paint.shader = sh
+            paint.alpha = alphaByte
+            canvas.drawRect(0f, 0f, dstW, dstH, paint)
+            paint.alpha = 255
+            paint.shader = null
+        } else {
+            val bmp = ghostCpuBmp ?: run {
+                val wallBmp = backdrop.wallBitmap ?: return
+                val created = Bitmap.createBitmap(art.wPx, art.hPx, Bitmap.Config.ARGB_8888)
+                val innerCol = AppConstants.parseHexColor(ghostConfig.innerColor, Color.WHITE)
+                NativeGlass.renderClockCpuFallback(
+                    art.alphaBmp, art.fieldBmp, wallBmp, created,
+                    originX, originY, dstW, dstH,
+                    backdrop.wallLeft, backdrop.wallTop, backdrop.wallScaleX, backdrop.wallScaleY,
+                    art.maxAbsCss * dens, art.ss,
+                    cols.clockTintTop, cols.clockTintBot, cols.clockShadowOp, cols.clockShadowTopColor,
+                    innerCol, ghostConfig.innerThickness, (ghostConfig.innerOpacity / 100f).coerceIn(0f, 1f),
+                    ghostConfig.innerAngle, (ghostConfig.innerFade / 100f).coerceIn(0f, 1f)
+                )
+                ghostCpuBmp = created
+                created
+            }
+            if (!bmp.isRecycled) {
                 paint.alpha = alphaByte
-                dstRect.set(0f, 0f, artW, artH)
-                canvas.drawBitmap(out, null, dstRect, paint)
+                dstRect.set(0f, 0f, dstW, dstH)
+                canvas.drawBitmap(bmp, null, dstRect, paint)
                 paint.alpha = 255
             }
         }
-        canvas.restore()
     }
 
     @androidx.annotation.RequiresApi(33)
