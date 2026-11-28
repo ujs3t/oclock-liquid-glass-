@@ -33,7 +33,7 @@ class AIDepthManager(private val context: Context) {
     ) {
         if (isBusy) return
         isBusy = true
-        onProgress(8, "جاري فحص محرك العزل المجاني…")
+        onProgress(8, "جارٍ تجهيز العزل…")
 
         val moduleInstallClient = ModuleInstall.getClient(context)
         moduleInstallClient.areModulesAvailable(segmenter)
@@ -41,14 +41,14 @@ class AIDepthManager(private val context: Context) {
                 if (avail.areModulesAvailable()) {
                     runSegmentation(sourceWall, onProgress, onReady, onError)
                 } else {
-                    onProgress(18, "جاري تحميل نموذج العزل (مرة واحدة)…")
+                    onProgress(18, "جارٍ تجهيز نموذج العزل…")
                     val req = ModuleInstallRequest.newBuilder()
                         .addApi(segmenter)
                         .setListener { update ->
                             val info = update.progressInfo
                             if (info != null && info.totalBytesToDownload > 0) {
                                 val pct = ((info.bytesDownloaded * 55L) / info.totalBytesToDownload).toInt() + 18
-                                onProgress(pct.coerceIn(18, 73), "تحميل نموذج الذكاء الاصطناعي…")
+                                onProgress(pct.coerceIn(18, 73), "جارٍ تحميل نموذج العزل…")
                             }
                         }
                         .build()
@@ -73,7 +73,7 @@ class AIDepthManager(private val context: Context) {
         onReady: (Bitmap) -> Unit,
         onError: (String) -> Unit
     ) {
-        onProgress(76, "تحليل عنصر المقدمة بدقة عالية…")
+        onProgress(76, "جارٍ عزل الشخصية…")
         bgExecutor.execute {
             try {
                 val maxDim = 960

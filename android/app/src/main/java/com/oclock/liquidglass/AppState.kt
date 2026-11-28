@@ -16,7 +16,13 @@ enum class ClockFont(val id: String, val label: String, val assetPath: String?) 
     BEBAS("bebas", "Bebas", "fonts/bebas_neue.ttf"),
     OSWALD("oswald", "Oswald", "fonts/oswald.ttf"),
     INTER("inter", "Inter", "fonts/inter.ttf"),
-    SF("sf", "SF", null);
+    SF("sf", "SF", null),
+    ROUNDED("rounded", "Rounded", "fonts/sf_rounded.ttf"),
+    CLASSIC("classic", "Classic", "fonts/ios_classic.ttf"),
+    SLAB("slab", "Slab", "fonts/ios_slab.ttf"),
+    STENCIL("stencil", "Stencil", "fonts/ios_stencil.ttf"),
+    RAILS("rails", "Rails", "fonts/ios_rails.ttf"),
+    HEAVY("heavy", "Heavy", "fonts/ios_heavy.ttf");
 
     companion object {
         fun fromId(id: String?): ClockFont = entries.firstOrNull { it.id == id } ?: BEBAS

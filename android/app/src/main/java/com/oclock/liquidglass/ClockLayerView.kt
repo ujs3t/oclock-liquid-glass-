@@ -58,6 +58,7 @@ class ClockGlassView(
     private var cpuFallbackKey: String = ""
 
     private var lastCommittedSize = 172f
+    private var lastCommittedSx = 1.0f
     private var lastCommittedSy = 1.22f
     private var lastMinuteKey = ""
     private val applyVersion = AtomicLong(0L)
@@ -80,6 +81,7 @@ class ClockGlassView(
     }
 
     fun committedSize(): Float = lastCommittedSize
+    fun committedSx(): Float = lastCommittedSx
     fun committedSy(): Float = lastCommittedSy
 
     fun updatePreviewTransform(sx: Float, sy: Float) {
@@ -132,6 +134,7 @@ class ClockGlassView(
                 activeArtifact = art
                 lastMinuteKey = art.minuteKey
                 lastCommittedSize = snapCfg.size
+                lastCommittedSx = snapCfg.sx
                 lastCommittedSy = snapCfg.sy
                 previewScaleX = 1f
                 previewScaleY = 1f
@@ -259,6 +262,7 @@ class ClockResizeOverlayView(
     private val onCommit: () -> Unit,
     private val onReset: () -> Unit,
     private val onUndo: () -> Unit,
+    private val onClockTap: () -> Unit,
     private val onHaptic: (String) -> Unit
 ) : FrameLayout(context) {
 
@@ -297,16 +301,56 @@ class ClockResizeOverlayView(
             layoutDirection = LAYOUT_DIRECTION_LTR
             clipChildren = false
             clipToPadding = false
-            isClickable = false
+            isClickable = true
             isFocusable = false
             background = GradientDrawable().apply {
-                setColor(Color.TRANSPARENT)
-                setStroke((1.1f * dens).roundToInt(), Color.argb(115, 255, 255, 255))
+                setColor(Color.argb(14, 255, 255, 255))
+                setStroke((1.2f * dens).roundToInt(), Color.argb(132, 255, 255, 255))
                 cornerRadius = 22f * dens
             }
             layoutParams = LayoutParams((200f * dens).roundToInt(), (160f * dens).roundToInt(), Gravity.TOP or Gravity.LEFT).apply {
                 leftMargin = hitPadX
                 topMargin = hitPadTop
+            }
+        }
+        val boxSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+        var boxTapDownX = 0f
+        var boxTapDownY = 0f
+        var boxTapPtr = MotionEvent.INVALID_POINTER_ID
+        boxFrame.setOnTouchListener { _, ev ->
+            if (!isOpen) return@setOnTouchListener false
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    handler.removeCallbacks(autoCloseRunnable)
+                    boxTapPtr = ev.getPointerId(0)
+                    boxTapDownX = ev.rawX
+                    boxTapDownY = ev.rawY
+                    boxFrame.animate().cancel()
+                    boxFrame.animate().scaleX(0.98f).scaleY(0.98f).setDuration(90L).start()
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    val idx = ev.findPointerIndex(boxTapPtr)
+                    val isTap = idx >= 0 && hypot(ev.rawX - boxTapDownX, ev.rawY - boxTapDownY) < boxSlop * 1.4f
+                    boxTapPtr = MotionEvent.INVALID_POINTER_ID
+                    boxFrame.animate().cancel()
+                    boxFrame.animate().scaleX(1f).scaleY(1f).setDuration(180L).start()
+                    if (isTap) {
+                        onHaptic("pop")
+                        onClockTap()
+                    } else {
+                        scheduleAutoClose()
+                    }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    boxTapPtr = MotionEvent.INVALID_POINTER_ID
+                    boxFrame.animate().cancel()
+                    boxFrame.animate().scaleX(1f).scaleY(1f).setDuration(160L).start()
+                    scheduleAutoClose()
+                    true
+                }
+                else -> true
             }
         }
         addView(boxFrame)
@@ -379,16 +423,23 @@ class ClockResizeOverlayView(
         }
 
         labelPill = TextView(context).apply {
-            text = "اسحب المقبض · أو اضغط تصغير"
-            setTextColor(Color.argb(230, 255, 255, 255))
+            text = "اضغط الساعة للتخصيص"
+            setTextColor(Color.argb(235, 255, 255, 255))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-            setPadding((12f * dens).roundToInt(), (6f * dens).roundToInt(), (12f * dens).roundToInt(), (6f * dens).roundToInt())
+            setPadding((14f * dens).roundToInt(), (6f * dens).roundToInt(), (14f * dens).roundToInt(), (6f * dens).roundToInt())
             background = GradientDrawable().apply {
-                setColor(Color.argb(184, 24, 24, 28))
-                cornerRadius = 12f * dens
+                setColor(Color.argb(198, 14, 17, 26))
+                cornerRadius = 999f
+                setStroke((0.9f * dens).roundToInt(), Color.argb(56, 255, 255, 255))
             }
             layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
                 topMargin = hitPadTop + (172f * dens).roundToInt()
+            }
+            setOnClickListener {
+                if (isOpen) {
+                    onHaptic("pop")
+                    onClockTap()
+                }
             }
         }
         addView(labelPill)
@@ -424,9 +475,9 @@ class ClockResizeOverlayView(
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setPadding((14f * dens).roundToInt(), (6f * dens).roundToInt(), (14f * dens).roundToInt(), (6f * dens).roundToInt())
             background = GradientDrawable().apply {
-                setColor(Color.argb(168, 0, 0, 0))
+                setColor(Color.argb(192, 14, 17, 26))
                 cornerRadius = 999f
-                setStroke((0.8f * dens).roundToInt(), Color.argb(72, 255, 255, 255))
+                setStroke((0.9f * dens).roundToInt(), Color.argb(66, 255, 255, 255))
             }
             layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT)
             setOnClickListener { onClick() }
@@ -459,7 +510,7 @@ class ClockResizeOverlayView(
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (dragDir != null) {
                         dragDir = null
-                        labelPill.text = "اسحب المقبض · أو اضغط تصغير"
+                        labelPill.text = "اضغط الساعة للتخصيص"
                         onCommit()
                         scheduleAutoClose()
                         onHaptic("tick")
@@ -486,7 +537,6 @@ class ClockResizeOverlayView(
             val dxOut = dx * if (dir.contains('w')) -2f else 2f
             val nextW = (startW + dxOut).coerceIn(80f, maxW)
             cfg.size = (fitSz * (nextW / max(40f, startW))).roundToInt().toFloat().coerceIn(56f, maxSizeAtUnitSy)
-            cfg.sx = 1.0f
         }
         val baseHAtSize = baseUnitH * (cfg.size / fitSz)
         val maxSyAtSize = (maxH / max(40f, baseHAtSize)).coerceIn(1.0f, 3.10f)
@@ -510,10 +560,11 @@ class ClockResizeOverlayView(
 
         val art = clockView.activeArtifact
         val baseSize = max(40f, art?.sizeDp ?: clockView.committedSize())
+        val baseSx = max(0.4f, art?.sx ?: clockView.committedSx())
         val baseSy = max(0.5f, clockView.committedSy())
         val curTextW = max(40f, art?.textWDp ?: (clockView.width / dens))
         val curTextH = max(40f, art?.textHDp ?: (clockView.height / dens))
-        val rawScaleX = (cfg.size / baseSize) * cfg.sx
+        val rawScaleX = (cfg.size / baseSize) * (cfg.sx / baseSx)
         val rawScaleY = (cfg.size / baseSize) * (cfg.sy / baseSy)
         val previewFit = min(1f, min(maxW / max(1f, curTextW * rawScaleX), maxH / max(1f, curTextH * rawScaleY)))
         clockView.updatePreviewTransform(rawScaleX * previewFit, rawScaleY * previewFit)
@@ -586,11 +637,22 @@ class ClockResizeOverlayView(
 
     fun open() {
         isOpen = true
+        animate().cancel()
         layoutAroundClock()
+        alpha = 0f
+        scaleX = 0.94f
+        scaleY = 0.94f
         visibility = VISIBLE
-        labelPill.text = "اسحب المقبض · أو اضغط تصغير"
+        labelPill.text = "اضغط الساعة للتخصيص"
+        animate()
+            .alpha(1f)
+            .scaleX(1f)
+            .scaleY(1f)
+            .setDuration(240L)
+            .setInterpolator(android.view.animation.OvershootInterpolator(1.05f))
+            .start()
         pulseAnim?.cancel()
-        pulseAnim = ValueAnimator.ofFloat(1f, 1.18f, 1f).apply {
+        pulseAnim = ValueAnimator.ofFloat(1f, 1.16f, 1f).apply {
             duration = 1600L
             repeatCount = ValueAnimator.INFINITE
             addUpdateListener { anim ->
@@ -606,7 +668,6 @@ class ClockResizeOverlayView(
     fun close() {
         if (!isOpen) return
         isOpen = false
-        visibility = GONE
         pulseAnim?.cancel()
         pulseAnim = null
         handler.removeCallbacks(autoCloseRunnable)
@@ -615,6 +676,22 @@ class ClockResizeOverlayView(
             clockView.clearPreviewTransform()
             onCommit()
         }
+        animate().cancel()
+        animate()
+            .alpha(0f)
+            .scaleX(0.96f)
+            .scaleY(0.96f)
+            .setDuration(170L)
+            .setInterpolator(android.view.animation.DecelerateInterpolator(1.6f))
+            .withEndAction {
+                if (!isOpen) {
+                    visibility = GONE
+                    alpha = 1f
+                    scaleX = 1f
+                    scaleY = 1f
+                }
+            }
+            .start()
     }
 
     fun scheduleAutoClose() {

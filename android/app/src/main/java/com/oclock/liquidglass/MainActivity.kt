@@ -145,6 +145,10 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private var pullAnimator: ValueAnimator? = null
     private var isWallOrClockPulling = false
     private var clockHoldPendingRunnable: Runnable? = null
+    private var wallHoldPendingRunnable: Runnable? = null
+    private var clockEditorStageFrac = 0f
+    private var wallEditorStageFrac = 0f
+    private var editorStageAnim: ValueAnimator? = null
     private var springTargetClock = 0f
     private var springTargetClockFit = 1f
     private var springTargetNp = 0f
@@ -238,9 +242,6 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private var geometryDebounce: Runnable? = null
     private var minuteTickRunnable: Runnable? = null
     private var weatherTempStr = "☁ −3°"
-    private var lastTapUpMs = 0L
-    private var lastTapX = 0f
-    private var lastTapY = 0f
     private var backCallback: OnBackInvokedCallback? = null
 
     private val timeReceiver = object : BroadcastReceiver() {
@@ -424,6 +425,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 resizeOverlay.post { resizeOverlay.layoutAroundClock() }
             }
             updateMusicAndNotificationsLayout(animated = hasInitialLayout)
+            if (clockEditorStageFrac > 0.01f) applyDepthAndLayerTransforms()
             refreshAllGlass()
         }
         attachClockLongPressAndPull(clockView)
@@ -481,6 +483,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     if (editorSheet.isOpen) editorSheet.syncFromConfig()
                 }
             },
+            onClockTap = { openClockCustomizerFromResize() },
             onHaptic = { k -> haptic(k) }
         ).apply {
             layoutParams = FrameLayout.LayoutParams(200, 200, Gravity.TOP or Gravity.LEFT)
@@ -679,7 +682,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         unlockedBar.addView(makeUnlockedPill("⚙ تخصيص") {
             haptic("tick")
             media.setSheetOpen(true)
-            editorSheet.open()
+            editorSheet.open(EditorSheetView.Mode.WALLPAPER)
         })
         phoneShell.addView(unlockedBar)
 
@@ -807,7 +810,15 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         phoneShell.addView(cameraOverlay)
 
         // 11. Editor Bottom Sheet (z = 10)
-        editorSheet = EditorSheetView(this, cfg, perf, this).apply {
+        editorSheet = EditorSheetView(
+            context = this,
+            cfg = cfg,
+            perf = perf,
+            backdrop = backdrop,
+            getRootShell = { phoneShell },
+            getFontTypeface = { fontId -> glyphRenderer.getTypeface(fontId) },
+            callbacks = this
+        ).apply {
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         }
         phoneShell.addView(editorSheet)
@@ -939,6 +950,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         (toastView.layoutParams as FrameLayout.LayoutParams).topMargin = safeTopPx + (52f * dens).roundToInt()
         passcodeOverlay.applySafeInsets(safeTopPx, safeBottomPx)
         musicLibraryOverlay.applySafeInsets(safeTopPx, safeBottomPx)
+        editorSheet.applySafeInsets(safeBottomPx)
         updateMusicAndNotificationsLayout(animated = animatedLayout && hasInitialLayout)
         hasInitialLayout = true
         phoneShell.requestLayout()
@@ -1150,11 +1162,57 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private fun cancelActivePullForPasscode() {
         clockHoldPendingRunnable?.let { mainHandler.removeCallbacks(it) }
         clockHoldPendingRunnable = null
+        wallHoldPendingRunnable?.let { mainHandler.removeCallbacks(it) }
+        wallHoldPendingRunnable = null
         pullAnimator?.cancel()
         pullAnimator = null
         isWallOrClockPulling = false
         if (pullY > 0.01f) {
             pullY = 0f
+        }
+    }
+
+    private fun openClockCustomizerFromResize() {
+        if (editorSheet.isOpen && editorSheet.currentMode == EditorSheetView.Mode.CLOCK) return
+        if (resizeOverlay.isOpen) resizeOverlay.close()
+        if (::notificationCenter.isInitialized && notificationCenter.expandFrac > 0.05f) {
+            notificationCenter.collapseScrollIfExpanded()
+        }
+        media.setSheetOpen(true)
+        editorSheet.open(EditorSheetView.Mode.CLOCK)
+    }
+
+    private fun openWallpaperCustomizer() {
+        if (editorSheet.isOpen && editorSheet.currentMode == EditorSheetView.Mode.WALLPAPER) return
+        if (resizeOverlay.isOpen) resizeOverlay.close()
+        if (::notificationCenter.isInitialized && notificationCenter.expandFrac > 0.05f) {
+            notificationCenter.collapseScrollIfExpanded()
+        }
+        haptic("heavy")
+        media.setSheetOpen(true)
+        editorSheet.open(EditorSheetView.Mode.WALLPAPER)
+    }
+
+    private fun animateEditorStage(clockTarget: Float, wallTarget: Float) {
+        val startClock = clockEditorStageFrac
+        val startWall = wallEditorStageFrac
+        editorStageAnim?.cancel()
+        if (abs(startClock - clockTarget) < 0.005f && abs(startWall - wallTarget) < 0.005f) {
+            clockEditorStageFrac = clockTarget
+            wallEditorStageFrac = wallTarget
+            applyDepthAndLayerTransforms()
+            return
+        }
+        editorStageAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 360L
+            interpolator = DecelerateInterpolator(2.2f)
+            addUpdateListener { a ->
+                val f = a.animatedValue as Float
+                clockEditorStageFrac = startClock + (clockTarget - startClock) * f
+                wallEditorStageFrac = startWall + (wallTarget - startWall) * f
+                applyDepthAndLayerTransforms()
+            }
+            start()
         }
     }
 
@@ -1168,6 +1226,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         var downY = 0f
         var holdFired = false
         var pulling = false
+        var downInResize = false
         val holdRunnable = Runnable {
             if (!holdFired && !pulling && !editorSheet.isOpen && !resizeOverlay.isOpen &&
                 !passcodeOverlay.isOpen && passcodeProgress <= 0.01f
@@ -1183,17 +1242,20 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         target.setOnTouchListener { _, ev ->
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    if (resizeOverlay.isOpen || isUnlocked ||
-                        passcodeOverlay.isOpen || passcodeProgress > 0.01f
-                    ) return@setOnTouchListener false
+                    if (isUnlocked || passcodeOverlay.isOpen || passcodeProgress > 0.01f || editorSheet.isOpen) {
+                        return@setOnTouchListener false
+                    }
                     pullAnimator?.cancel()
                     activePtrId = ev.getPointerId(0)
                     downX = ev.rawX
                     downY = ev.rawY
                     holdFired = false
                     pulling = false
+                    downInResize = resizeOverlay.isOpen
                     mainHandler.removeCallbacks(holdRunnable)
-                    mainHandler.postDelayed(holdRunnable, 360L)
+                    if (!downInResize) {
+                        mainHandler.postDelayed(holdRunnable, 360L)
+                    }
                     true
                 }
                 MotionEvent.ACTION_POINTER_DOWN -> {
@@ -1201,6 +1263,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    if (downInResize) return@setOnTouchListener true
                     if (passcodeOverlay.isOpen || passcodeProgress > 0.02f) {
                         mainHandler.removeCallbacks(holdRunnable)
                         if (pulling) {
@@ -1235,6 +1298,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     if (ev.getPointerId(ev.actionIndex) == activePtrId) {
                         mainHandler.removeCallbacks(holdRunnable)
                         activePtrId = MotionEvent.INVALID_POINTER_ID
+                        downInResize = false
                         if (pulling) {
                             pulling = false
                             isWallOrClockPulling = false
@@ -1243,9 +1307,28 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     }
                     true
                 }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                MotionEvent.ACTION_UP -> {
+                    mainHandler.removeCallbacks(holdRunnable)
+                    val idx = ev.findPointerIndex(activePtrId).let { if (it >= 0) it else 0 }
+                    val upX = ptrRawX(ev, idx)
+                    val upY = ptrRawY(ev, idx)
+                    activePtrId = MotionEvent.INVALID_POINTER_ID
+                    val wasResizeTap = downInResize && resizeOverlay.isOpen && hypot(upX - downX, upY - downY) < slop * 1.4f
+                    downInResize = false
+                    if (pulling) {
+                        pulling = false
+                        isWallOrClockPulling = false
+                        releasePullSpring()
+                    } else if (wasResizeTap) {
+                        haptic("pop")
+                        openClockCustomizerFromResize()
+                    }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
                     mainHandler.removeCallbacks(holdRunnable)
                     activePtrId = MotionEvent.INVALID_POINTER_ID
+                    downInResize = false
                     if (pulling) {
                         pulling = false
                         isWallOrClockPulling = false
@@ -1262,15 +1345,29 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private fun attachWallpaperPullAndDoubleTap() {
         val dens = resources.displayMetrics.density
         val slop = ViewConfiguration.get(this).scaledTouchSlop.toFloat()
+        val wobble = 14f * dens
         var activePtrId = MotionEvent.INVALID_POINTER_ID
         var dragging = false
         var startY = 0f
         var startX = 0f
+        var wallHoldFired = false
+        var wasResizeOpenOnDown = false
+
+        val wallHoldRunnable = Runnable {
+            if (!wallHoldFired && !dragging && !editorSheet.isOpen && !cameraOverlay.isOpen &&
+                !musicLibraryOverlay.isOpen && !passcodeOverlay.isOpen && passcodeProgress <= 0.01f
+            ) {
+                wallHoldFired = true
+                openWallpaperCustomizer()
+            }
+        }
+        wallHoldPendingRunnable = wallHoldRunnable
 
         wallView.setOnTouchListener { _, ev ->
             if (editorSheet.isOpen || cameraOverlay.isOpen ||
                 passcodeOverlay.isOpen || passcodeProgress > 0.01f
             ) {
+                mainHandler.removeCallbacks(wallHoldRunnable)
                 activePtrId = MotionEvent.INVALID_POINTER_ID
                 if (dragging) {
                     dragging = false
@@ -1288,17 +1385,28 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     startX = ev.rawX
                     startY = ev.rawY
                     dragging = false
+                    wallHoldFired = false
+                    wasResizeOpenOnDown = resizeOverlay.isOpen
+                    mainHandler.removeCallbacks(wallHoldRunnable)
+                    mainHandler.postDelayed(wallHoldRunnable, 560L)
                     true
                 }
-                MotionEvent.ACTION_POINTER_DOWN -> true
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    mainHandler.removeCallbacks(wallHoldRunnable)
+                    true
+                }
                 MotionEvent.ACTION_MOVE -> {
                     val idx = ev.findPointerIndex(activePtrId)
                     if (idx < 0) return@setOnTouchListener false
                     val dy = ptrRawY(ev, idx) - startY
                     val dx = ptrRawX(ev, idx) - startX
-                    if (!dragging && dy > slop && abs(dy) > abs(dx)) {
+                    if (!wallHoldFired && hypot(dx, dy) > wobble) {
+                        mainHandler.removeCallbacks(wallHoldRunnable)
+                    }
+                    if (!wallHoldFired && !dragging && dy > slop && abs(dy) > abs(dx)) {
                         dragging = true
                         isWallOrClockPulling = true
+                        mainHandler.removeCallbacks(wallHoldRunnable)
                         if (resizeOverlay.isOpen) resizeOverlay.close()
                     }
                     if (dragging) {
@@ -1310,6 +1418,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 }
                 MotionEvent.ACTION_POINTER_UP -> {
                     if (ev.getPointerId(ev.actionIndex) == activePtrId) {
+                        mainHandler.removeCallbacks(wallHoldRunnable)
                         activePtrId = MotionEvent.INVALID_POINTER_ID
                         if (dragging) {
                             dragging = false
@@ -1320,34 +1429,21 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    val idx = ev.findPointerIndex(activePtrId).let { if (it >= 0) it else 0 }
-                    val upX = ptrRawX(ev, idx)
-                    val upY = ptrRawY(ev, idx)
+                    mainHandler.removeCallbacks(wallHoldRunnable)
                     activePtrId = MotionEvent.INVALID_POINTER_ID
                     if (dragging) {
                         dragging = false
                         isWallOrClockPulling = false
                         releasePullSpring()
-                    } else {
-                        val now = SystemClock.uptimeMillis()
-                        if (now - lastTapUpMs < 320L && hypot(upX - lastTapX, upY - lastTapY) < 42f * dens) {
-                            lastTapUpMs = 0L
-                            if (resizeOverlay.isOpen) resizeOverlay.close()
-                            if (::notificationCenter.isInitialized && notificationCenter.expandFrac > 0.05f) {
-                                notificationCenter.collapseScrollIfExpanded()
-                            }
-                            media.setSheetOpen(true)
-                            editorSheet.open()
-                        } else {
-                            lastTapUpMs = now
-                            lastTapX = upX
-                            lastTapY = upY
-                            if (resizeOverlay.isOpen) resizeOverlay.close()
+                    } else if (!wallHoldFired) {
+                        if (wasResizeOpenOnDown || resizeOverlay.isOpen) {
+                            resizeOverlay.close()
                         }
                     }
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
+                    mainHandler.removeCallbacks(wallHoldRunnable)
                     activePtrId = MotionEvent.INVALID_POINTER_ID
                     if (dragging) {
                         dragging = false
@@ -1380,13 +1476,17 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val clockLiftTravel = max(290f * dens, ncTravel + 64f * dens)
         val npLiftTravel = ncTravel + 52f * dens
 
-        val lockOverlayAlpha = if (isUnlocked) 0f else (1f - passFadeT) * (1f - unlockedFrac)
+        val anyEditStage = max(clockEditorStageFrac, wallEditorStageFrac).coerceIn(0f, 1f)
+        val baseLockAlpha = if (isUnlocked) 0f else (1f - passFadeT) * (1f - unlockedFrac)
+        val lockOverlayAlpha = (baseLockAlpha * (1f - anyEditStage)).coerceIn(0f, 1f)
+        val clockStageAlpha = ((1f - clockFade) * max(baseLockAlpha, anyEditStage) * (1f - passFadeT)).coerceIn(0f, 1f)
+        val toplineStageAlpha = ((1f - fastFade) * max(baseLockAlpha, anyEditStage) * (1f - passFadeT)).coerceIn(0f, 1f)
         val lockScaleMult = 1f - 0.055f * passcodeProgress - 0.04f * unlockedFrac
-        val fullyUnlocked = isUnlocked || unlockedFrac >= 0.995f
+        val fullyUnlocked = (isUnlocked || unlockedFrac >= 0.995f) && anyEditStage < 0.01f
         val hideLockChrome = if (fullyUnlocked || passFadeT >= 0.995f) View.INVISIBLE else View.VISIBLE
 
         // Keep wallpaper & foreground depth subject 100% locked together during notification scroll so depth cutout stays intact!
-        val wallZoom = 1f + yDp * 0.00028f + passcodeProgress * 0.015f
+        val wallZoom = (1f + yDp * 0.00028f + passcodeProgress * 0.015f) * (1f - 0.012f * wallEditorStageFrac)
         if (!isDepthRevealAnimating) {
             wallView.scaleX = wallZoom
             wallView.scaleY = wallZoom
@@ -1396,30 +1496,56 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             subjectView.alpha = 1f
         }
 
-        val clockLift = clockRestOffset + pullEff - clockLiftTravel * liftLead
         val artClock = clockView.activeArtifact
         val inkTopPx = ((artClock?.inkTopDp ?: 18f) * dens) * max(0.35f, clockView.scaleY)
-        clockContainer.visibility = hideLockChrome
+        var stageOffsetY = 0f
+        var stageFit = 1f
+        if (clockEditorStageFrac > 0.001f) {
+            val shellHPx = (phoneShell.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels).toFloat()
+            val sheetHPx = if (::editorSheet.isInitialized) editorSheet.currentSheetHeightPx().toFloat() else shellHPx * 0.44f
+            val stageTop = safeTopPx + 74f * dens
+            val stageBot = max(stageTop + 110f * dens, shellHPx - sheetHPx - safeBottomPx - 18f * dens)
+            val stageH = max(90f * dens, stageBot - stageTop)
+
+            val rawViewH = if (clockView.height > 0) clockView.height.toFloat() else (artClock?.hDp ?: 210f) * dens
+            val inkBotInCont = ((artClock?.inkBottomDp ?: max(48f, rawViewH / dens - 18f)) * dens) * max(0.35f, clockView.scaleY)
+            val inkH = max(40f * dens, inkBotInCont - inkTopPx)
+            val rawViewW = if (clockView.width > 0) clockView.width.toFloat() else (artClock?.wDp ?: 260f) * dens
+            val inkW = max(60f * dens, (((artClock?.inkRightDp ?: (rawViewW / dens - 18f)) - (artClock?.inkLeftDp ?: 18f)) * dens) * max(0.35f, clockView.scaleX))
+            val maxStageW = max(140f * dens, (phoneShell.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels) - 32f * dens)
+
+            stageFit = min(1f, min((stageH * 0.92f) / inkH, maxStageW / inkW)).coerceIn(0.45f, 1f)
+            val clockNaturalTop = safeTopPx + ((78f + cfg.clockY) * dens)
+            val natInkTop = clockNaturalTop + inkTopPx
+            val scaledInkH = inkH * stageFit
+            val clampedInkTop = natInkTop.coerceIn(stageTop, max(stageTop, stageBot - scaledInkH))
+            stageOffsetY = clampedInkTop - natInkTop
+        }
+
+        val effClockRest = clockRestOffset * (1f - clockEditorStageFrac) + stageOffsetY * clockEditorStageFrac
+        val effFitScale = clockFitScale * (1f - clockEditorStageFrac) + stageFit * clockEditorStageFrac
+        val clockLift = effClockRest + pullEff - clockLiftTravel * liftLead
+        clockContainer.visibility = if (clockStageAlpha > 0.01f && passFadeT < 0.995f) View.VISIBLE else View.INVISIBLE
         clockContainer.cameraDistance = 12000f * dens
         clockContainer.pivotX = clockContainer.width * 0.5f
         clockContainer.pivotY = inkTopPx + (clockContainer.height * 0.5f - inkTopPx) * liftLead
         clockContainer.translationY = clockLift
         clockContainer.rotationX = liftLead * 10f
-        val cScale = (1f - 0.11f * liftLead) * clockFitScale * lockScaleMult
+        val cScale = (1f - 0.11f * liftLead) * effFitScale * lockScaleMult
         if (!isDepthRevealAnimating) {
             clockContainer.scaleX = cScale
             clockContainer.scaleY = cScale
-            clockContainer.alpha = ((1f - clockFade) * lockOverlayAlpha).coerceIn(0f, 1f)
+            clockContainer.alpha = clockStageAlpha
         }
         clockView.pullOffsetYPx = clockLift
 
-        val toplineRest = if (clockRestOffset < 0f) max(clockRestOffset * 0.14f, -(3f * dens)) else clockRestOffset
-        toplineRow.visibility = hideLockChrome
+        val toplineRest = if (effClockRest < 0f) max(effClockRest * 0.14f, -(3f * dens)) else effClockRest
+        toplineRow.visibility = if (toplineStageAlpha > 0.01f && passFadeT < 0.995f) View.VISIBLE else View.INVISIBLE
         toplineRow.translationY = toplineRest + pullEff - (clockLiftTravel + 18f * dens) * liftLead
         val tScale = (1f - 0.08f * liftLead) * lockScaleMult
         toplineRow.scaleX = tScale
         toplineRow.scaleY = tScale
-        toplineRow.alpha = ((1f - fastFade) * lockOverlayAlpha).coerceIn(0f, 1f)
+        toplineRow.alpha = toplineStageAlpha
 
         npCard.cameraDistance = 12000f * dens
         npCard.translationY = npBaseTranslationY + pullEff * 0.6f + notifCouplingY - npLiftTravel * liftLead
@@ -1429,9 +1555,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         npCard.scaleY = mScale
         npCard.alpha = ((1f - fastFade) * lockOverlayAlpha).coerceIn(0f, 1f)
         if (npCard.visibility != View.GONE) {
-            npCard.visibility = if (hideLockChrome == View.INVISIBLE || !cfg.music) View.INVISIBLE else View.VISIBLE
+            npCard.visibility = if (hideLockChrome == View.INVISIBLE || !cfg.music || lockOverlayAlpha <= 0.01f) View.INVISIBLE else View.VISIBLE
         }
-        npCard.isClickable = cfg.music && exp < 0.12f && !isUnlocked && passcodeProgress < 0.1f
+        npCard.isClickable = cfg.music && exp < 0.12f && !isUnlocked && passcodeProgress < 0.1f && anyEditStage < 0.1f
         npCard.isFocusable = npCard.isClickable
 
         if (::notificationCenter.isInitialized) {
@@ -1440,17 +1566,17 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             notificationCenter.scaleY = lockScaleMult
             notificationCenter.alpha = lockOverlayAlpha.coerceIn(0f, 1f)
             if (notificationCenter.visibility != View.GONE) {
-                notificationCenter.visibility = if (hideLockChrome == View.INVISIBLE) View.INVISIBLE else View.VISIBLE
+                notificationCenter.visibility = if (hideLockChrome == View.INVISIBLE || lockOverlayAlpha <= 0.01f) View.INVISIBLE else View.VISIBLE
             }
         }
-        bottomRow.visibility = hideLockChrome
+        bottomRow.visibility = if (hideLockChrome == View.INVISIBLE || lockOverlayAlpha <= 0.01f) View.INVISIBLE else View.VISIBLE
         bottomRow.translationY = pullEff * 0.4f
         bottomRow.scaleX = lockScaleMult
         bottomRow.scaleY = lockScaleMult
         bottomRow.alpha = lockOverlayAlpha.coerceIn(0f, 1f)
 
         if (::unlockedBar.isInitialized) {
-            val uAlpha = (unlockedFrac * (1f - passcodeProgress)).coerceIn(0f, 1f)
+            val uAlpha = (unlockedFrac * (1f - passcodeProgress) * (1f - anyEditStage)).coerceIn(0f, 1f)
             unlockedBar.visibility = if (uAlpha > 0.01f) View.VISIBLE else View.GONE
             unlockedBar.alpha = uAlpha
             unlockedBar.translationY = (1f - unlockedFrac) * 18f * dens
@@ -2191,6 +2317,15 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     // ─────────────── EditorCallbacks ───────────────
     override fun onClose() {
         media.setSheetOpen(false)
+        animateEditorStage(clockTarget = 0f, wallTarget = 0f)
+    }
+
+    override fun onModeChanged(mode: EditorSheetView.Mode) {
+        if (mode == EditorSheetView.Mode.CLOCK) {
+            animateEditorStage(clockTarget = 1f, wallTarget = 0f)
+        } else {
+            animateEditorStage(clockTarget = 0f, wallTarget = 1f)
+        }
     }
 
     override fun onFontChanged(fontId: String) {
@@ -2202,15 +2337,17 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     override fun onGeometryPreview(sizeChanged: Boolean, stretchChanged: Boolean, yChanged: Boolean) {
         if (yChanged) {
             layoutScreenPositions(animatedLayout = true)
+            if (clockEditorStageFrac > 0.01f) applyDepthAndLayerTransforms()
         } else {
             val (maxW, maxTextH) = computeClockLimitsDp()
             val art = clockView.activeArtifact
             val baseSize = max(40f, art?.sizeDp ?: clockView.committedSize())
+            val baseSx = max(0.4f, clockView.committedSx())
             val baseSy = max(0.5f, clockView.committedSy())
             val curTextW = max(40f, art?.textWDp ?: (clockView.width / resources.displayMetrics.density))
             val curTextH = max(40f, art?.textHDp ?: (clockView.height / resources.displayMetrics.density))
-            val rawScaleX = cfg.size / baseSize
-            val rawScaleY = rawScaleX * (cfg.sy / baseSy)
+            val rawScaleX = (cfg.size / baseSize) * (cfg.sx / baseSx)
+            val rawScaleY = (cfg.size / baseSize) * (cfg.sy / baseSy)
             val previewFit = min(
                 1f,
                 min(maxW / max(1f, curTextW * rawScaleX), maxTextH / max(1f, curTextH * rawScaleY))
@@ -2219,6 +2356,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             if (sizeChanged || stretchChanged) {
                 updateMusicAndNotificationsLayout(animated = true)
             }
+            if (clockEditorStageFrac > 0.01f) applyDepthAndLayerTransforms()
         }
         geometryDebounce?.let { mainHandler.removeCallbacks(it) }
         geometryDebounce = Runnable {
@@ -2570,6 +2708,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     override fun onDestroy() {
         super.onDestroy()
         cancelDepthActivationFlow()
+        editorStageAnim?.cancel()
+        clockHoldPendingRunnable?.let { mainHandler.removeCallbacks(it) }
+        wallHoldPendingRunnable?.let { mainHandler.removeCallbacks(it) }
         springRunning = false
         Choreographer.getInstance().removeFrameCallback(layoutSpringCallback)
         if (Build.VERSION.SDK_INT >= 33 && backCallback != null) {

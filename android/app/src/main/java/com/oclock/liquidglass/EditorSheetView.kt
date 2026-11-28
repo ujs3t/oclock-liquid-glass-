@@ -1,13 +1,15 @@
 package com.oclock.liquidglass
 
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.Context
-import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.text.InputType
+import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -31,11 +33,17 @@ class EditorSheetView(
     context: Context,
     private val cfg: LockConfig,
     private val perf: PerfMonitor,
+    private val backdrop: LiquidGlassShaders.BackdropState,
+    private val getRootShell: () -> View?,
+    private val getFontTypeface: (String) -> Typeface,
     private val callbacks: EditorCallbacks
 ) : FrameLayout(context) {
 
+    enum class Mode { CLOCK, WALLPAPER }
+
     interface EditorCallbacks {
         fun onClose()
+        fun onModeChanged(mode: Mode)
         fun onFontChanged(fontId: String)
         fun onGeometryPreview(sizeChanged: Boolean, stretchChanged: Boolean, yChanged: Boolean)
         fun onGeometryCommit()
@@ -64,20 +72,27 @@ class EditorSheetView(
     }
 
     private val dens = resources.displayMetrics.density
-    private val sheetCard: LinearLayout
+    private val sheetCard: GlassSheetCard
+    private val titleView: TextView
+    private val switchModeBtn: GlassPillButton
+    private val doneBtn: GlassPillButton
     private val scrollView: ScrollView
+    private val clockBody: LinearLayout
+    private val wallBody: LinearLayout
 
-    // Dynamic widgets updated by sync()
-    private val fontBtns = HashMap<String, TextView>()
+    // Clock customizer controls
+    private lateinit var fontScroll: HorizontalScrollView
+    private val fontBtns = HashMap<String, GlassFontChip>()
     private lateinit var sizeSeek: SeekBar
     private lateinit var sizeVal: TextView
     private lateinit var stretchSeek: SeekBar
     private lateinit var stretchVal: TextView
+    private lateinit var widthSeek: SeekBar
+    private lateinit var widthVal: TextView
     private lateinit var ySeek: SeekBar
     private lateinit var yVal: TextView
-    private lateinit var engineBadge: TextView
-    private lateinit var fmt12Btn: TextView
-    private lateinit var fmt24Btn: TextView
+    private lateinit var fmt12Btn: GlassPillButton
+    private lateinit var fmt24Btn: GlassPillButton
 
     private val colorSwatches = HashMap<String, View>()
     private lateinit var proSwatch: View
@@ -86,10 +101,6 @@ class EditorSheetView(
     private lateinit var toneSeek: SeekBar
     private lateinit var opacitySeek: SeekBar
     private lateinit var opacityVal: TextView
-
-    private val wallThumbs = HashMap<String, FrameLayout>()
-    private lateinit var aiDepthBtn: TextView
-    private lateinit var aiDepthStatus: TextView
 
     private lateinit var inOpSeek: SeekBar
     private lateinit var inOpVal: TextView
@@ -101,12 +112,17 @@ class EditorSheetView(
     private lateinit var inFadeVal: TextView
     private val innerSwatches = HashMap<String, View>()
 
-    private lateinit var togWeather: TextView
-    private lateinit var togMusic: TextView
-    private lateinit var togNotif: TextView
-    private lateinit var togDepth: TextView
-    private lateinit var togDnd: TextView
-    private lateinit var togPasscode: TextView
+    // Wallpaper & Lock customizer controls
+    private val wallThumbs = HashMap<String, FrameLayout>()
+    private lateinit var aiDepthBtn: GlassPillButton
+    private lateinit var aiDepthStatus: TextView
+
+    private lateinit var togWeather: GlassPillButton
+    private lateinit var togMusic: GlassPillButton
+    private lateinit var togNotif: GlassPillButton
+    private lateinit var togDepth: GlassPillButton
+    private lateinit var togDnd: GlassPillButton
+    private lateinit var togPasscode: GlassPillButton
 
     private lateinit var perfMeta: TextView
     private lateinit var perfStatus: TextView
@@ -117,93 +133,369 @@ class EditorSheetView(
 
     var isOpen = false
         private set
+    var currentMode: Mode = Mode.WALLPAPER
+        private set
+
+    private var safeBottomPx = (14f * dens).roundToInt()
     private var suppressSeek = false
     private var proHue = 210f
     private var proTone = 50f
+    private var heightAnim: ValueAnimator? = null
+    private var scrimAnim: ValueAnimator? = null
+    private var currentScrimAlpha = 0
 
     init {
         visibility = GONE
         layoutDirection = LAYOUT_DIRECTION_RTL
-        setBackgroundColor(Color.argb(64, 0, 0, 0))
+        setBackgroundColor(Color.TRANSPARENT)
         setOnClickListener { close() }
 
-        sheetCard = LinearLayout(context).apply {
+        sheetCard = GlassSheetCard(context).apply {
             orientation = LinearLayout.VERTICAL
             isClickable = true
             layoutDirection = LAYOUT_DIRECTION_RTL
             val padH = (14f * dens).roundToInt()
-            setPadding(padH, (8f * dens).roundToInt(), padH, (18f * dens).roundToInt())
-            background = GradientDrawable().apply {
-                setColor(0xF0121318.toInt())
-                cornerRadii = floatArrayOf(26f * dens, 26f * dens, 26f * dens, 26f * dens, 0f, 0f, 0f, 0f)
-                setStroke((1f * dens).roundToInt(), Color.argb(36, 255, 255, 255))
+            setPadding(padH, (6f * dens).roundToInt(), padH, (12f * dens).roundToInt())
+            clipToOutline = true
+            outlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(v: View, outline: android.graphics.Outline) {
+                    outline.setRoundRect(0, 0, v.width, v.height, 30f * dens)
+                }
             }
-            val maxH = (resources.displayMetrics.heightPixels * 0.72f).roundToInt()
-            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, maxH, Gravity.BOTTOM)
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, sheetHeightFor(Mode.WALLPAPER), Gravity.BOTTOM).apply {
+                val side = (8f * dens).roundToInt()
+                leftMargin = side
+                rightMargin = side
+                bottomMargin = safeBottomPx + (6f * dens).roundToInt()
+            }
         }
 
         // Grabber + swipe down dismiss
         val grabberWrap = FrameLayout(context).apply {
-            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, (22f * dens).roundToInt())
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, (18f * dens).roundToInt())
         }
         val grabber = View(context).apply {
             layoutParams = LayoutParams((36f * dens).roundToInt(), (4f * dens).roundToInt(), Gravity.CENTER)
             background = GradientDrawable().apply {
-                setColor(Color.argb(82, 255, 255, 255))
+                setColor(Color.argb(96, 255, 255, 255))
                 cornerRadius = 99f
             }
         }
         grabberWrap.addView(grabber)
         attachSwipeDismiss(grabberWrap)
 
-        // Header
+        // Sticky Liquid Glass Header
         val hdr = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = (6f * dens).roundToInt()
+                bottomMargin = (8f * dens).roundToInt()
             }
         }
-        val title = TextView(context).apply {
-            text = "تخصيص شاشة القفل"
+        titleView = TextView(context).apply {
+            text = "تخصيص الخلفية"
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16.5f)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
             layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
         }
-        val doneBtn = TextView(context).apply {
-            text = "تم"
-            setTextColor(0xFFB3DFFF.toInt())
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-            setPadding((14f * dens).roundToInt(), (6f * dens).roundToInt(), (14f * dens).roundToInt(), (6f * dens).roundToInt())
-            background = GradientDrawable().apply {
-                setColor(Color.argb(24, 255, 255, 255))
-                cornerRadius = 999f
+        switchModeBtn = GlassPillButton(context, "الساعة", radiusDp = 999f, isAccent = false) {
+            val next = if (currentMode == Mode.CLOCK) Mode.WALLPAPER else Mode.CLOCK
+            switchMode(next)
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, (32f * dens).roundToInt()).apply {
+                marginEnd = (6f * dens).roundToInt()
             }
-            setOnClickListener { close() }
         }
-        hdr.addView(title)
+        doneBtn = GlassPillButton(context, "تم", radiusDp = 999f, isAccent = true) {
+            close()
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, (32f * dens).roundToInt())
+        }
+        hdr.addView(titleView)
+        hdr.addView(switchModeBtn)
         hdr.addView(doneBtn)
         attachSwipeDismiss(hdr)
 
         scrollView = ScrollView(context).apply {
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f)
             isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_ALWAYS
         }
-        val body = LinearLayout(context).apply {
+        val bodyHost = FrameLayout(context).apply {
+            layoutParams = FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+        }
+        clockBody = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, 0, 0, (16f * dens).roundToInt())
+            setPadding(0, 0, 0, (12f * dens).roundToInt())
+            visibility = GONE
+        }
+        wallBody = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 0, 0, (12f * dens).roundToInt())
+            visibility = VISIBLE
         }
 
-        buildContent(body)
-        scrollView.addView(body)
+        buildClockBody(clockBody)
+        buildWallpaperBody(wallBody)
+
+        bodyHost.addView(clockBody)
+        bodyHost.addView(wallBody)
+        scrollView.addView(bodyHost)
+        scrollView.setOnScrollChangeListener { _, _, _, _, _ ->
+            invalidateGlassTree(sheetCard)
+        }
+
         sheetCard.addView(grabberWrap)
         sheetCard.addView(hdr)
         sheetCard.addView(scrollView)
         addView(sheetCard)
 
         syncFromConfig()
+    }
+
+    fun applySafeInsets(bottomPx: Int) {
+        safeBottomPx = bottomPx
+        val lp = sheetCard.layoutParams as LayoutParams
+        val targetBottom = safeBottomPx + (6f * dens).roundToInt()
+        if (lp.bottomMargin != targetBottom) {
+            lp.bottomMargin = targetBottom
+            sheetCard.layoutParams = lp
+        }
+    }
+
+    fun currentSheetHeightPx(): Int = sheetHeightFor(currentMode)
+
+    private fun sheetHeightFor(mode: Mode): Int {
+        val hPx = resources.displayMetrics.heightPixels
+        val minH = (if (mode == Mode.CLOCK) 295f else 345f) * dens
+        val maxH = (if (mode == Mode.CLOCK) 395f else 520f) * dens
+        val frac = if (mode == Mode.CLOCK) 0.44f else 0.55f
+        return (hPx * frac).coerceIn(minH, maxOf(minH, min(maxH, hPx * 0.70f))).roundToInt()
+    }
+
+    private fun computeShellOrigin(view: View): Pair<Float, Float> {
+        val rootShell = getRootShell()
+        var ox = view.x
+        var oy = view.y
+        var p = view.parent as? View
+        while (p != null && p !== rootShell) {
+            ox += p.x - p.scrollX
+            oy += p.y - p.scrollY
+            p = p.parent as? View
+        }
+        return ox to oy
+    }
+
+    private fun invalidateGlassTree(v: View) {
+        if (v is GlassPillButton || v is GlassFontChip || v is GlassSectionCard || v is GlassSheetCard) {
+            v.invalidate()
+        }
+        if (v is ViewGroup) {
+            for (i in 0 until v.childCount) {
+                invalidateGlassTree(v.getChildAt(i))
+            }
+        }
+    }
+
+    private inner class GlassSheetCard(context: Context) : LinearLayout(context) {
+        private val glassHelper = LiquidGlassCardHelper(
+            backdrop, perf, 30f, 24f, 16f, 1.44f, 0.24f, innerShadow = 0.16f, useBlurredBackdrop = true
+        )
+        init {
+            setWillNotDraw(false)
+        }
+        override fun onDraw(canvas: Canvas) {
+            val (ox, oy) = computeShellOrigin(this)
+            glassHelper.draw(this, canvas, Color.argb(198, 12, 14, 22), ox, oy)
+        }
+    }
+
+    private inner class GlassSectionCard(context: Context) : LinearLayout(context) {
+        private val glassHelper = LiquidGlassCardHelper(
+            backdrop, perf, 18f, 14f, 10f, 1.38f, 0.16f, innerShadow = 0.12f, useBlurredBackdrop = true
+        )
+        init {
+            orientation = VERTICAL
+            setWillNotDraw(false)
+            val p = (12f * dens).roundToInt()
+            setPadding(p, p, p, p)
+        }
+        override fun onDraw(canvas: Canvas) {
+            val (ox, oy) = computeShellOrigin(this)
+            glassHelper.draw(this, canvas, Color.argb(166, 18, 22, 34), ox, oy)
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private inner class GlassPillButton(
+        context: Context,
+        label: String,
+        radiusDp: Float = 13f,
+        private val isAccent: Boolean = false,
+        private val onClick: () -> Unit
+    ) : FrameLayout(context) {
+        private val glassHelper = LiquidGlassCardHelper(
+            backdrop, perf, radiusDp, 12f, 10f, 1.44f, 0.22f, innerShadow = 0.18f, useBlurredBackdrop = true
+        )
+        val tv: TextView
+        var selectedState = false
+            set(value) {
+                if (field == value) return
+                field = value
+                applyVisualState()
+            }
+
+        init {
+            setWillNotDraw(false)
+            isClickable = true
+            tv = TextView(context).apply {
+                text = label
+                gravity = Gravity.CENTER
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                setPadding((12f * dens).roundToInt(), (7f * dens).roundToInt(), (12f * dens).roundToInt(), (7f * dens).roundToInt())
+                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.CENTER)
+            }
+            addView(tv)
+            applyVisualState()
+
+            setOnTouchListener { _, ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        animate().cancel()
+                        animate().scaleX(0.93f).scaleY(0.93f).setDuration(85L).start()
+                        false
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        animate().cancel()
+                        animate().scaleX(1f).scaleY(1f).setDuration(280L)
+                            .setInterpolator(OvershootInterpolator(1.7f)).start()
+                        false
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        animate().cancel()
+                        animate().scaleX(1f).scaleY(1f).setDuration(200L).start()
+                        false
+                    }
+                    else -> false
+                }
+            }
+            setOnClickListener { onClick() }
+        }
+
+        private fun applyVisualState() {
+            val active = selectedState || isAccent
+            tv.setTextColor(if (active) 0xFFE0F2FE.toInt() else Color.argb(232, 255, 255, 255))
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val (ox, oy) = computeShellOrigin(this)
+            val bg = when {
+                selectedState -> Color.argb(166, 32, 92, 152)
+                isAccent -> Color.argb(160, 26, 84, 142)
+                else -> Color.argb(150, 24, 28, 42)
+            }
+            val sh = if (selectedState || isAccent) 0.34f else 0.22f
+            val inn = if (selectedState || isAccent) 0.28f else 0.17f
+            glassHelper.draw(this, canvas, bg, ox, oy, shadowOverride = sh, innerOverride = inn)
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private inner class GlassFontChip(
+        context: Context,
+        font: ClockFont,
+        private val onSelect: () -> Unit
+    ) : FrameLayout(context) {
+        private val glassHelper = LiquidGlassCardHelper(
+            backdrop, perf, 16f, 14f, 11f, 1.44f, 0.24f, innerShadow = 0.20f, useBlurredBackdrop = true
+        )
+        private val sampleTv: TextView
+        private val nameTv: TextView
+        var selectedState = false
+            set(value) {
+                if (field == value) return
+                field = value
+                applyFontVisuals()
+            }
+
+        init {
+            setWillNotDraw(false)
+            isClickable = true
+            layoutParams = LinearLayout.LayoutParams((72f * dens).roundToInt(), (66f * dens).roundToInt()).apply {
+                marginEnd = (8f * dens).roundToInt()
+            }
+            val stack = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+                setPadding((4f * dens).roundToInt(), (4f * dens).roundToInt(), (4f * dens).roundToInt(), (5f * dens).roundToInt())
+            }
+            sampleTv = TextView(context).apply {
+                text = "09"
+                gravity = Gravity.CENTER
+                typeface = getFontTypeface(font.id)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 23f)
+                includeFontPadding = false
+                layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f)
+            }
+            nameTv = TextView(context).apply {
+                text = font.label
+                gravity = Gravity.CENTER
+                maxLines = 1
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            }
+            stack.addView(sampleTv)
+            stack.addView(nameTv)
+            addView(stack)
+            applyFontVisuals()
+
+            setOnTouchListener { _, ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        animate().cancel()
+                        animate().scaleX(0.92f).scaleY(0.92f).setDuration(85L).start()
+                        false
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        animate().cancel()
+                        animate().scaleX(1f).scaleY(1f).setDuration(280L)
+                            .setInterpolator(OvershootInterpolator(1.8f)).start()
+                        false
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        animate().cancel()
+                        animate().scaleX(1f).scaleY(1f).setDuration(200L).start()
+                        false
+                    }
+                    else -> false
+                }
+            }
+            setOnClickListener { onSelect() }
+        }
+
+        private fun applyFontVisuals() {
+            sampleTv.setTextColor(if (selectedState) 0xFFE0F2FE.toInt() else Color.WHITE)
+            nameTv.setTextColor(if (selectedState) 0xFFB3DFFF.toInt() else Color.argb(165, 255, 255, 255))
+            foreground = if (selectedState) GradientDrawable().apply {
+                cornerRadius = 16f * dens
+                setStroke((1.8f * dens).roundToInt(), 0xFFB3DFFF.toInt())
+            } else null
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val (ox, oy) = computeShellOrigin(this)
+            val bg = if (selectedState) Color.argb(166, 32, 92, 152) else Color.argb(150, 24, 28, 42)
+            val sh = if (selectedState) 0.34f else 0.22f
+            val inn = if (selectedState) 0.28f else 0.16f
+            glassHelper.draw(this, canvas, bg, ox, oy, shadowOverride = sh, innerOverride = inn)
+        }
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -217,15 +509,19 @@ class EditorSheetView(
                     dy = max(0f, ev.rawY - y0)
                     if (dy > 6f * dens) {
                         sheetCard.translationY = dy
+                        sheetCard.invalidate()
                         true
                     } else false
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (dy > 68f * dens) {
+                    if (dy > 64f * dens) {
                         close()
                         true
                     } else {
-                        sheetCard.animate().translationY(0f).setDuration(260L).setInterpolator(OvershootInterpolator(0.9f)).start()
+                        sheetCard.animate().translationY(0f).setDuration(250L)
+                            .setInterpolator(OvershootInterpolator(0.9f))
+                            .setUpdateListener { sheetCard.invalidate() }
+                            .start()
                         false
                     }
                 }
@@ -234,121 +530,34 @@ class EditorSheetView(
         }
     }
 
-    private fun buildContent(body: LinearLayout) {
-        // 1. Fonts
+    // ─────────────── Clock Customizer Sheet Content ───────────────
+    private fun buildClockBody(body: LinearLayout) {
+        // 1. iPhone Horizontal Font Strip
         body.addView(secHeader("الخط"))
         val fontRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
+            layoutDirection = LAYOUT_DIRECTION_LTR
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        fontScroll = HorizontalScrollView(context).apply {
+            isHorizontalScrollBarEnabled = false
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+            setOnScrollChangeListener { _, _, _, _, _ -> invalidateGlassTree(this) }
         }
         for (f in ClockFont.entries) {
-            val btn = TextView(context).apply {
-                text = f.label
-                gravity = Gravity.CENTER
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-                setPadding(0, (10f * dens).roundToInt(), 0, (10f * dens).roundToInt())
-                layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
-                    marginEnd = (6f * dens).roundToInt()
-                }
-                setOnClickListener {
-                    cfg.font = f.id
-                    callbacks.onFontChanged(f.id)
-                    syncFromConfig()
-                }
-            }
-            fontBtns[f.id] = btn
-            fontRow.addView(btn)
-        }
-        body.addView(fontRow)
-
-        // 2. Size slider
-        val (sHdr, sValTv) = secHeaderWithValue("حجم الساعة", "121%")
-        sizeVal = sValTv
-        body.addView(sHdr)
-        sizeSeek = makeSeekBar(56, 420) { v, fromUser ->
-            if (!fromUser || suppressSeek) return@makeSeekBar
-            cfg.size = v.toFloat()
-            sizeVal.text = "${((cfg.size / 172f) * 100f).roundToInt()}%"
-            callbacks.onGeometryPreview(true, false, false)
-        }
-        body.addView(sizeSeek)
-
-        // 3. Stretch slider (100%..310%)
-        val (stHdr, stValTv) = secHeaderWithValue("طول الساعة (بدون تشويه الوزن)", "168%")
-        stretchVal = stValTv
-        body.addView(stHdr)
-        stretchSeek = makeSeekBar(100, 310) { v, fromUser ->
-            if (!fromUser || suppressSeek) return@makeSeekBar
-            cfg.sy = v / 100f
-            stretchVal.text = "$v%"
-            callbacks.onGeometryPreview(false, true, false)
-        }
-        body.addView(stretchSeek)
-
-        // 4. Y Position slider (-20..80) -> SeekBar 0..100 (offset -20)
-        val (yHdr, yValTv) = secHeaderWithValue("موضع الساعة", "0px")
-        yVal = yValTv
-        body.addView(yHdr)
-        ySeek = makeSeekBar(0, 100) { v, fromUser ->
-            if (!fromUser || suppressSeek) return@makeSeekBar
-            cfg.clockY = (v - 20).toFloat()
-            yVal.text = "${cfg.clockY.roundToInt()}px"
-            callbacks.onGeometryPreview(false, false, true)
-        }
-        body.addView(ySeek)
-
-        body.addView(TextView(context).apply {
-            text = "اسحب للأسفل على الخلفية، أو اضغط مطوّلاً على الساعة لتغيير حجمها وسحب أضلاعها بحرية"
-            setTextColor(Color.argb(128, 255, 255, 255))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            setPadding(0, (4f * dens).roundToInt(), 0, (4f * dens).roundToInt())
-        })
-        engineBadge = TextView(context).apply {
-            text = if (LiquidGlassShaders.isGpuAgslAvailable()) "محرك حساب الزجاج: AGSL GPU + C++ مباشر" else "محرك حساب الزجاج: Native C++ مباشر"
-            setTextColor(0xFFB3DFFF.toInt())
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-        }
-        body.addView(engineBadge)
-
-        // 5. Time Format
-        body.addView(secHeader("نظام الساعة"))
-        val fmtRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
-        }
-        fmt12Btn = TextView(context).apply {
-            text = "12 ساعة"
-            gravity = Gravity.CENTER
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            setPadding(0, (9f * dens).roundToInt(), 0, (9f * dens).roundToInt())
-            layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = (8f * dens).roundToInt() }
-            setOnClickListener {
-                cfg.hour24 = false
-                cfg.leadingZero = false
-                callbacks.onFormatToggled()
+            val chip = GlassFontChip(context, f) {
+                cfg.font = f.id
+                callbacks.onFontChanged(f.id)
                 syncFromConfig()
             }
+            fontBtns[f.id] = chip
+            fontRow.addView(chip)
         }
-        fmt24Btn = TextView(context).apply {
-            text = "24 ساعة"
-            gravity = Gravity.CENTER
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            setPadding(0, (9f * dens).roundToInt(), 0, (9f * dens).roundToInt())
-            layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener {
-                cfg.hour24 = true
-                cfg.leadingZero = true
-                callbacks.onFormatToggled()
-                syncFromConfig()
-            }
-        }
-        fmtRow.addView(fmt12Btn)
-        fmtRow.addView(fmt24Btn)
-        body.addView(fmtRow)
+        fontScroll.addView(fontRow)
+        body.addView(fontScroll)
 
-        // 6. Clock Color & Opacity + Pro Color Card
-        body.addView(secHeader("لون الساعة وشفافية الزجاج"))
+        // 2. Quick Color Swatch Strip
+        body.addView(secHeader("اللون"))
         val colRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutDirection = LAYOUT_DIRECTION_LTR
@@ -375,26 +584,92 @@ class EditorSheetView(
         colScroll.addView(colRow)
         body.addView(colScroll)
 
-        // Pro Color Palette card
-        val proCard = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            val p = (11f * dens).roundToInt()
-            setPadding(p, p, p, p)
-            background = GradientDrawable().apply {
-                setColor(Color.argb(14, 255, 255, 255))
-                cornerRadius = 14f * dens
-                setStroke((1f * dens).roundToInt(), Color.argb(20, 255, 255, 255))
-            }
-            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                topMargin = (10f * dens).roundToInt()
+        // 3. Time Format (12h / 24h)
+        body.addView(secHeader("نظام الساعة"))
+        val fmtRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+        }
+        fmt12Btn = GlassPillButton(context, "12 ساعة", radiusDp = 12f) {
+            cfg.hour24 = false
+            cfg.leadingZero = false
+            callbacks.onFormatToggled()
+            syncFromConfig()
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = (8f * dens).roundToInt()
             }
         }
+        fmt24Btn = GlassPillButton(context, "24 ساعة", radiusDp = 12f) {
+            cfg.hour24 = true
+            cfg.leadingZero = true
+            callbacks.onFormatToggled()
+            syncFromConfig()
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+        }
+        fmtRow.addView(fmt12Btn)
+        fmtRow.addView(fmt24Btn)
+        body.addView(fmtRow)
+
+        // 4. Geometry Card (الحجم · الطول · العرض · الموضع)
+        body.addView(secHeader("الأبعاد"))
+        val dimCard = GlassSectionCard(context)
+
+        val (sHdr, sValTv) = secHeaderWithValue("الحجم", "121%", compact = true)
+        sizeVal = sValTv
+        dimCard.addView(sHdr)
+        sizeSeek = makeSeekBar(56, 420) { v, fromUser ->
+            if (!fromUser || suppressSeek) return@makeSeekBar
+            cfg.size = v.toFloat()
+            sizeVal.text = "${((cfg.size / 172f) * 100f).roundToInt()}%"
+            callbacks.onGeometryPreview(true, false, false)
+        }
+        dimCard.addView(sizeSeek)
+
+        val (stHdr, stValTv) = secHeaderWithValue("الطول", "168%", compact = true)
+        stretchVal = stValTv
+        dimCard.addView(stHdr)
+        stretchSeek = makeSeekBar(100, 310) { v, fromUser ->
+            if (!fromUser || suppressSeek) return@makeSeekBar
+            cfg.sy = v / 100f
+            stretchVal.text = "$v%"
+            callbacks.onGeometryPreview(false, true, false)
+        }
+        dimCard.addView(stretchSeek)
+
+        val (wHdr, wValTv) = secHeaderWithValue("العرض", "100%", compact = true)
+        widthVal = wValTv
+        dimCard.addView(wHdr)
+        widthSeek = makeSeekBar(60, 160) { v, fromUser ->
+            if (!fromUser || suppressSeek) return@makeSeekBar
+            cfg.sx = v / 100f
+            widthVal.text = "$v%"
+            callbacks.onGeometryPreview(false, true, false)
+        }
+        dimCard.addView(widthSeek)
+
+        val (yHdr, yValTv) = secHeaderWithValue("الموضع", "0px", compact = true)
+        yVal = yValTv
+        dimCard.addView(yHdr)
+        ySeek = makeSeekBar(0, 100) { v, fromUser ->
+            if (!fromUser || suppressSeek) return@makeSeekBar
+            cfg.clockY = (v - 20).toFloat()
+            yVal.text = "${cfg.clockY.roundToInt()}px"
+            callbacks.onGeometryPreview(false, false, true)
+        }
+        dimCard.addView(ySeek)
+        body.addView(dimCard)
+
+        // 5. Pro Color & Glass Opacity Card
+        body.addView(secHeader("ألوان مخصصة والشفافية"))
+        val proCard = GlassSectionCard(context)
         val proTop = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
         val proTitle = TextView(context).apply {
-            text = "لوحة الألوان الاحترافية"
+            text = "اللون المخصص"
             setTextColor(Color.argb(215, 255, 255, 255))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
@@ -410,13 +685,11 @@ class EditorSheetView(
             }
         }
         proSwatch = View(context).apply {
-            val s = (28f * dens).roundToInt()
+            val s = (26f * dens).roundToInt()
             layoutParams = LinearLayout.LayoutParams(s, s)
             setOnClickListener { openHexColorDialog() }
         }
-        proTop.addView(proTitle)
-        proTop.addView(proHex)
-        proTop.addView(proSwatch)
+        proTop.addView(proTitle); proTop.addView(proHex); proTop.addView(proSwatch)
         proCard.addView(proTop)
 
         proCard.addView(miniSliderLabel("درجة اللون"))
@@ -430,7 +703,7 @@ class EditorSheetView(
         }.apply { layoutDirection = LAYOUT_DIRECTION_LTR }
         proCard.addView(hueSeek)
 
-        proCard.addView(miniSliderLabel("السطوع / النغمة"))
+        proCard.addView(miniSliderLabel("السطوع"))
         toneSeek = makeSeekBar(0, 100) { v, fromUser ->
             if (!fromUser || suppressSeek) return@makeSeekBar
             proTone = v.toFloat()
@@ -442,7 +715,7 @@ class EditorSheetView(
         }.apply { layoutDirection = LAYOUT_DIRECTION_LTR }
         proCard.addView(toneSeek)
 
-        val (opHdr, opTv) = secHeaderWithValue("شفافية لون الساعة", "14%")
+        val (opHdr, opTv) = secHeaderWithValue("شفافية لون الساعة", "14%", compact = true)
         opacityVal = opTv
         proCard.addView(opHdr)
         opacitySeek = makeSeekBar(0, 100) { v, fromUser ->
@@ -455,9 +728,91 @@ class EditorSheetView(
         proCard.addView(opacitySeek)
         body.addView(proCard)
 
-        // 7. Wallpapers + AI Depth
-        body.addView(secHeader("الخلفية وتأثير العمق (AI مجاني)"))
-        val wallScroll = HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false }
+        // 6. Inner White Shadow Card
+        body.addView(secHeader("الظل الداخلي"))
+        val innerCard = GlassSectionCard(context)
+
+        val (ioH, ioV) = secHeaderWithValue("الشفافية", "100%", compact = true)
+        inOpVal = ioV
+        innerCard.addView(ioH)
+        inOpSeek = makeSeekBar(0, 100) { v, fromUser ->
+            if (!fromUser || suppressSeek) return@makeSeekBar
+            cfg.innerOpacity = v
+            inOpVal.text = "$v%"
+            callbacks.onInnerShadowChanged()
+        }
+        innerCard.addView(inOpSeek)
+
+        val (itH, itV) = secHeaderWithValue("السُمك", "0.3", compact = true)
+        inThVal = itV
+        innerCard.addView(itH)
+        inThSeek = makeSeekBar(0, 80) { v, fromUser ->
+            if (!fromUser || suppressSeek) return@makeSeekBar
+            cfg.innerThickness = v / 10f
+            inThVal.text = "%.1f".format(cfg.innerThickness)
+            callbacks.onInnerShadowChanged()
+        }
+        innerCard.addView(inThSeek)
+
+        val (iaH, iaV) = secHeaderWithValue("اتجاه الظل", "59°", compact = true)
+        inAngVal = iaV
+        innerCard.addView(iaH)
+        inAngSeek = makeSeekBar(0, 360) { v, fromUser ->
+            if (!fromUser || suppressSeek) return@makeSeekBar
+            cfg.innerAngle = v.toFloat()
+            inAngVal.text = "$v°"
+            callbacks.onInnerShadowChanged()
+        }
+        innerCard.addView(inAngSeek)
+
+        val (ifH, ifV) = secHeaderWithValue("نسبة التلاشي", "100%", compact = true)
+        inFadeVal = ifV
+        innerCard.addView(ifH)
+        inFadeSeek = makeSeekBar(0, 100) { v, fromUser ->
+            if (!fromUser || suppressSeek) return@makeSeekBar
+            cfg.innerFade = v
+            inFadeVal.text = "$v%"
+            callbacks.onInnerShadowChanged()
+        }
+        innerCard.addView(inFadeSeek)
+
+        val inColScroll = HorizontalScrollView(context).apply {
+            isHorizontalScrollBarEnabled = false
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                topMargin = (8f * dens).roundToInt()
+            }
+        }
+        val inColRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutDirection = LAYOUT_DIRECTION_LTR
+        }
+        for (cHex in AppConstants.INNER_COLORS) {
+            val dot = View(context).apply {
+                val s = (26f * dens).roundToInt()
+                layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = (8f * dens).roundToInt() }
+                setOnClickListener {
+                    cfg.innerColor = cHex
+                    callbacks.onInnerShadowChanged()
+                    syncFromConfig()
+                }
+            }
+            innerSwatches[cHex] = dot
+            inColRow.addView(dot)
+        }
+        inColScroll.addView(inColRow)
+        innerCard.addView(inColScroll)
+        body.addView(innerCard)
+    }
+
+    // ─────────────── Wallpaper, Depth & Lock-Screen Sheet Content ───────────────
+    private fun buildWallpaperBody(body: LinearLayout) {
+        // 1. Wallpapers + Depth
+        body.addView(secHeader("الخلفية والعمق"))
+        val wallCard = GlassSectionCard(context)
+        val wallScroll = HorizontalScrollView(context).apply {
+            isHorizontalScrollBarEnabled = false
+            setOnScrollChangeListener { _, _, _, _, _ -> invalidateGlassTree(this) }
+        }
         val wallRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutDirection = LAYOUT_DIRECTION_LTR
@@ -490,100 +845,40 @@ class EditorSheetView(
             wallRow.addView(box)
         }
         wallRow.addView(makeChipBtn("صور جهازي") { callbacks.onPickCustomWall() })
-        aiDepthBtn = makeChipBtn("عزل بالذكاء AI", accent = true) { callbacks.onExtractAiDepth() }
+        aiDepthBtn = makeChipBtn("عزل AI", accent = true) { callbacks.onExtractAiDepth() }
         wallRow.addView(aiDepthBtn)
         wallRow.addView(makeChipBtn("صورة أمام الساعة") { callbacks.onPickManualSubject() })
         wallScroll.addView(wallRow)
-        body.addView(wallScroll)
+        wallCard.addView(wallScroll)
+
+        togDepth = GlassPillButton(context, "تأثير العمق", radiusDp = 12f) {
+            callbacks.onToggleDepth()
+            syncFromConfig()
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                topMargin = (10f * dens).roundToInt()
+            }
+        }
+        wallCard.addView(togDepth)
 
         aiDepthStatus = TextView(context).apply {
-            text = "جاهز: عزل مجاني غير محدود بالذكاء الاصطناعي"
-            setTextColor(Color.argb(145, 255, 255, 255))
+            text = ""
+            visibility = View.GONE
+            setTextColor(Color.argb(175, 255, 255, 255))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            setPadding(0, (5f * dens).roundToInt(), 0, 0)
+            setPadding(0, (6f * dens).roundToInt(), 0, 0)
         }
-        body.addView(aiDepthStatus)
+        wallCard.addView(aiDepthStatus)
+        body.addView(wallCard)
 
-        // 8. Inner Shadow
-        body.addView(secHeader("شادو الساعة الداخلي (الساعة فقط)"))
-        val (ioH, ioV) = secHeaderWithValue("الشفافية", "100%")
-        inOpVal = ioV
-        body.addView(ioH)
-        inOpSeek = makeSeekBar(0, 100) { v, fromUser ->
-            if (!fromUser || suppressSeek) return@makeSeekBar
-            cfg.innerOpacity = v
-            inOpVal.text = "$v%"
-            callbacks.onInnerShadowChanged()
-        }
-        body.addView(inOpSeek)
-
-        val (itH, itV) = secHeaderWithValue("السُمك", "0.3")
-        inThVal = itV
-        body.addView(itH)
-        inThSeek = makeSeekBar(0, 80) { v, fromUser ->
-            if (!fromUser || suppressSeek) return@makeSeekBar
-            cfg.innerThickness = v / 10f
-            inThVal.text = "%.1f".format(cfg.innerThickness)
-            callbacks.onInnerShadowChanged()
-        }
-        body.addView(inThSeek)
-
-        val (iaH, iaV) = secHeaderWithValue("اتجاه الظل", "59°")
-        inAngVal = iaV
-        body.addView(iaH)
-        inAngSeek = makeSeekBar(0, 360) { v, fromUser ->
-            if (!fromUser || suppressSeek) return@makeSeekBar
-            cfg.innerAngle = v.toFloat()
-            inAngVal.text = "$v°"
-            callbacks.onInnerShadowChanged()
-        }
-        body.addView(inAngSeek)
-
-        val (ifH, ifV) = secHeaderWithValue("نسبة التلاشي", "100%")
-        inFadeVal = ifV
-        body.addView(ifH)
-        inFadeSeek = makeSeekBar(0, 100) { v, fromUser ->
-            if (!fromUser || suppressSeek) return@makeSeekBar
-            cfg.innerFade = v
-            inFadeVal.text = "$v%"
-            callbacks.onInnerShadowChanged()
-        }
-        body.addView(inFadeSeek)
-
-        val inColScroll = HorizontalScrollView(context).apply {
-            isHorizontalScrollBarEnabled = false
-            layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                topMargin = (6f * dens).roundToInt()
-            }
-        }
-        val inColRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutDirection = LAYOUT_DIRECTION_LTR
-        }
-        for (cHex in AppConstants.INNER_COLORS) {
-            val dot = View(context).apply {
-                val s = (28f * dens).roundToInt()
-                layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = (8f * dens).roundToInt() }
-                setOnClickListener {
-                    cfg.innerColor = cHex
-                    callbacks.onInnerShadowChanged()
-                    syncFromConfig()
-                }
-            }
-            innerSwatches[cHex] = dot
-            inColRow.addView(dot)
-        }
-        inColScroll.addView(inColRow)
-        body.addView(inColScroll)
-
-        // 9. Toggles
-        body.addView(secHeader("خيارات"))
-        val togGrid = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        // 2. Lock-Screen Widgets & Toggles
+        body.addView(secHeader("تخصيصات أخرى"))
+        val optsCard = GlassSectionCard(context)
         val r1 = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
         togWeather = makeTogglePill("الطقس") { callbacks.onToggleWeather(); syncFromConfig() }
         togMusic = makeTogglePill("الموسيقى") { callbacks.onToggleMusic(); syncFromConfig() }
-        togDepth = makeTogglePill("تأثير العمق") { callbacks.onToggleDepth(); syncFromConfig() }
-        r1.addView(togWeather); r1.addView(togMusic); r1.addView(togDepth)
+        togNotif = makeTogglePill("الإشعارات", isLast = true) { callbacks.onToggleNotifications(); syncFromConfig() }
+        r1.addView(togWeather); r1.addView(togMusic); r1.addView(togNotif)
 
         val r2 = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -591,10 +886,10 @@ class EditorSheetView(
                 topMargin = (8f * dens).roundToInt()
             }
         }
-        togNotif = makeTogglePill("الإشعارات") { callbacks.onToggleNotifications(); syncFromConfig() }
         togDnd = makeTogglePill("عدم الإزعاج") { callbacks.onToggleDnd(); syncFromConfig() }
-        val audioBtn = makeTogglePill("ملف صوتي…") { callbacks.onPickAudio() }
-        r2.addView(togNotif); r2.addView(togDnd); r2.addView(audioBtn)
+        togPasscode = makeTogglePill("رمز القفل") { callbacks.onTogglePasscode(); syncFromConfig() }
+        val changePinBtn = makeTogglePill("تغيير الرمز", isLast = true) { callbacks.onChangePasscodePin() }
+        r2.addView(togDnd); r2.addView(togPasscode); r2.addView(changePinBtn)
 
         val r3 = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -602,10 +897,9 @@ class EditorSheetView(
                 topMargin = (8f * dens).roundToInt()
             }
         }
-        val artBtn = makeTogglePill("غلاف…") { callbacks.onPickAlbumArt() }
-        val testNotifBtn = makeTogglePill("+ إشعار تجريبي") { callbacks.onTestNotification() }
-        val sysNotifBtn = makeTogglePill("إشعارات النظام") { callbacks.onOpenNotificationAccess() }
-        r3.addView(artBtn); r3.addView(testNotifBtn); r3.addView(sysNotifBtn)
+        val testNotifBtn = makeTogglePill("إشعار تجريبي") { callbacks.onTestNotification() }
+        val sysNotifBtn = makeTogglePill("إشعارات النظام", isLast = true) { callbacks.onOpenNotificationAccess() }
+        r3.addView(testNotifBtn); r3.addView(sysNotifBtn)
 
         val r4 = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -613,34 +907,25 @@ class EditorSheetView(
                 topMargin = (8f * dens).roundToInt()
             }
         }
-        togPasscode = makeTogglePill("رمز القفل PIN") { callbacks.onTogglePasscode(); syncFromConfig() }
-        val changePinBtn = makeTogglePill("تغيير الرمز…") { callbacks.onChangePasscodePin() }
-        r4.addView(togPasscode); r4.addView(changePinBtn)
+        val audioBtn = makeTogglePill("ملف صوتي") { callbacks.onPickAudio() }
+        val artBtn = makeTogglePill("غلاف الألبوم", isLast = true) { callbacks.onPickAlbumArt() }
+        r4.addView(audioBtn); r4.addView(artBtn)
 
-        togGrid.addView(r1); togGrid.addView(r2); togGrid.addView(r3); togGrid.addView(r4)
-        body.addView(togGrid)
+        optsCard.addView(r1); optsCard.addView(r2); optsCard.addView(r3); optsCard.addView(r4)
+        body.addView(optsCard)
 
-        // 10. Continuous Performance Monitor Card
-        body.addView(secHeader("مراقب الأداء المستمر (FPS · الذاكرة · الاستهلاك)"))
-        val perfCard = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            val p = (11f * dens).roundToInt()
-            setPadding(p, p, p, p)
-            background = GradientDrawable().apply {
-                setColor(Color.argb(14, 255, 255, 255))
-                cornerRadius = 14f * dens
-                setStroke((1f * dens).roundToInt(), Color.argb(20, 255, 255, 255))
-            }
-        }
+        // 3. Performance Monitor Card
+        body.addView(secHeader("الأداء"))
+        val perfCard = GlassSectionCard(context)
         val perfTop = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
         perfMeta = TextView(context).apply {
-            text = "تشغيل 0s · محرك AGSL"
+            text = "0s · AGSL"
             setTextColor(Color.argb(190, 255, 255, 255))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
         }
         perfStatus = TextView(context).apply {
-            text = "جاهز للتصدير"
+            text = ""
             setTextColor(0xFF93C5FD.toInt())
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
         }
@@ -653,10 +938,10 @@ class EditorSheetView(
                 topMargin = (8f * dens).roundToInt()
             }
         }
-        val (b1, v1) = makePerfStatBox("FPS متوسط / حالي")
-        val (b2, v2) = makePerfStatBox("هبوط >24ms / 50ms")
-        val (b3, v3) = makePerfStatBox("ذاكرة الحقول")
-        val (b4, v4) = makePerfStatBox("RAM / PSS الكلي")
+        val (b1, v1) = makePerfStatBox("FPS")
+        val (b2, v2) = makePerfStatBox("هبوط")
+        val (b3, v3) = makePerfStatBox("الحقول")
+        val (b4, v4) = makePerfStatBox("RAM", isLast = true)
         perfFpsVal = v1; perfJankVal = v2; perfMemVal = v3; perfPssVal = v4
         grid.addView(b1); grid.addView(b2); grid.addView(b3); grid.addView(b4)
         perfCard.addView(grid)
@@ -667,9 +952,9 @@ class EditorSheetView(
                 topMargin = (9f * dens).roundToInt()
             }
         }
-        actRow.addView(makePerfBtn("تحميل تقرير الأداء (.json)", primary = true) { callbacks.onDownloadPerf() })
-        actRow.addView(makePerfBtn("مشاركة / حفظ باسم") { callbacks.onSharePerf() })
-        actRow.addView(makePerfBtn("تصفير", weight = 0.6f) { callbacks.onResetPerf() })
+        actRow.addView(makePerfBtn("تصدير JSON", primary = true) { callbacks.onDownloadPerf() })
+        actRow.addView(makePerfBtn("مشاركة") { callbacks.onSharePerf() })
+        actRow.addView(makePerfBtn("تصفير", weight = 0.7f, isLast = true) { callbacks.onResetPerf() })
         perfCard.addView(actRow)
         body.addView(perfCard)
     }
@@ -681,7 +966,7 @@ class EditorSheetView(
             setTextColor(Color.BLACK)
         }
         AlertDialog.Builder(context)
-            .setTitle("تعديل كود اللون (Hex)")
+            .setTitle("كود اللون (Hex)")
             .setView(input)
             .setPositiveButton("تطبيق") { _, _ ->
                 val raw = input.text.toString().trim()
@@ -699,7 +984,13 @@ class EditorSheetView(
     }
 
     fun setAiStatus(msg: String, busy: Boolean) {
-        aiDepthStatus.text = msg
+        if (msg.isBlank()) {
+            aiDepthStatus.text = ""
+            aiDepthStatus.visibility = View.GONE
+        } else {
+            aiDepthStatus.text = msg
+            aiDepthStatus.visibility = View.VISIBLE
+        }
         aiDepthBtn.alpha = if (busy) 0.55f else 1f
     }
 
@@ -709,11 +1000,11 @@ class EditorSheetView(
 
     fun updatePerfUi(snap: PerfMonitor.SummarySnapshot) {
         if (!isOpen) return
-        perfMeta.text = "تشغيل ${snap.uptimeSec}s · ${snap.engineLabel}"
-        perfFpsVal.text = "${snap.avgFps} / ${snap.currentFps}"
-        perfJankVal.text = "${snap.dropped24} / ${snap.jank50}"
-        perfMemVal.text = "${snap.gpuCacheMb} MB"
-        perfPssVal.text = "${snap.totalPssMb} MB"
+        perfMeta.text = "${snap.uptimeSec}s · ${snap.engineLabel}"
+        perfFpsVal.text = "${snap.avgFps}/${snap.currentFps}"
+        perfJankVal.text = "${snap.dropped24}/${snap.jank50}"
+        perfMemVal.text = "${snap.gpuCacheMb}MB"
+        perfPssVal.text = "${snap.totalPssMb}MB"
     }
 
     private fun syncProFromColor() {
@@ -726,33 +1017,22 @@ class EditorSheetView(
 
     fun syncFromConfig() {
         suppressSeek = true
-        for ((id, tv) in fontBtns) {
-            val active = cfg.font == id
-            tv.setTextColor(if (active) 0xFFB3DFFF.toInt() else Color.WHITE)
-            tv.background = GradientDrawable().apply {
-                setColor(if (active) Color.argb(38, 179, 223, 255) else Color.argb(18, 255, 255, 255))
-                cornerRadius = 12f * dens
-                setStroke((1.2f * dens).roundToInt(), if (active) 0xFFB3DFFF.toInt() else Color.argb(20, 255, 255, 255))
-            }
+        for ((id, chip) in fontBtns) {
+            chip.selectedState = cfg.font == id
         }
         sizeSeek.progress = cfg.size.roundToInt().coerceIn(56, 420)
         sizeVal.text = "${((cfg.size / 172f) * 100f).roundToInt()}%"
         val stPct = (cfg.sy * 100f).roundToInt().coerceIn(100, 310)
         stretchSeek.progress = stPct
         stretchVal.text = "$stPct%"
+        val wPct = (cfg.sx * 100f).roundToInt().coerceIn(60, 160)
+        widthSeek.progress = wPct
+        widthVal.text = "$wPct%"
         ySeek.progress = (cfg.clockY.roundToInt() + 20).coerceIn(0, 100)
         yVal.text = "${cfg.clockY.roundToInt()}px"
 
-        fun styleFmt(btn: TextView, active: Boolean) {
-            btn.setTextColor(if (active) 0xFFB3DFFF.toInt() else Color.WHITE)
-            btn.background = GradientDrawable().apply {
-                setColor(if (active) Color.argb(34, 179, 223, 255) else Color.argb(18, 255, 255, 255))
-                cornerRadius = 11f * dens
-                setStroke((1.1f * dens).roundToInt(), if (active) 0xFFB3DFFF.toInt() else Color.argb(20, 255, 255, 255))
-            }
-        }
-        styleFmt(fmt12Btn, !cfg.hour24)
-        styleFmt(fmt24Btn, cfg.hour24)
+        fmt12Btn.selectedState = !cfg.hour24
+        fmt24Btn.selectedState = cfg.hour24
 
         for ((id, v) in colorSwatches) {
             val active = cfg.color.equals(id, ignoreCase = true)
@@ -800,12 +1080,12 @@ class EditorSheetView(
             }
         }
 
-        styleToggle(togWeather, cfg.weather)
-        styleToggle(togMusic, cfg.music)
-        styleToggle(togNotif, cfg.notifications)
-        styleToggle(togDepth, cfg.depth)
-        styleToggle(togDnd, cfg.dnd)
-        styleToggle(togPasscode, cfg.passcodeEnabled)
+        togWeather.selectedState = cfg.weather
+        togMusic.selectedState = cfg.music
+        togNotif.selectedState = cfg.notifications
+        togDepth.selectedState = cfg.depth
+        togDnd.selectedState = cfg.dnd
+        togPasscode.selectedState = cfg.passcodeEnabled
         suppressSeek = false
     }
 
@@ -852,46 +1132,177 @@ class EditorSheetView(
         )
     }
 
-    private fun styleToggle(tv: TextView, active: Boolean) {
-        tv.setTextColor(if (active) 0xFFB3DFFF.toInt() else Color.argb(215, 255, 255, 255))
-        tv.background = GradientDrawable().apply {
-            setColor(if (active) Color.argb(36, 179, 223, 255) else Color.argb(16, 255, 255, 255))
-            cornerRadius = 11f * dens
-            setStroke((1f * dens).roundToInt(), if (active) 0xFFB3DFFF.toInt() else Color.argb(24, 255, 255, 255))
+    private fun animateScrimTo(targetAlpha: Int, durationMs: Long = 240L) {
+        scrimAnim?.cancel()
+        val startAlpha = currentScrimAlpha
+        if (startAlpha == targetAlpha) {
+            setBackgroundColor(Color.argb(targetAlpha, 0, 0, 0))
+            return
+        }
+        scrimAnim = ValueAnimator.ofInt(startAlpha, targetAlpha).apply {
+            duration = durationMs
+            interpolator = DecelerateInterpolator(1.6f)
+            addUpdateListener { a ->
+                currentScrimAlpha = a.animatedValue as Int
+                setBackgroundColor(Color.argb(currentScrimAlpha, 0, 0, 0))
+            }
+            start()
         }
     }
 
-    fun open() {
-        if (isOpen) return
+    private fun applyModeHeaderAndVisibility(mode: Mode) {
+        currentMode = mode
+        if (mode == Mode.CLOCK) {
+            titleView.text = "تخصيص الساعة"
+            switchModeBtn.tv.text = "الخلفية"
+            clockBody.visibility = VISIBLE
+            wallBody.visibility = GONE
+        } else {
+            titleView.text = "تخصيص الخلفية"
+            switchModeBtn.tv.text = "الساعة"
+            wallBody.visibility = VISIBLE
+            clockBody.visibility = GONE
+        }
+    }
+
+    fun open(mode: Mode = Mode.WALLPAPER) {
+        if (isOpen) {
+            if (currentMode != mode) switchMode(mode)
+            return
+        }
         isOpen = true
+        heightAnim?.cancel()
+        applyModeHeaderAndVisibility(mode)
+
+        val targetH = sheetHeightFor(mode)
         val lp = sheetCard.layoutParams as LayoutParams
-        lp.height = (resources.displayMetrics.heightPixels * 0.72f).roundToInt()
+        lp.height = targetH
+        lp.bottomMargin = safeBottomPx + (6f * dens).roundToInt()
         sheetCard.layoutParams = lp
+
+        scrollView.scrollTo(0, 0)
         syncFromConfig()
         updatePerfUi(perf.snapshot())
+        if (mode == Mode.CLOCK) {
+            fontScroll.post {
+                val activeChip = fontBtns[cfg.font]
+                if (activeChip != null) {
+                    val targetX = (activeChip.left - (fontScroll.width - activeChip.width) / 2).coerceAtLeast(0)
+                    fontScroll.smoothScrollTo(targetX, 0)
+                }
+            }
+        }
+
         visibility = VISIBLE
         alpha = 0f
-        sheetCard.translationY = resources.displayMetrics.heightPixels * 0.45f
-        animate().alpha(1f).setDuration(240L).start()
+        sheetCard.animate().cancel()
+        sheetCard.translationY = targetH * 0.55f + 40f * dens
+        sheetCard.scaleX = 0.965f
+        sheetCard.scaleY = 0.965f
+
+        animateScrimTo(if (mode == Mode.CLOCK) 0 else 44, 260L)
+        animate().alpha(1f).setDuration(220L).start()
         sheetCard.animate()
             .translationY(0f)
-            .setDuration(420L)
-            .setInterpolator(DecelerateInterpolator(2.1f))
+            .scaleX(1f)
+            .scaleY(1f)
+            .setDuration(400L)
+            .setInterpolator(DecelerateInterpolator(2.2f))
+            .setUpdateListener { invalidateGlassTree(sheetCard) }
             .start()
+
+        callbacks.onModeChanged(mode)
         callbacks.onHaptic("tick")
+    }
+
+    fun switchMode(mode: Mode) {
+        if (!isOpen) {
+            open(mode)
+            return
+        }
+        if (currentMode == mode) return
+        val outBody = if (currentMode == Mode.CLOCK) clockBody else wallBody
+        val inBody = if (mode == Mode.CLOCK) clockBody else wallBody
+        currentMode = mode
+        callbacks.onModeChanged(mode)
+        callbacks.onHaptic("tick")
+
+        val startH = sheetCard.height.takeIf { it > 0 } ?: (sheetCard.layoutParams as LayoutParams).height
+        val targetH = sheetHeightFor(mode)
+        heightAnim?.cancel()
+        heightAnim = ValueAnimator.ofInt(startH, targetH).apply {
+            duration = 320L
+            interpolator = DecelerateInterpolator(2.1f)
+            addUpdateListener { a ->
+                val lp = sheetCard.layoutParams as LayoutParams
+                lp.height = a.animatedValue as Int
+                sheetCard.layoutParams = lp
+                invalidateGlassTree(sheetCard)
+            }
+            start()
+        }
+        animateScrimTo(if (mode == Mode.CLOCK) 0 else 44, 240L)
+
+        titleView.text = if (mode == Mode.CLOCK) "تخصيص الساعة" else "تخصيص الخلفية"
+        switchModeBtn.tv.text = if (mode == Mode.CLOCK) "الخلفية" else "الساعة"
+
+        outBody.animate().cancel()
+        inBody.animate().cancel()
+        outBody.animate()
+            .alpha(0f)
+            .translationY(8f * dens)
+            .setDuration(120L)
+            .withEndAction {
+                outBody.visibility = GONE
+                outBody.alpha = 1f
+                outBody.translationY = 0f
+                scrollView.scrollTo(0, 0)
+                inBody.visibility = VISIBLE
+                inBody.alpha = 0f
+                inBody.translationY = 10f * dens
+                inBody.animate()
+                    .alpha(1f)
+                    .translationY(0f)
+                    .setDuration(220L)
+                    .setInterpolator(DecelerateInterpolator(1.9f))
+                    .setUpdateListener { invalidateGlassTree(inBody) }
+                    .start()
+                if (mode == Mode.CLOCK) {
+                    fontScroll.post {
+                        val activeChip = fontBtns[cfg.font]
+                        if (activeChip != null) {
+                            val targetX = (activeChip.left - (fontScroll.width - activeChip.width) / 2).coerceAtLeast(0)
+                            fontScroll.smoothScrollTo(targetX, 0)
+                        }
+                    }
+                }
+            }
+            .start()
     }
 
     fun close() {
         if (!isOpen) return
         isOpen = false
-        animate().alpha(0f).setDuration(200L).start()
+        heightAnim?.cancel()
+        animateScrimTo(0, 200L)
+        animate().alpha(0f).setDuration(210L).start()
+        val slideOut = (sheetCard.height.takeIf { it > 0 } ?: sheetHeightFor(currentMode)) * 0.72f + 44f * dens
+        sheetCard.animate().cancel()
         sheetCard.animate()
-            .translationY(resources.displayMetrics.heightPixels * 0.55f)
+            .translationY(slideOut)
+            .scaleX(0.97f)
+            .scaleY(0.97f)
             .setDuration(240L)
+            .setInterpolator(DecelerateInterpolator(1.9f))
+            .setUpdateListener { sheetCard.invalidate() }
             .withEndAction {
-                visibility = GONE
-                sheetCard.translationY = 0f
-                callbacks.onClose()
+                if (!isOpen) {
+                    visibility = GONE
+                    sheetCard.translationY = 0f
+                    sheetCard.scaleX = 1f
+                    sheetCard.scaleY = 1f
+                    callbacks.onClose()
+                }
             }
             .start()
     }
@@ -899,29 +1310,29 @@ class EditorSheetView(
     private fun secHeader(txt: String): TextView {
         return TextView(context).apply {
             text = txt
-            setTextColor(Color.argb(158, 255, 255, 255))
+            setTextColor(Color.argb(170, 255, 255, 255))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-            setPadding(0, (14f * dens).roundToInt(), 0, (6f * dens).roundToInt())
+            setPadding(0, (12f * dens).roundToInt(), 0, (6f * dens).roundToInt())
         }
     }
 
-    private fun secHeaderWithValue(txt: String, initVal: String): Pair<LinearLayout, TextView> {
+    private fun secHeaderWithValue(txt: String, initVal: String, compact: Boolean = false): Pair<LinearLayout, TextView> {
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, (12f * dens).roundToInt(), 0, (4f * dens).roundToInt())
+            setPadding(0, ((if (compact) 7f else 11f) * dens).roundToInt(), 0, (3f * dens).roundToInt())
         }
         val l = TextView(context).apply {
             text = txt
-            setTextColor(Color.argb(158, 255, 255, 255))
+            setTextColor(Color.argb(190, 255, 255, 255))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
             layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
         }
         val v = TextView(context).apply {
             text = initVal
-            setTextColor(Color.argb(210, 255, 255, 255))
+            setTextColor(0xFFB3DFFF.toInt())
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             fontFeatureSettings = "tnum"
         }
@@ -932,7 +1343,7 @@ class EditorSheetView(
     private fun miniSliderLabel(txt: String): TextView {
         return TextView(context).apply {
             text = txt
-            setTextColor(Color.argb(145, 255, 255, 255))
+            setTextColor(Color.argb(160, 255, 255, 255))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             setPadding(0, (8f * dens).roundToInt(), 0, (2f * dens).roundToInt())
         }
@@ -946,10 +1357,10 @@ class EditorSheetView(
                 shape = GradientDrawable.OVAL
                 setSize((18f * dens).roundToInt(), (18f * dens).roundToInt())
                 setColor(Color.WHITE)
-                setStroke((2f * dens).roundToInt(), Color.argb(60, 0, 0, 0))
+                setStroke((2f * dens).roundToInt(), Color.argb(72, 0, 0, 0))
             }
             progressTintList = android.content.res.ColorStateList.valueOf(0xFFB3DFFF.toInt())
-            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(Color.argb(46, 255, 255, 255))
+            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(Color.argb(52, 255, 255, 255))
             splitTrack = false
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
@@ -958,7 +1369,7 @@ class EditorSheetView(
                 }
                 override fun onStartTrackingTouch(sb: SeekBar?) {}
                 override fun onStopTrackingTouch(sb: SeekBar?) {
-                    if (sb === sizeSeek || sb === stretchSeek || sb === ySeek) {
+                    if (sb === sizeSeek || sb === stretchSeek || sb === widthSeek || sb === ySeek) {
                         callbacks.onGeometryCommit()
                     }
                 }
@@ -966,62 +1377,49 @@ class EditorSheetView(
         }
     }
 
-    private fun makeChipBtn(label: String, accent: Boolean = false, onClick: () -> Unit): TextView {
-        return TextView(context).apply {
-            text = label
-            gravity = Gravity.CENTER
-            setTextColor(if (accent) 0xFFBAE6FD.toInt() else Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-            setPadding((14f * dens).roundToInt(), 0, (14f * dens).roundToInt(), 0)
+    private fun makeChipBtn(label: String, accent: Boolean = false, onClick: () -> Unit): GlassPillButton {
+        return GlassPillButton(context, label, radiusDp = 12f, isAccent = accent, onClick = onClick).apply {
             layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, (68f * dens).roundToInt()).apply {
                 marginEnd = (8f * dens).roundToInt()
             }
-            background = GradientDrawable().apply {
-                setColor(if (accent) Color.argb(38, 56, 189, 248) else Color.argb(20, 255, 255, 255))
-                cornerRadius = 12f * dens
-                setStroke((1f * dens).roundToInt(), if (accent) Color.argb(115, 125, 211, 252) else Color.argb(30, 255, 255, 255))
-            }
-            setOnClickListener { onClick() }
+            tv.setPadding((14f * dens).roundToInt(), 0, (14f * dens).roundToInt(), 0)
+            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
         }
     }
 
-    private fun makeTogglePill(label: String, onClick: () -> Unit): TextView {
-        return TextView(context).apply {
-            text = label
-            gravity = Gravity.CENTER
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-            setPadding((8f * dens).roundToInt(), (10f * dens).roundToInt(), (8f * dens).roundToInt(), (10f * dens).roundToInt())
+    private fun makeTogglePill(label: String, isLast: Boolean = false, onClick: () -> Unit): GlassPillButton {
+        return GlassPillButton(context, label, radiusDp = 12f, isAccent = false, onClick = onClick).apply {
             layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginEnd = (6f * dens).roundToInt()
+                if (!isLast) marginEnd = (6f * dens).roundToInt()
             }
-            setOnClickListener { onClick() }
+            tv.setPadding((6f * dens).roundToInt(), (10f * dens).roundToInt(), (6f * dens).roundToInt(), (10f * dens).roundToInt())
+            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
         }
     }
 
-    private fun makePerfStatBox(label: String): Pair<LinearLayout, TextView> {
+    private fun makePerfStatBox(label: String, isLast: Boolean = false): Pair<LinearLayout, TextView> {
         val box = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setPadding((6f * dens).roundToInt(), (7f * dens).roundToInt(), (6f * dens).roundToInt(), (7f * dens).roundToInt())
             layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginEnd = (5f * dens).roundToInt()
+                if (!isLast) marginEnd = (5f * dens).roundToInt()
             }
             background = GradientDrawable().apply {
-                setColor(Color.argb(12, 255, 255, 255))
+                setColor(Color.argb(18, 255, 255, 255))
                 cornerRadius = 10f * dens
+                setStroke((0.6f * dens).roundToInt(), Color.argb(26, 255, 255, 255))
             }
         }
         val k = TextView(context).apply {
             text = label
-            setTextColor(Color.argb(145, 255, 255, 255))
+            setTextColor(Color.argb(150, 255, 255, 255))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f)
             maxLines = 1
         }
         val v = TextView(context).apply {
             text = "—"
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
             fontFeatureSettings = "tnum"
         }
@@ -1029,23 +1427,13 @@ class EditorSheetView(
         return box to v
     }
 
-    private fun makePerfBtn(label: String, primary: Boolean = false, weight: Float = 1f, onClick: () -> Unit): TextView {
-        return TextView(context).apply {
-            text = label
-            gravity = Gravity.CENTER
-            setTextColor(if (primary) 0xFFBAE6FD.toInt() else Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-            setPadding((6f * dens).roundToInt(), (9f * dens).roundToInt(), (6f * dens).roundToInt(), (9f * dens).roundToInt())
+    private fun makePerfBtn(label: String, primary: Boolean = false, weight: Float = 1f, isLast: Boolean = false, onClick: () -> Unit): GlassPillButton {
+        return GlassPillButton(context, label, radiusDp = 11f, isAccent = primary, onClick = onClick).apply {
             layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, weight).apply {
-                marginEnd = (6f * dens).roundToInt()
+                if (!isLast) marginEnd = (6f * dens).roundToInt()
             }
-            background = GradientDrawable().apply {
-                setColor(if (primary) Color.argb(46, 56, 189, 248) else Color.argb(20, 255, 255, 255))
-                cornerRadius = 11f * dens
-                setStroke((1f * dens).roundToInt(), if (primary) Color.argb(115, 125, 211, 252) else Color.argb(30, 255, 255, 255))
-            }
-            setOnClickListener { onClick() }
+            tv.setPadding((6f * dens).roundToInt(), (9f * dens).roundToInt(), (6f * dens).roundToInt(), (9f * dens).roundToInt())
+            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
         }
     }
 }

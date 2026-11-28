@@ -68,8 +68,8 @@ data class ClockArtifact(
 }
 
 class ClockGlyphRenderer(private val context: Context) {
-    private val typefaceCache = HashMap<String, Typeface>(4)
-    private val metricsCache = HashMap<String, NumeralMetrics>(4)
+    private val typefaceCache = HashMap<String, Typeface>(12)
+    private val metricsCache = HashMap<String, NumeralMetrics>(12)
     private val glyphCache = object : LinkedHashMap<String, StretchedGlyph>(28, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, StretchedGlyph>?): Boolean {
             return size > 24
@@ -95,20 +95,22 @@ class ClockGlyphRenderer(private val context: Context) {
         synchronized(colonCache) { colonCache.clear() }
     }
 
-    private fun getTypeface(fontId: String): Typeface {
-        return typefaceCache.getOrPut(fontId) {
-            val f = ClockFont.fromId(fontId)
-            if (f.assetPath != null) {
-                try {
-                    Typeface.createFromAsset(context.assets, f.assetPath)
-                } catch (_: Throwable) {
-                    Typeface.DEFAULT_BOLD
-                }
-            } else {
-                if (Build.VERSION.SDK_INT >= 28) {
-                    Typeface.create(Typeface.SANS_SERIF, 600, false)
+    fun getTypeface(fontId: String): Typeface {
+        synchronized(typefaceCache) {
+            return typefaceCache.getOrPut(fontId) {
+                val f = ClockFont.fromId(fontId)
+                if (f.assetPath != null) {
+                    try {
+                        Typeface.createFromAsset(context.assets, f.assetPath)
+                    } catch (_: Throwable) {
+                        Typeface.DEFAULT_BOLD
+                    }
                 } else {
-                    Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                    if (Build.VERSION.SDK_INT >= 28) {
+                        Typeface.create(Typeface.SANS_SERIF, 600, false)
+                    } else {
+                        Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                    }
                 }
             }
         }

@@ -18,7 +18,7 @@ test('local fonts and pure native Kotlin assets are packaged', () => {
   const gradle = readFileSync('android/app/build.gradle','utf8');
   assert.ok(gradle.includes("id 'org.jetbrains.kotlin.android'"));
   assert.ok(!gradle.includes('androidx.webkit'));
-  for (const ttf of ['bebas_neue.ttf','oswald.ttf','inter.ttf']) {
+  for (const ttf of ['bebas_neue.ttf','oswald.ttf','inter.ttf','sf_rounded.ttf','ios_classic.ttf','ios_slab.ttf','ios_stencil.ttf','ios_rails.ttf','ios_heavy.ttf']) {
     assert.ok(existsSync('android/app/src/main/assets/fonts/'+ttf), 'missing bundled font '+ttf);
   }
 });
@@ -238,6 +238,28 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
 
   const aiKt = readFileSync(ktDir + 'AIDepthManager.kt','utf8');
   assert.ok(aiKt.includes('SubjectSegmentation'));
+  assert.ok(!aiKt.includes('مجاني'));
+
+  // Split dark Liquid Glass Clock vs Wallpaper customizers + iPhone fonts + live preview stage
+  for (const fontId of ['ROUNDED','CLASSIC','SLAB','STENCIL','RAILS','HEAVY']) {
+    assert.ok(appStateKt.includes(fontId));
+  }
+  assert.ok(sheetKt.includes('enum class Mode { CLOCK, WALLPAPER }'));
+  assert.ok(sheetKt.includes('GlassSheetCard'));
+  assert.ok(sheetKt.includes('GlassSectionCard'));
+  assert.ok(sheetKt.includes('GlassPillButton'));
+  assert.ok(sheetKt.includes('GlassFontChip'));
+  assert.ok(sheetKt.includes('widthSeek'));
+  assert.ok(sheetKt.includes('العرض'));
+  assert.ok(!sheetKt.includes('مجاني'));
+  assert.ok(layerKt.includes('committedSx'));
+  assert.ok(layerKt.includes('onClockTap'));
+  assert.ok(mainKt.includes('openClockCustomizerFromResize'));
+  assert.ok(mainKt.includes('openWallpaperCustomizer'));
+  assert.ok(mainKt.includes('wallHoldRunnable'));
+  assert.ok(mainKt.includes('560L'));
+  assert.ok(mainKt.includes('clockEditorStageFrac'));
+  assert.ok(mainKt.includes('wallEditorStageFrac'));
 
   const perfKt = readFileSync(ktDir + 'PerfMonitor.kt','utf8');
   assert.ok(perfKt.includes('Choreographer'));
