@@ -305,8 +305,6 @@ class ClockGlassView(
     }
 
     fun shutdown() {
-        fontPrepAnim?.cancel()
-    fun shutdown() {
         fontCrossAnim?.cancel()
         ghostView?.clear()
         worker.shutdownNow()
