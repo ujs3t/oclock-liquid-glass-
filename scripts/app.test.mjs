@@ -124,6 +124,14 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   const libKt = readFileSync(ktDir + 'MusicLibraryOverlayView.kt','utf8');
   assert.ok(libKt.includes('مكتبة موسيقى الجهاز'));
   assert.ok(libKt.includes('OvershootInterpolator'));
+  assert.ok(libKt.includes('GlassSheetCard'));
+  assert.ok(libKt.includes('GlassPillButton'));
+  assert.ok(libKt.includes('GlassActionButton'));
+  assert.ok(libKt.includes('GlassSearchBar'));
+  assert.ok(libKt.includes('GlassTrackRowCard'));
+  assert.ok(libKt.includes('RubberMusicListView'));
+  assert.ok(libKt.includes('useBlurredBackdrop = true'));
+  assert.ok(libKt.includes('sheetSpringCallback'));
 
   const manifestXml = readFileSync('android/app/src/main/AndroidManifest.xml','utf8');
   assert.ok(manifestXml.includes('BIND_NOTIFICATION_LISTENER_SERVICE'));

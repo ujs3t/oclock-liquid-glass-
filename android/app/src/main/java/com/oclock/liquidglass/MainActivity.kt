@@ -887,6 +887,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             media,
             backdrop,
             perf,
+            getRootShell = { phoneShell },
             onRequestPermission = {
                 ActivityCompat.requestPermissions(this, media.requiredPermissions(), REQ_MEDIA_PERM)
             },
@@ -1761,6 +1762,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     if (::passcodeOverlay.isInitialized && passcodeOverlay.isOpen) {
                         passcodeOverlay.invalidate()
                         passcodeOverlay.invalidateAllKeys()
+                    }
+                    if (::musicLibraryOverlay.isInitialized && musicLibraryOverlay.isOpen) {
+                        musicLibraryOverlay.refreshGlass()
                     }
                 }
             }
