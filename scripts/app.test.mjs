@@ -327,6 +327,30 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(mainKt.includes('clockEditorStageFrac'));
   assert.ok(mainKt.includes('wallEditorStageFrac'));
 
+  // Smart wallpaper-adaptive clock styling (color, opacity, inner shadow, Liquid Glass, refraction + visual aura/pill effect)
+  const wallAiKt = readFileSync(ktDir + 'WallpaperThemeAI.kt', 'utf8');
+  assert.ok(wallAiKt.includes('object WallpaperThemeAI'));
+  assert.ok(wallAiKt.includes('data class SmartClockStyle'));
+  assert.ok(wallAiKt.includes('class WallpaperHarmonyAuraView'));
+  assert.ok(wallAiKt.includes('class WallpaperHarmonyPill'));
+  assert.ok(wallAiKt.includes('paletteDots'));
+  assert.ok(!wallAiKt.includes('مجاني'));
+  assert.ok(appStateKt.includes('smartWallTheme'));
+  assert.ok(appStateKt.includes('clockGlass'));
+  assert.ok(appStateKt.includes('clockRefraction'));
+  assert.ok(shadersKt.includes('uGlassAmt'));
+  assert.ok(jniCpp.includes('glassAmt'));
+  assert.ok(layerKt.includes('effMaxAbsPx'));
+  assert.ok(layerKt.includes('uGlassAmt'));
+  assert.ok(sheetKt.includes('togSmartWallTheme'));
+  assert.ok(sheetKt.includes('glassSeek'));
+  assert.ok(sheetKt.includes('refractSeek'));
+  assert.ok(sheetKt.includes('onToggleSmartWallTheme'));
+  assert.ok(sheetKt.includes('onApplySmartWallThemeNow'));
+  assert.ok(mainKt.includes('runSmartWallpaperHarmony'));
+  assert.ok(mainKt.includes('harmonyAuraView'));
+  assert.ok(mainKt.includes('harmonyPillView'));
+
   const perfKt = readFileSync(ktDir + 'PerfMonitor.kt','utf8');
   assert.ok(perfKt.includes('Choreographer'));
   assert.ok(perfKt.includes('oclock.liquidglass.perf.v1'));

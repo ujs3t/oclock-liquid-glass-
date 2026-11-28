@@ -128,6 +128,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private lateinit var cameraOverlay: CameraOverlayView
     private lateinit var musicLibraryOverlay: MusicLibraryOverlayView
     private lateinit var editorSheet: EditorSheetView
+    private lateinit var harmonyAuraView: WallpaperHarmonyAuraView
+    private lateinit var harmonyPillView: WallpaperHarmonyPill
     private lateinit var toastView: TextView
 
     private lateinit var media: MediaController
@@ -177,6 +179,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private var hasInitialLayout = false
     private var depthFlowGen = 0
     private var isDepthRevealAnimating = false
+    private var smartWallToken = 0
+    private var smartMorphAnim: ValueAnimator? = null
+    private var smartBreathScale = 1f
     private var stageGlideAnim: ValueAnimator? = null
     private var stageCurOffsetY = 0f
     private var stageCurFit = 1f
@@ -385,8 +390,14 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         scheduleClockRender(force = false)
 
         val cachedPreset = if (!cfg.hasCustomWall && cfg.wall != "custom") WallpaperEngine.peekPreset(cfg.wall) else null
+        val isFirstLaunch = !store.hasSavedConfig()
         if (cachedPreset != null && !cfg.hasCustomSubject) {
             applyWallpaperAndTheme(reRenderClock = false)
+            if (isFirstLaunch && cfg.smartWallTheme) {
+                currentWallBmp?.let { bmp ->
+                    runSmartWallpaperHarmony(bmp, animated = false, playEffect = false)
+                }
+            }
         } else {
             val needWall = cfg.hasCustomWall
             val needSubj = cfg.hasCustomSubject
@@ -400,6 +411,11 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     if (cw != null) customWallBmp = cw
                     if (cs != null) customSubjectBmp = cs
                     applyWallpaperAndTheme(reRenderClock = false)
+                    if (isFirstLaunch && cfg.smartWallTheme) {
+                        currentWallBmp?.let { bmp ->
+                            runSmartWallpaperHarmony(bmp, animated = false, playEffect = false)
+                        }
+                    }
                 }
             }
         }
@@ -502,6 +518,12 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         }
         phoneShell.addView(depthRevealView)
+
+        // 3c. Smart Wallpaper Color Harmony Prism Wave (sweeps over clock when auto-styled)
+        harmonyAuraView = WallpaperHarmonyAuraView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        }
+        phoneShell.addView(harmonyAuraView)
 
         // 4. Resize Frame Overlay (z = 4)
         resizeOverlay = ClockResizeOverlayView(
@@ -914,11 +936,16 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         }
         phoneShell.addView(musicLibraryOverlay)
 
-        // 12. Floating Toast Capsule + Depth Loading Pill (z = 11)
+        // 12. Floating Toast Capsule + Depth Loading Pill + Smart Palette Pill (z = 11)
         depthLoadingPill = DepthLoadingPill(this).apply {
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
         }
         phoneShell.addView(depthLoadingPill)
+
+        harmonyPillView = WallpaperHarmonyPill(this).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+        }
+        phoneShell.addView(harmonyPillView)
 
         toastView = TextView(this).apply {
             layoutDirection = View.LAYOUT_DIRECTION_RTL
@@ -1045,6 +1072,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         (unlockedBar.layoutParams as FrameLayout.LayoutParams).bottomMargin = safeBottomPx + (28f * dens).roundToInt()
         (homeBar.layoutParams as FrameLayout.LayoutParams).bottomMargin = safeBottomPx + (7f * dens).roundToInt()
         (depthLoadingPill.layoutParams as FrameLayout.LayoutParams).bottomMargin = safeBottomPx + (102f * dens).roundToInt()
+        (harmonyPillView.layoutParams as FrameLayout.LayoutParams).topMargin = safeTopPx + (42f * dens).roundToInt()
         (toastView.layoutParams as FrameLayout.LayoutParams).topMargin = safeTopPx + (52f * dens).roundToInt()
         passcodeOverlay.applySafeInsets(safeTopPx, safeBottomPx)
         musicLibraryOverlay.applySafeInsets(safeTopPx, safeBottomPx)
@@ -1672,7 +1700,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         clockContainer.pivotY = inkTopPx + (clockContainer.height * 0.5f - inkTopPx) * liftLead
         clockContainer.translationY = clockLift
         clockContainer.rotationX = liftLead * 10f
-        val cScale = (1f - 0.11f * liftLead) * effFitScale * lockScaleMult
+        val cScale = (1f - 0.11f * liftLead) * effFitScale * lockScaleMult * smartBreathScale
         if (!isDepthRevealAnimating) {
             clockContainer.scaleX = cScale
             clockContainer.scaleY = cScale
@@ -1819,6 +1847,104 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         dndPill.applyTheme(cols.uiInk, cols.glassBg)
         shLeft.uiInk = cols.uiInk; shLeft.glassBg = cols.glassBg; shLeft.invalidate()
         shRight.uiInk = cols.uiInk; shRight.glassBg = cols.glassBg; shRight.invalidate()
+    }
+
+    private fun runSmartWallpaperHarmony(
+        bmp: Bitmap,
+        animated: Boolean = true,
+        playEffect: Boolean = true,
+        prevColorsOverride: AdaptiveColors? = null,
+        prevConfigOverride: LockConfig? = null
+    ) {
+        val myToken = ++smartWallToken
+        val wallKey = if (cfg.wall == "custom") "custom:${bmp.generationId}" else cfg.wall
+        val startCols = prevColorsOverride ?: currentColors ?: adaptive.sample(wallKey, bmp, cfg)
+        val startCfg = prevConfigOverride ?: cfg.copy()
+
+        bgExecutor.execute {
+            val style = WallpaperThemeAI.analyze(bmp)
+            mainHandler.post {
+                if (myToken != smartWallToken || isDestroyed) return@post
+
+                cfg.color = style.colorHex
+                cfg.clockOpacity = style.clockOpacity
+                cfg.innerColor = style.innerColorHex
+                cfg.innerOpacity = style.innerOpacity
+                cfg.innerThickness = style.innerThickness
+                cfg.innerAngle = style.innerAngle
+                cfg.innerFade = style.innerFade
+                cfg.clockGlass = style.clockGlass
+                cfg.clockRefraction = style.clockRefraction
+                store.save(cfg)
+
+                val targetCols = adaptive.sample(wallKey, bmp, cfg)
+                if (::editorSheet.isInitialized) editorSheet.syncFromConfig()
+
+                smartMorphAnim?.cancel()
+                smartBreathScale = 1f
+
+                if (playEffect) {
+                    val topY = clockContainer.y
+                    val botY = topY + max(clockContainer.height.toFloat(), 160f * resources.displayMetrics.density)
+                    harmonyAuraView.playSweep(style.paletteDots, topY, botY)
+                    harmonyPillView.showPalette(style.paletteDots, style.clockGlass, style.clockRefraction, style.profileLabel)
+                }
+
+                if (!animated) {
+                    applyThemeColors(targetCols)
+                    clockView.invalidate()
+                    return@post
+                }
+
+                // Keep starting look on screen for frame 0 so the transition morphs seamlessly
+                val fromInnerInt = AppConstants.parseHexColor(startCfg.innerColor, Color.WHITE)
+                val toInnerInt = style.innerColorInt
+                val interpCfg = cfg.copy()
+                clockView.colors = startCols
+                clockView.config = startCfg.copy()
+                clockView.invalidate()
+
+                smartMorphAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+                    duration = 440L
+                    interpolator = PathInterpolator(0.22f, 1f, 0.36f, 1f)
+                    var cancelled = false
+                    addUpdateListener { a ->
+                        if (myToken != smartWallToken || isDestroyed) return@addUpdateListener
+                        val t = (a.animatedValue as Float).coerceIn(0f, 1f)
+                        val curCols = WallpaperThemeAI.lerpAdaptiveColors(startCols, targetCols, t)
+                        interpCfg.clockOpacity = (startCfg.clockOpacity + (cfg.clockOpacity - startCfg.clockOpacity) * t).roundToInt()
+                        interpCfg.innerOpacity = (startCfg.innerOpacity + (cfg.innerOpacity - startCfg.innerOpacity) * t).roundToInt()
+                        interpCfg.innerThickness = startCfg.innerThickness + (cfg.innerThickness - startCfg.innerThickness) * t
+                        interpCfg.innerAngle = WallpaperThemeAI.lerpAngleDeg(startCfg.innerAngle, cfg.innerAngle, t)
+                        interpCfg.innerFade = (startCfg.innerFade + (cfg.innerFade - startCfg.innerFade) * t).roundToInt()
+                        interpCfg.clockGlass = (startCfg.clockGlass + (cfg.clockGlass - startCfg.clockGlass) * t).roundToInt()
+                        interpCfg.clockRefraction = (startCfg.clockRefraction + (cfg.clockRefraction - startCfg.clockRefraction) * t).roundToInt()
+                        interpCfg.innerColor = AppConstants.toHex(WallpaperThemeAI.lerpArgb(fromInnerInt, toInnerInt, t))
+
+                        smartBreathScale = if (playEffect) 1f + 0.018f * kotlin.math.sin(t * kotlin.math.PI).toFloat() else 1f
+                        clockView.colors = curCols
+                        clockView.config = interpCfg
+                        dateText.setTextColor(curCols.uiInk)
+                        wxText.setTextColor(curCols.uiInk)
+                        applyDepthAndLayerTransforms()
+                        clockView.invalidate()
+                    }
+                    addListener(object : android.animation.AnimatorListenerAdapter() {
+                        override fun onAnimationCancel(animation: android.animation.Animator) {
+                            cancelled = true
+                        }
+                        override fun onAnimationEnd(animation: android.animation.Animator) {
+                            if (cancelled || myToken != smartWallToken || isDestroyed) return
+                            smartBreathScale = 1f
+                            applyThemeColors(targetCols)
+                            applyDepthAndLayerTransforms()
+                            clockView.invalidate()
+                        }
+                    })
+                    start()
+                }
+            }
+        }
     }
 
     private fun applyToggles() {
@@ -2470,6 +2596,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     mainHandler.post {
                         when (requestCode) {
                             REQ_WALL -> {
+                                val prevColors = currentColors
+                                val prevCfg = cfg.copy()
                                 customWallBmp = bmp
                                 cfg.wall = "custom"
                                 cfg.hasCustomWall = store.saveCustomWall(bmp)
@@ -2478,6 +2606,15 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                                 store.clearCustomSubject()
                                 store.save(cfg)
                                 applyWallpaperAndTheme(reRenderClock = true)
+                                if (cfg.smartWallTheme) {
+                                    runSmartWallpaperHarmony(
+                                        bmp = bmp,
+                                        animated = true,
+                                        playEffect = true,
+                                        prevColorsOverride = prevColors,
+                                        prevConfigOverride = prevCfg
+                                    )
+                                }
                                 if (cfg.depth) onExtractAiDepth()
                             }
                             REQ_SUBJECT -> {
@@ -2596,6 +2733,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     }
 
     override fun onColorOrOpacityChanged() {
+        smartMorphAnim?.cancel()
+        smartBreathScale = 1f
         val bmp = currentWallBmp ?: return
         val wallKey = if (cfg.wall == "custom") "custom:${bmp.generationId}" else cfg.wall
         currentColors = adaptive.sample(wallKey, bmp, cfg)
@@ -2608,6 +2747,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     override fun onWallSelected(wallId: String) {
         haptic("tick")
         cancelDepthActivationFlow()
+        val prevColors = currentColors
+        val prevCfg = cfg.copy()
         cfg.wall = wallId
         customSubjectBmp = null
         cfg.hasCustomSubject = false
@@ -2615,6 +2756,17 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         store.clearCustomSubject()
         store.save(cfg)
         applyWallpaperAndTheme(reRenderClock = true)
+        if (cfg.smartWallTheme) {
+            currentWallBmp?.let { bmp ->
+                runSmartWallpaperHarmony(
+                    bmp = bmp,
+                    animated = true,
+                    playEffect = true,
+                    prevColorsOverride = prevColors,
+                    prevConfigOverride = prevCfg
+                )
+            }
+        }
     }
 
     override fun onPickCustomWall() = launchPhotoPicker(REQ_WALL)
@@ -2754,9 +2906,36 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     override fun onPickManualSubject() = launchPhotoPicker(REQ_SUBJECT)
 
     override fun onInnerShadowChanged() {
+        smartMorphAnim?.cancel()
+        smartBreathScale = 1f
         clockView.config = cfg
         clockView.invalidate()
         store.save(cfg)
+    }
+
+    override fun onToggleSmartWallTheme(enabled: Boolean) {
+        haptic("tick")
+        cfg.smartWallTheme = enabled
+        store.save(cfg)
+        if (enabled) {
+            currentWallBmp?.let { bmp ->
+                runSmartWallpaperHarmony(bmp = bmp, animated = true, playEffect = true)
+            }
+        } else {
+            smartWallToken++
+            smartMorphAnim?.cancel()
+            smartBreathScale = 1f
+            if (::harmonyAuraView.isInitialized) harmonyAuraView.cancelSweep()
+            if (::harmonyPillView.isInitialized) harmonyPillView.hide(immediate = false)
+            applyDepthAndLayerTransforms()
+        }
+    }
+
+    override fun onApplySmartWallThemeNow() {
+        haptic("pop")
+        currentWallBmp?.let { bmp ->
+            runSmartWallpaperHarmony(bmp = bmp, animated = true, playEffect = true)
+        }
     }
 
     override fun onToggleWeather() {
@@ -2927,6 +3106,10 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     override fun onDestroy() {
         super.onDestroy()
         cancelDepthActivationFlow()
+        smartWallToken++
+        smartMorphAnim?.cancel()
+        if (::harmonyAuraView.isInitialized) harmonyAuraView.cancelSweep()
+        if (::harmonyPillView.isInitialized) harmonyPillView.hide(immediate = true)
         stageGlideAnim?.cancel()
         editorStageSpringRunning = false
         Choreographer.getInstance().removeFrameCallback(editorStageSpringCallback)

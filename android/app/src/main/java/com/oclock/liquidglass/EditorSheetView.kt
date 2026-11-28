@@ -71,6 +71,8 @@ class EditorSheetView(
         fun onToggleMusic()
         fun onToggleNotifications()
         fun onToggleDepth()
+        fun onToggleSmartWallTheme(enabled: Boolean)
+        fun onApplySmartWallThemeNow()
         fun onToggleDnd()
         fun onTogglePasscode()
         fun onChangePasscodePin()
@@ -117,6 +119,10 @@ class EditorSheetView(
     private lateinit var toneSeek: SeekBar
     private lateinit var opacitySeek: SeekBar
     private lateinit var opacityVal: TextView
+    private lateinit var glassSeek: SeekBar
+    private lateinit var glassVal: TextView
+    private lateinit var refractSeek: SeekBar
+    private lateinit var refractVal: TextView
 
     private lateinit var inOpSeek: SeekBar
     private lateinit var inOpVal: TextView
@@ -137,6 +143,7 @@ class EditorSheetView(
     private lateinit var togMusic: IosToggleRow
     private lateinit var togNotif: IosToggleRow
     private lateinit var togDepth: IosToggleRow
+    private lateinit var togSmartWallTheme: IosToggleRow
     private lateinit var togDnd: IosToggleRow
     private lateinit var togPasscode: IosToggleRow
 
@@ -1193,6 +1200,15 @@ class EditorSheetView(
         }
         val r = sz * 0.42f
         when (iconId) {
+            "palette" -> {
+                // Artist palette + color droplets for adaptive wallpaper clock theme
+                val ring = RectF(cx - r * 0.92f, cy - r * 0.86f, cx + r * 0.92f, cy + r * 0.86f)
+                canvas.drawArc(ring, 38f, 295f, false, p)
+                canvas.drawCircle(cx - r * 0.36f, cy - r * 0.30f, r * 0.17f, fillP)
+                canvas.drawCircle(cx + r * 0.10f, cy - r * 0.44f, r * 0.16f, fillP)
+                canvas.drawCircle(cx + r * 0.46f, cy - r * 0.08f, r * 0.16f, fillP)
+                canvas.drawCircle(cx + r * 0.18f, cy + r * 0.40f, r * 0.18f, fillP)
+            }
             "depth" -> {
                 // Overlapping layered frames + subtle front subject curve
                 val backRect = RectF(cx - r * 0.95f, cy - r * 0.95f, cx + r * 0.45f, cy + r * 0.45f)
@@ -2131,10 +2147,28 @@ class EditorSheetView(
         }
         val proTitle = TextView(context).apply {
             text = "اللون المخصص"
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
             setTextColor(Color.argb(215, 255, 255, 255))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
             layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val smartMatchChip = TextView(context).apply {
+            text = "✦ حسب الخلفية"
+            setTextColor(0xFFB3DFFF.toInt())
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            setPadding((9f * dens).roundToInt(), (4f * dens).roundToInt(), (9f * dens).roundToInt(), (4f * dens).roundToInt())
+            background = GradientDrawable().apply {
+                setColor(Color.argb(46, 56, 189, 248))
+                cornerRadius = 999f
+                setStroke((0.8f * dens).roundToInt(), Color.argb(115, 179, 223, 255))
+            }
+            layoutParams = LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+                marginEnd = (8f * dens).roundToInt()
+            }
+            setOnClickListener { callbacks.onApplySmartWallThemeNow() }
         }
         proHex = TextView(context).apply {
             text = "تلقائي"
@@ -2150,7 +2184,7 @@ class EditorSheetView(
             layoutParams = LinearLayout.LayoutParams(s, s)
             setOnClickListener { openHexColorDialog() }
         }
-        proTop.addView(proTitle); proTop.addView(proHex); proTop.addView(proSwatch)
+        proTop.addView(proTitle); proTop.addView(smartMatchChip); proTop.addView(proHex); proTop.addView(proSwatch)
         proCard.addView(proTop)
 
         proCard.addView(miniSliderLabel("درجة اللون"))
@@ -2187,6 +2221,28 @@ class EditorSheetView(
             syncProUi()
         }.apply { layoutDirection = LAYOUT_DIRECTION_LTR }
         proCard.addView(opacitySeek)
+
+        val (glHdr, glTv) = secHeaderWithValue("نسبة Liquid Glass", "75%", compact = true)
+        glassVal = glTv
+        proCard.addView(glHdr)
+        glassSeek = makeSeekBar(0, 100) { v, fromUser ->
+            if (!fromUser || suppressSeek) return@makeSeekBar
+            cfg.clockGlass = v
+            glassVal.text = "$v%"
+            callbacks.onColorOrOpacityChanged()
+        }.apply { layoutDirection = LAYOUT_DIRECTION_LTR }
+        proCard.addView(glassSeek)
+
+        val (rfHdr, rfTv) = secHeaderWithValue("نسبة الانكسار", "100%", compact = true)
+        refractVal = rfTv
+        proCard.addView(rfHdr)
+        refractSeek = makeSeekBar(0, 150) { v, fromUser ->
+            if (!fromUser || suppressSeek) return@makeSeekBar
+            cfg.clockRefraction = v
+            refractVal.text = "$v%"
+            callbacks.onColorOrOpacityChanged()
+        }.apply { layoutDirection = LAYOUT_DIRECTION_LTR }
+        proCard.addView(refractSeek)
         body.addView(proCard)
 
         // 6. Inner White Shadow Card
@@ -2327,6 +2383,21 @@ class EditorSheetView(
             syncFromConfig()
         }
         wallCard.addView(togDepth)
+
+        wallCard.addView(makeHairlineDivider())
+
+        togSmartWallTheme = IosToggleRow(
+            context,
+            iconId = "palette",
+            badgeTint = 0xFFF472B6.toInt(),
+            label = "تلوين ذكي حسب الخلفية",
+            switchColor = 0xFF0A84FF.toInt()
+        ) {
+            cfg.smartWallTheme = !cfg.smartWallTheme
+            callbacks.onToggleSmartWallTheme(cfg.smartWallTheme)
+            syncFromConfig()
+        }
+        wallCard.addView(togSmartWallTheme)
 
         aiDepthStatus = TextView(context).apply {
             text = ""
@@ -2544,6 +2615,7 @@ class EditorSheetView(
         togMusic.setChecked(cfg.music)
         togNotif.setChecked(cfg.notifications)
         togDepth.setChecked(cfg.depth)
+        togSmartWallTheme.setChecked(cfg.smartWallTheme)
         togDnd.setChecked(cfg.dnd)
         togPasscode.setChecked(cfg.passcodeEnabled)
         suppressSeek = false
@@ -2563,6 +2635,10 @@ class EditorSheetView(
         toneSeek.progress = proTone.roundToInt().coerceIn(0, 100)
         opacitySeek.progress = cfg.clockOpacity
         opacityVal.text = "${cfg.clockOpacity}%"
+        glassSeek.progress = cfg.clockGlass.coerceIn(0, 100)
+        glassVal.text = "${cfg.clockGlass}%"
+        refractSeek.progress = cfg.clockRefraction.coerceIn(0, 150)
+        refractVal.text = "${cfg.clockRefraction}%"
 
         val barPad = (10f * dens).roundToInt()
         hueSeek.progressDrawable = android.graphics.drawable.InsetDrawable(

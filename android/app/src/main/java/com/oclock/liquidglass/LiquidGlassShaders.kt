@@ -146,6 +146,7 @@ object LiquidGlassShaders {
         uniform float2 uFieldSize;
         uniform float uMaxAbsPx;
         uniform float uSS;
+        uniform float uGlassAmt;
         uniform float4 uTintTop;
         uniform float4 uTintBot;
         uniform float4 uShadowTop;
@@ -177,17 +178,30 @@ object LiquidGlassShaders {
             float2 dispNorm = (fld.rg * 255.0 - 128.0) / 127.0;
             float2 disp = dispNorm * uMaxAbsPx;
 
+            float glassAmt = clamp(uGlassAmt, 0.0, 1.0);
             float2 localScaled = float2((fragCoord.x - uDstSize.x * 0.5) * uClockScale.x + uDstSize.x * 0.5, fragCoord.y * uClockScale.y);
             float2 samplePos = uClockOrigin + localScaled + disp;
-            float3 col = uBackdrop.eval(samplePos).rgb * 0.56
-                + uBackdrop.eval(samplePos + float2(1.1, 0.0)).rgb * 0.11
-                + uBackdrop.eval(samplePos + float2(-1.1, 0.0)).rgb * 0.11
-                + uBackdrop.eval(samplePos + float2(0.0, 1.1)).rgb * 0.11
-                + uBackdrop.eval(samplePos + float2(0.0, -1.1)).rgb * 0.11;
+            float spread = mix(0.0, 2.7, glassAmt);
+            float wC = mix(1.0, 0.50, glassAmt);
+            float wT = (1.0 - wC) * 0.25;
+            float3 col = uBackdrop.eval(samplePos).rgb * wC
+                + uBackdrop.eval(samplePos + float2(spread, 0.0)).rgb * wT
+                + uBackdrop.eval(samplePos + float2(-spread, 0.0)).rgb * wT
+                + uBackdrop.eval(samplePos + float2(0.0, spread)).rgb * wT
+                + uBackdrop.eval(samplePos + float2(0.0, -spread)).rgb * wT;
 
-            // saturate(1.22) brightness(1.04)
+            // Liquid Glass crystal vibrancy & edge depth scaled by uGlassAmt
             float lum = dot(col, float3(0.2126, 0.7152, 0.0722));
-            col = clamp((lum + (col - lum) * 1.22) * 1.04, 0.0, 1.0);
+            float satBoost = mix(1.0, 1.28, glassAmt);
+            float brightBoost = mix(1.0, 1.055, glassAmt);
+            col = clamp((lum + (col - lum) * satBoost) * brightBoost, 0.0, 1.0);
+
+            float depthPx = max(0.0, fld.b * 255.0 / 1.5 - 1.0);
+            if (glassAmt > 0.01) {
+                float edgeBand = 1.0 - clamp(depthPx / max(1.0, 2.6 * uSS), 0.0, 1.0);
+                float fresnel = pow(edgeBand, 2.3) * glassAmt * 0.14;
+                col = mix(col, float3(1.0), fresnel);
+            }
 
             // vertical clock tint gradient
             float4 tint = mix(uTintTop, uTintBot, clamp(uv.y, 0.0, 1.0));
@@ -197,7 +211,6 @@ object LiquidGlassShaders {
             col = mix(col, uShadowTop.rgb, uShadowTop.a);
 
             // Silky fading iOS 26 inner glass shadow (scales smoothly from ultra-fine 0.9dp at 0.1 to deep glow, fades to 0 on unlit edges)
-            float depthPx = max(0.0, fld.b * 255.0 / 1.5 - 1.0);
             float fallLimit = uInnerThick > 0.01 ? max(0.75 * uSS, (uInnerThick * 4.8 + 0.45) * uSS) : 0.0;
             if (uInnerOp > 0.001 && uInnerThick > 0.01 && depthPx < fallLimit) {
                 float2 nRaw = ((m0.gb + m1.gb + m2.gb + m3.gb) * 0.25 * 255.0 - 128.0) / 127.0;

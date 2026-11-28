@@ -308,7 +308,7 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
         jfloat dstX, jfloat dstY, jfloat dstW, jfloat dstH, jfloat wallLeft, jfloat wallTop, jfloat wallScaleX, jfloat wallScaleY,
         jfloat maxAbsPx, jfloat ss,
         jint topColor, jint botColor, jfloat shadowOp, jint shadowTopColor,
-        jint innerColor, jfloat innerThick, jfloat innerOp, jfloat innerAngleDeg, jfloat innerFade) {
+        jint innerColor, jfloat innerThick, jfloat innerOp, jfloat innerAngleDeg, jfloat innerFade, jfloat glassAmt) {
     if (!alphaBmp || !fieldBmp || !wallBmp || !outBmp) return JNI_FALSE;
     AndroidBitmapInfo aI{}, fI{}, wI{}, oI{};
     if (AndroidBitmap_getInfo(env, alphaBmp, &aI) != ANDROID_BITMAP_RESULT_SUCCESS ||
@@ -334,6 +334,9 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
     const float brA = ((botColor >> 24) & 0xff) / 255.f, brR = float((botColor >> 16) & 0xff), brG = float((botColor >> 8) & 0xff), brB = float(botColor & 0xff);
     const float shR = float((shadowTopColor >> 16) & 0xff), shG = float((shadowTopColor >> 8) & 0xff), shB = float(shadowTopColor & 0xff);
     const float inR = float((innerColor >> 16) & 0xff), inG = float((innerColor >> 8) & 0xff), inB = float(innerColor & 0xff);
+    const float gAmt = clamp01f(glassAmt);
+    const float satBoost = 1.0f + 0.28f * gAmt;
+    const float brightBoost = 1.0f + 0.055f * gAmt;
     const float rad = innerAngleDeg * 3.14159265f / 180.f, ax = std::cos(rad), ay = std::sin(rad);
     const float fallLimit = innerThick > 0.01f ? std::max(0.75f * ss, (innerThick * 4.8f + 0.45f) * ss) : 0.0f;
     const float scaleX = dstW / std::max(1.f, float(w)), scaleY = dstH / std::max(1.f, float(h));
@@ -362,11 +365,20 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
             float r, g, b;
             sampleBilinearWall(wB, ww, wh, wI.stride, wx, wy, r, g, b);
 
-            // saturate(1.22) brightness(1.04)
+            // Liquid Glass crystal vibrancy & edge depth scaled by gAmt
             float lum = 0.2126f * r + 0.7152f * g + 0.0722f * b;
-            r = std::min(255.f, std::max(0.f, (lum + (r - lum) * 1.22f) * 1.04f));
-            g = std::min(255.f, std::max(0.f, (lum + (g - lum) * 1.22f) * 1.04f));
-            b = std::min(255.f, std::max(0.f, (lum + (b - lum) * 1.22f) * 1.04f));
+            r = std::min(255.f, std::max(0.f, (lum + (r - lum) * satBoost) * brightBoost));
+            g = std::min(255.f, std::max(0.f, (lum + (g - lum) * satBoost) * brightBoost));
+            b = std::min(255.f, std::max(0.f, (lum + (b - lum) * satBoost) * brightBoost));
+
+            float depthPx = std::max(0.f, float(fd[2]) / 1.5f - 1.f);
+            if (gAmt > 0.01f) {
+                float edgeBand = 1.f - clamp01f(depthPx / std::max(1.f, 2.6f * ss));
+                float fresnel = std::pow(edgeBand, 2.3f) * gAmt * 0.14f;
+                r = r * (1.f - fresnel) + 255.f * fresnel;
+                g = g * (1.f - fresnel) + 255.f * fresnel;
+                b = b * (1.f - fresnel) + 255.f * fresnel;
+            }
 
             // clock tint + shadow-op top tint
             r = r * (1.f - tA) + tR * tA;
@@ -378,7 +390,6 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
                 b = b * (1.f - shadowOp) + shB * shadowOp;
             }
             // Silky fading iOS 26 inner glass shadow (scales smoothly from ultra-fine 0.9dp at 0.1 to deep glow, fades to 0 on unlit edges)
-            float depthPx = std::max(0.f, float(fd[2]) / 1.5f - 1.f);
             if (innerOp > 0.001f && innerThick > 0.01f && depthPx < fallLimit) {
                 float gx = (float(aRow[size_t(x) * 4 + 1]) - 128.f) / 127.f;
                 float gy = (float(aRow[size_t(x) * 4 + 2]) - 128.f) / 127.f;

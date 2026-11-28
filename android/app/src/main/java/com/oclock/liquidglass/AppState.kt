@@ -95,6 +95,9 @@ data class LockConfig(
     var innerAngle: Float = 59f,
     var innerFade: Int = 100,
     var innerColor: String = "#ffffff",
+    var smartWallTheme: Boolean = true,
+    var clockGlass: Int = 75,
+    var clockRefraction: Int = 100,
     var depth: Boolean = false,
     var weather: Boolean = true,
     var music: Boolean = true,
@@ -113,6 +116,8 @@ data class LockConfig(
         innerThickness = innerThickness.coerceIn(0f, 8f)
         innerAngle = innerAngle.coerceIn(0f, 360f)
         innerFade = innerFade.coerceIn(0, 100)
+        clockGlass = clockGlass.coerceIn(0, 100)
+        clockRefraction = clockRefraction.coerceIn(0, 150)
         if ((passcodePin.length != 4 && passcodePin.length != 6) || !passcodePin.all { it in '0'..'9' }) {
             passcodePin = "000000"
         }
@@ -207,6 +212,8 @@ class StateStore(context: Context) {
     private val wallFile = File(context.filesDir, "custom_wall.jpg")
     private val subjectFile = File(context.filesDir, "custom_subject.png")
 
+    fun hasSavedConfig(): Boolean = prefs.contains("config")
+
     fun load(): LockConfig {
         val cfg = LockConfig()
         val raw = prefs.getString("config", null) ?: return cfg
@@ -230,6 +237,9 @@ class StateStore(context: Context) {
             cfg.innerAngle = j.optDouble("innerAngle", cfg.innerAngle.toDouble()).toFloat()
             cfg.innerFade = j.optInt("innerFade", cfg.innerFade)
             cfg.innerColor = j.optString("innerColor", cfg.innerColor)
+            cfg.smartWallTheme = j.optBoolean("smartWallTheme", cfg.smartWallTheme)
+            cfg.clockGlass = j.optInt("clockGlass", cfg.clockGlass)
+            cfg.clockRefraction = j.optInt("clockRefraction", cfg.clockRefraction)
             cfg.depth = j.optBoolean("depth", cfg.depth)
             cfg.weather = j.optBoolean("weather", cfg.weather)
             cfg.music = j.optBoolean("music", cfg.music)
@@ -265,6 +275,9 @@ class StateStore(context: Context) {
             put("innerAngle", cfg.innerAngle.toDouble())
             put("innerFade", cfg.innerFade)
             put("innerColor", cfg.innerColor)
+            put("smartWallTheme", cfg.smartWallTheme)
+            put("clockGlass", cfg.clockGlass)
+            put("clockRefraction", cfg.clockRefraction)
             put("depth", cfg.depth)
             put("weather", cfg.weather)
             put("music", cfg.music)

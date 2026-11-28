@@ -342,8 +342,11 @@ class ClockGlassView(
             sh.setFloatUniform("uDstSize", dstW, dstH)
             sh.setFloatUniform("uClockScale", previewScaleX, previewScaleY)
             sh.setFloatUniform("uFieldSize", art.wPx.toFloat(), art.hPx.toFloat())
-            sh.setFloatUniform("uMaxAbsPx", art.maxAbsCss * dens)
+            val effMaxAbsPx = art.maxAbsCss * dens * (config.clockRefraction / 100f).coerceIn(0f, 1.5f)
+            val glassAmt = (config.clockGlass / 100f).coerceIn(0f, 1f)
+            sh.setFloatUniform("uMaxAbsPx", effMaxAbsPx)
             sh.setFloatUniform("uSS", art.ss)
+            sh.setFloatUniform("uGlassAmt", glassAmt)
             setColorUniform(sh, "uTintTop", cols.clockTintTop)
             setColorUniform(sh, "uTintBot", cols.clockTintBot)
             val shTop = Color.argb(
@@ -369,7 +372,9 @@ class ClockGlassView(
             perf.recordWork("clockShaderDraw", (SystemClock.elapsedRealtimeNanos() - t0) / 1_000_000.0)
         } else {
             val wallBmp = backdrop.wallBitmap ?: return
-            val key = "${art.maskKey}|${originX.roundToInt()}|${originY.roundToInt()}|${cols.clockTintTop}|${cols.clockTintBot}|${config.innerOpacity}|${config.innerThickness}|${config.innerAngle}|${config.innerFade}|${config.innerColor}"
+            val effMaxAbsPx = art.maxAbsCss * dens * (config.clockRefraction / 100f).coerceIn(0f, 1.5f)
+            val glassAmt = (config.clockGlass / 100f).coerceIn(0f, 1f)
+            val key = "${art.maskKey}|${originX.roundToInt()}|${originY.roundToInt()}|${cols.clockTintTop}|${cols.clockTintBot}|${config.innerOpacity}|${config.innerThickness}|${config.innerAngle}|${config.innerFade}|${config.innerColor}|${config.clockGlass}|${config.clockRefraction}"
             var out = cpuFallbackBmp?.takeIf { !it.isRecycled && it.width == art.wPx && it.height == art.hPx }
             if (out == null || cpuFallbackKey != key) {
                 if (out == null) {
@@ -381,9 +386,10 @@ class ClockGlassView(
                     art.alphaBmp, art.fieldBmp, wallBmp, out,
                     originX, originY, dstW, dstH,
                     backdrop.wallLeft, backdrop.wallTop, backdrop.wallScaleX, backdrop.wallScaleY,
-                    art.maxAbsCss * dens, art.ss,
+                    effMaxAbsPx, art.ss,
                     cols.clockTintTop, cols.clockTintBot, cols.clockShadowOp, cols.clockShadowTopColor,
-                    innerCol, config.innerThickness, (config.innerOpacity / 100f).coerceIn(0f, 1f), config.innerAngle, (config.innerFade / 100f).coerceIn(0f, 1f)
+                    innerCol, config.innerThickness, (config.innerOpacity / 100f).coerceIn(0f, 1f), config.innerAngle, (config.innerFade / 100f).coerceIn(0f, 1f),
+                    glassAmt
                 )
                 cpuFallbackKey = key
             }
@@ -479,6 +485,8 @@ class ClockGhostView(
         val originX = (parent as? View)?.x?.plus(x) ?: x
         val originY = (parent as? View)?.y?.plus(y) ?: y
 
+        val effMaxAbsPx = art.maxAbsCss * dens * (ghostConfig.clockRefraction / 100f).coerceIn(0f, 1.5f)
+        val glassAmt = (ghostConfig.clockGlass / 100f).coerceIn(0f, 1f)
         if (Build.VERSION.SDK_INT >= 33 && clockShader != null && art.fieldShader != null && art.alphaShader != null) {
             val sh = clockShader!!
             sh.setInputShader("uBackdrop", wallShader)
@@ -488,8 +496,9 @@ class ClockGhostView(
             sh.setFloatUniform("uDstSize", dstW, dstH)
             sh.setFloatUniform("uClockScale", 1f, 1f)
             sh.setFloatUniform("uFieldSize", art.wPx.toFloat(), art.hPx.toFloat())
-            sh.setFloatUniform("uMaxAbsPx", art.maxAbsCss * dens)
+            sh.setFloatUniform("uMaxAbsPx", effMaxAbsPx)
             sh.setFloatUniform("uSS", art.ss)
+            sh.setFloatUniform("uGlassAmt", glassAmt)
             setColorUniform(sh, "uTintTop", cols.clockTintTop)
             setColorUniform(sh, "uTintBot", cols.clockTintBot)
             val shTop = Color.argb(
@@ -521,10 +530,11 @@ class ClockGhostView(
                     art.alphaBmp, art.fieldBmp, wallBmp, created,
                     originX, originY, dstW, dstH,
                     backdrop.wallLeft, backdrop.wallTop, backdrop.wallScaleX, backdrop.wallScaleY,
-                    art.maxAbsCss * dens, art.ss,
+                    effMaxAbsPx, art.ss,
                     cols.clockTintTop, cols.clockTintBot, cols.clockShadowOp, cols.clockShadowTopColor,
                     innerCol, ghostConfig.innerThickness, (ghostConfig.innerOpacity / 100f).coerceIn(0f, 1f),
-                    ghostConfig.innerAngle, (ghostConfig.innerFade / 100f).coerceIn(0f, 1f)
+                    ghostConfig.innerAngle, (ghostConfig.innerFade / 100f).coerceIn(0f, 1f),
+                    glassAmt
                 )
                 ghostCpuBmp = created
                 created

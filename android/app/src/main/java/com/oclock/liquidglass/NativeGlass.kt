@@ -71,7 +71,8 @@ object NativeGlass {
         innerThick: Float,
         innerOp: Float,
         innerAngleDeg: Float,
-        innerFade: Float
+        innerFade: Float,
+        glassAmt: Float
     ): Boolean
 
     /**
