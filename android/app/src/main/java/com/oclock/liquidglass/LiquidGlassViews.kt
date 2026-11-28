@@ -75,6 +75,7 @@ class LiquidGlassCardHelper(
         val bzPx = bezelDp * dens
         val thPx = thickOverride * dens
 
+        val isPreBlurred = useBlurredBackdrop && backdrop.blurredShader != null
         val shaderSrc = if (useBlurredBackdrop) {
             backdrop.blurredShader ?: backdrop.compositedShader ?: backdrop.wallShader
         } else {
@@ -84,7 +85,7 @@ class LiquidGlassCardHelper(
             val t0 = SystemClock.elapsedRealtimeNanos()
             val sh = shader!!
             LiquidGlassShaders.configureCardShader(
-                sh, shaderSrc, originX, originY + topOff, w, effH, radPx, bzPx, thPx, ior, glassBgColor, shadowOverride, innerOverride
+                sh, shaderSrc, originX, originY + topOff, w, effH, radPx, bzPx, thPx, ior, glassBgColor, shadowOverride, innerOverride, preBlurred = isPreBlurred
             )
             paint.shader = sh
             if (topOff > 0.1f) {

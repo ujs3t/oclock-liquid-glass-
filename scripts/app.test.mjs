@@ -423,6 +423,21 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(perfKt.includes('oclock.liquidglass.perf.v1'));
   assert.ok(perfKt.includes('MediaStore.Downloads'));
 
+  // Sheet smoothness & visual-parity optimizations (zero frame drops during open/switch/scroll)
+  assert.ok(shadersKt.includes('uPreBlurred'));
+  assert.ok(shadersKt.includes('bool nearEdge = dd > -2.5'));
+  assert.ok(shadersKt.includes('lastZoomWall'));
+  assert.ok(sheetKt.includes('View.LAYER_TYPE_HARDWARE'));
+  assert.ok(sheetKt.includes('wallScrollView.visibility = INVISIBLE'));
+  assert.ok(sheetKt.includes('clockScrollView.visibility = INVISIBLE'));
+  assert.ok(sheetKt.includes('hueTrackGrad'));
+  assert.ok(sheetKt.includes('toneTrackGrad'));
+  assert.ok(sheetKt.includes('opacityTrackGrad'));
+  assert.ok(sheetKt.includes('onScrollOrRubber = { invalidateVisibleGlass(clockBody) }'));
+  assert.ok(!sheetKt.includes('setUpdateListener { invalidateVisibleGlass(inScroll) }'));
+  assert.ok(mainKt.includes('lastClockShaderLift'));
+  assert.ok(mainKt.includes('needChromeShaderRefresh'));
+
   // Reference web checks still preserved
   assert.ok(html.includes('lg-glass-layer'));
   assert.ok(html.includes('fullWidthSize'));

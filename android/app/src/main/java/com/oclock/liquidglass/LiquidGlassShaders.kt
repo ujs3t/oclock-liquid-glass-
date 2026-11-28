@@ -26,15 +26,11 @@ object LiquidGlassShaders {
         uniform float uShadowInt;
         uniform float2 uLightDir;
         uniform float uInnerShadow;
+        uniform float uPreBlurred;
 
         float sdRoundBox(float2 p, float2 b, float r) {
             float2 q = abs(p) - b + r;
             return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
-        }
-
-        float squircleH(float u) {
-            float t = clamp(u, 0.0, 1.0);
-            return pow(max(0.0, 1.0 - pow(1.0 - t, 4.0)), 0.25);
         }
 
         half4 main(float2 fragCoord) {
@@ -44,38 +40,42 @@ object LiquidGlassShaders {
             float dd = sdRoundBox(p, halfSz, r);
             if (dd > 1.2) return half4(0.0);
 
-            // 4-tap Rotated-Grid Supersampling (RGSS) for glass edge & inner white shadow — eliminates curved stair-steps
-            float2 o0 = float2( 0.375,  0.125);
-            float2 o1 = float2(-0.375, -0.125);
-            float2 o2 = float2( 0.125, -0.375);
-            float2 o3 = float2(-0.125,  0.375);
-            float d0 = sdRoundBox(p + o0, halfSz, r);
-            float d1 = sdRoundBox(p + o1, halfSz, r);
-            float d2 = sdRoundBox(p + o2, halfSz, r);
-            float d3 = sdRoundBox(p + o3, halfSz, r);
-            float m0 = smoothstep(0.65, -0.65, d0);
-            float m1 = smoothstep(0.65, -0.65, d1);
-            float m2 = smoothstep(0.65, -0.65, d2);
-            float m3 = smoothstep(0.65, -0.65, d3);
-            float mSum = m0 + m1 + m2 + m3;
-            float maskA = mSum * 0.25;
-            if (maskA <= 0.0005) return half4(0.0);
+            float maskA = 1.0;
+            float mSum = 4.0;
+            float d0 = dd; float d1 = dd; float d2 = dd; float d3 = dd;
+            float m0 = 1.0; float m1 = 1.0; float m2 = 1.0; float m3 = 1.0;
+            bool nearEdge = dd > -2.5;
+            if (nearEdge) {
+                // 4-tap Rotated-Grid Supersampling (RGSS) strictly along curved outer edge — eliminates stair-steps
+                d0 = sdRoundBox(p + float2( 0.375,  0.125), halfSz, r);
+                d1 = sdRoundBox(p + float2(-0.375, -0.125), halfSz, r);
+                d2 = sdRoundBox(p + float2( 0.125, -0.375), halfSz, r);
+                d3 = sdRoundBox(p + float2(-0.125,  0.375), halfSz, r);
+                m0 = smoothstep(0.65, -0.65, d0);
+                m1 = smoothstep(0.65, -0.65, d1);
+                m2 = smoothstep(0.65, -0.65, d2);
+                m3 = smoothstep(0.65, -0.65, d3);
+                mSum = m0 + m1 + m2 + m3;
+                maskA = mSum * 0.25;
+                if (maskA <= 0.0005) return half4(0.0);
+            }
 
-            float e = 1.0;
-            float2 grad = float2(
-                sdRoundBox(p + float2(e, 0.0), halfSz, r) - sdRoundBox(p - float2(e, 0.0), halfSz, r),
-                sdRoundBox(p + float2(0.0, e), halfSz, r) - sdRoundBox(p - float2(0.0, e), halfSz, r)
-            );
-            float glen = length(grad);
-            float2 n = glen > 0.0001 ? grad / glen : float2(0.0, -1.0);
+            // Analytical unit SDF normal (mathematically exact, zero extra sdRoundBox evaluations)
+            float2 bEff = max(float2(0.0), halfSz - r);
+            float2 qN = abs(p) - bEff;
+            float2 sgn = float2(p.x < 0.0 ? -1.0 : 1.0, p.y < 0.0 ? -1.0 : 1.0);
+            float2 n = (qN.x > 0.0 && qN.y > 0.0)
+                ? sgn * normalize(qN)
+                : (qN.x > qN.y ? float2(sgn.x, 0.0) : float2(0.0, sgn.y));
 
             float disp = 0.0;
             if (dd < 0.0 && -dd < uBezel) {
-                float u = clamp(-dd / max(1.0, uBezel), 0.0, 1.0);
-                float u1 = max(0.0, u - 0.002);
-                float u2 = min(1.0, u + 0.002);
-                float hVal = squircleH(u) * uThick;
-                float slope = ((squircleH(u2) - squircleH(u1)) / (u2 - u1)) * uThick / max(1.0, uBezel);
+                float u = clamp(-dd / max(1.0, uBezel), 0.0, 0.996);
+                float omU = 1.0 - u;
+                float omU3 = omU * omU * omU;
+                float base4 = max(0.0001, 1.0 - omU3 * omU);
+                float hVal = pow(base4, 0.25) * uThick;
+                float slope = (omU3 / pow(base4, 0.75)) * uThick / max(1.0, uBezel);
                 float sl = length(float2(-slope, 1.0));
                 float snx = -slope / sl;
                 float snz = 1.0 / sl;
@@ -90,12 +90,18 @@ object LiquidGlassShaders {
             }
 
             float2 samplePos = uCardOrigin + fragCoord - n * disp;
-            // Subtle 5-tap frosted optical softening matching backdrop blur
-            float3 col = uBackdrop.eval(samplePos).rgb * 0.40
-                + uBackdrop.eval(samplePos + float2(2.2, 2.2)).rgb * 0.15
-                + uBackdrop.eval(samplePos + float2(-2.2, 2.2)).rgb * 0.15
-                + uBackdrop.eval(samplePos + float2(2.2, -2.2)).rgb * 0.15
-                + uBackdrop.eval(samplePos + float2(-2.2, -2.2)).rgb * 0.15;
+            float3 col;
+            if (uPreBlurred > 0.5) {
+                // Backdrop is already 3-pass pre-blurred bokeh; single bilinear tap saves 80% texture bandwidth
+                col = uBackdrop.eval(samplePos).rgb;
+            } else {
+                // Subtle 5-tap frosted optical softening over sharp wallpaper
+                col = uBackdrop.eval(samplePos).rgb * 0.40
+                    + uBackdrop.eval(samplePos + float2(2.2, 2.2)).rgb * 0.15
+                    + uBackdrop.eval(samplePos + float2(-2.2, 2.2)).rgb * 0.15
+                    + uBackdrop.eval(samplePos + float2(2.2, -2.2)).rgb * 0.15
+                    + uBackdrop.eval(samplePos + float2(-2.2, -2.2)).rgb * 0.15;
+            }
 
             // saturate(1.15) contrast(1.06)
             float lum = dot(col, float3(0.2126, 0.7152, 0.0722));
@@ -104,22 +110,27 @@ object LiquidGlassShaders {
             // glass-bg tint
             col = mix(col, uGlassBg.rgb, uGlassBg.a);
 
-            // 4x supersampled silky white inner shadow ONLY (zero dark edge teeth, zero pixelation, zero outer stroke)
-            if (uInnerShadow > 0.001) {
-                float span = clamp(uBezel * 0.095, 4.2, 9.5);
-                float f0 = pow(1.0 - clamp(max(0.0, -d0) / span, 0.0, 1.0), 2.15) * m0;
-                float f1 = pow(1.0 - clamp(max(0.0, -d1) / span, 0.0, 1.0), 2.15) * m1;
-                float f2 = pow(1.0 - clamp(max(0.0, -d2) / span, 0.0, 1.0), 2.15) * m2;
-                float f3 = pow(1.0 - clamp(max(0.0, -d3) / span, 0.0, 1.0), 2.15) * m3;
-                float fall = (f0 + f1 + f2 + f3) / max(0.001, mSum);
+            // Silky white inner shadow ONLY (4x supersampled along outer edge, single fast path inside)
+            float innerSpan = clamp(uBezel * 0.095, 4.2, 9.5);
+            if (uInnerShadow > 0.001 && -dd < innerSpan + 0.75) {
+                float fall;
+                if (nearEdge) {
+                    float f0 = pow(1.0 - clamp(max(0.0, -d0) / innerSpan, 0.0, 1.0), 2.15) * m0;
+                    float f1 = pow(1.0 - clamp(max(0.0, -d1) / innerSpan, 0.0, 1.0), 2.15) * m1;
+                    float f2 = pow(1.0 - clamp(max(0.0, -d2) / innerSpan, 0.0, 1.0), 2.15) * m2;
+                    float f3 = pow(1.0 - clamp(max(0.0, -d3) / innerSpan, 0.0, 1.0), 2.15) * m3;
+                    fall = (f0 + f1 + f2 + f3) / max(0.001, mSum);
+                } else {
+                    fall = pow(1.0 - clamp(-dd / innerSpan, 0.0, 1.0), 2.15);
+                }
                 float k = abs(dot(n, uLightDir));
                 float lit = pow(max(0.0, k), 1.8);
                 float innerGlow = clamp(lit * fall * uInnerShadow, 0.0, 0.78);
                 col = mix(col, float3(1.0), innerGlow);
             }
 
-            // 4x supersampled Fresnel specular rim shadow
-            if (uShadowInt > 0.001) {
+            // 4x supersampled Fresnel specular rim shadow (exists strictly within outer 2.2px edge)
+            if (uShadowInt > 0.001 && nearEdge) {
                 float b0 = clamp((1.5 + d0) / 1.5, 0.0, 1.0) * m0;
                 float b1 = clamp((1.5 + d1) / 1.5, 0.0, 1.0) * m1;
                 float b2 = clamp((1.5 + d2) / 1.5, 0.0, 1.0) * m2;
@@ -324,6 +335,12 @@ object LiquidGlassShaders {
         var blurredScaleX = 1f
         var blurredScaleY = 1f
         private val matrix = Matrix()
+        private var lastZoomW = -1
+        private var lastZoomH = -1
+        private var lastZoomVal = Float.NaN
+        private var lastZoomWall: Bitmap? = null
+        private var lastZoomComp: Bitmap? = null
+        private var lastZoomBlur: Bitmap? = null
 
         fun updateWallAndSubject(
             wall: Bitmap,
@@ -422,6 +439,18 @@ object LiquidGlassShaders {
 
         fun updateZoomOnly(screenW: Int, screenH: Int, pullZoom: Float) {
             val wall = wallBitmap ?: return
+            if (screenW == lastZoomW && screenH == lastZoomH &&
+                wall === lastZoomWall && compositedBitmap === lastZoomComp && blurredBitmap === lastZoomBlur &&
+                !lastZoomVal.isNaN() && kotlin.math.abs(pullZoom - lastZoomVal) < 0.0001f
+            ) {
+                return
+            }
+            lastZoomW = screenW
+            lastZoomH = screenH
+            lastZoomVal = pullZoom
+            lastZoomWall = wall
+            lastZoomComp = compositedBitmap
+            lastZoomBlur = blurredBitmap
             val bw = wall.width.toFloat().coerceAtLeast(1f)
             val bh = wall.height.toFloat().coerceAtLeast(1f)
             val finalScale = max(screenW / bw, screenH / bh) * pullZoom
@@ -552,7 +581,8 @@ object LiquidGlassShaders {
         ior: Float,
         glassBg: Int,
         shadowInt: Float,
-        innerShadow: Float = 0f
+        innerShadow: Float = 0f,
+        preBlurred: Boolean = false
     ) {
         shader.setInputShader("uBackdrop", backdrop)
         shader.setFloatUniform("uCardOrigin", cardX, cardY)
@@ -572,6 +602,7 @@ object LiquidGlassShaders {
         val rad = Math.toRadians(55.0)
         shader.setFloatUniform("uLightDir", cos(rad).toFloat(), sin(rad).toFloat())
         shader.setFloatUniform("uInnerShadow", innerShadow)
+        shader.setFloatUniform("uPreBlurred", if (preBlurred) 1f else 0f)
     }
 
     fun isGpuAgslAvailable(): Boolean = Build.VERSION.SDK_INT >= 33

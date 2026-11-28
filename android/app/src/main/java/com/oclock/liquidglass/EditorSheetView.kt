@@ -188,6 +188,21 @@ class EditorSheetView(
     private var isDraggingSheet = false
     private val tmpVisRect = Rect()
     private val crossSlideEase = PathInterpolator(0.22f, 1f, 0.36f, 1f)
+    private var lastOutlineMorphTop = -1f
+    private var lastSyncedToneHue = -999f
+    private var lastSyncedOpCol = 0
+    private var lastSyncedOpIsAuto = false
+    private var lastSyncedProSwatchCol = 0
+    private var lastActiveSwatchId = ""
+    private var lastActiveInnerHex = ""
+    private var lastActiveWallId = ""
+    private lateinit var hueTrackGrad: GradientDrawable
+    private lateinit var toneTrackGrad: GradientDrawable
+    private lateinit var opacityTrackGrad: GradientDrawable
+    private lateinit var proSwatchGrad: GradientDrawable
+    private val colorSwatchGrads = HashMap<String, GradientDrawable>()
+    private val innerSwatchGrads = HashMap<String, GradientDrawable>()
+    private val wallThumbGrads = HashMap<String, GradientDrawable>()
 
     private val sheetSpringCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
@@ -227,7 +242,10 @@ class EditorSheetView(
                 velSlideY = 0f
                 velMorphTop = 0f
                 velScale = 0f
-                visibility = GONE
+                if (sheetCard.layerType != View.LAYER_TYPE_NONE) {
+                    sheetCard.setLayerType(View.LAYER_TYPE_NONE, null)
+                }
+                visibility = INVISIBLE
                 sheetSlideY = 0f
                 sheetScale = 1f
                 sheetCard.translationY = 0f
@@ -259,7 +277,7 @@ class EditorSheetView(
     }
 
     init {
-        visibility = GONE
+        visibility = INVISIBLE
         layoutDirection = LAYOUT_DIRECTION_RTL
         setBackgroundColor(Color.TRANSPARENT)
         setOnClickListener { close() }
@@ -344,13 +362,13 @@ class EditorSheetView(
         }
         clockScrollView = EditorRubberScrollView(context).apply {
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
-            visibility = GONE
-            onScrollOrRubber = { invalidateVisibleGlass(this@EditorSheetView.sheetCard) }
+            visibility = INVISIBLE
+            onScrollOrRubber = { invalidateVisibleGlass(clockBody) }
         }
         wallScrollView = EditorRubberScrollView(context).apply {
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
             visibility = VISIBLE
-            onScrollOrRubber = { invalidateVisibleGlass(this@EditorSheetView.sheetCard) }
+            onScrollOrRubber = { invalidateVisibleGlass(wallBody) }
         }
         clockBody = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -416,6 +434,10 @@ class EditorSheetView(
         }
     }
 
+    fun refreshGlass() {
+        if (isOpen) invalidateVisibleGlass(sheetCard)
+    }
+
     fun currentSheetHeightPx(): Int = sheetHeightFor(currentMode)
 
     private fun sheetHeightFor(mode: Mode): Int {
@@ -428,12 +450,14 @@ class EditorSheetView(
 
     private fun computeShellOrigin(view: View): Pair<Float, Float> {
         val rootShell = getRootShell()
+        val bakeResting = sheetCard.layerType == View.LAYER_TYPE_HARDWARE && !sheetClosing
         var ox = view.x
-        var oy = view.y
+        var oy = if (view === sheetCard && bakeResting) view.top.toFloat() else view.y
         var p = view.parent as? View
         while (p != null && p !== rootShell) {
             ox += p.x - p.scrollX
-            oy += p.y - p.scrollY
+            val py = if (p === sheetCard && bakeResting) p.top.toFloat() else p.y
+            oy += py - p.scrollY
             p = p.parent as? View
         }
         return ox to oy
@@ -459,11 +483,24 @@ class EditorSheetView(
 
     private fun applySheetVisualState() {
         val visH = max(120f, sheetHeightFor(currentMode).toFloat())
-        sheetCard.topInsetPx = morphTopPx
-        sheetCard.invalidateOutline()
-        grabberWrap.translationY = morphTopPx
-        hdr.translationY = morphTopPx
-        scrollHost.translationY = morphTopPx
+        val morphChanged = abs(morphTopPx - lastOutlineMorphTop) >= 0.5f
+        if (morphChanged) {
+            lastOutlineMorphTop = morphTopPx
+            sheetCard.topInsetPx = morphTopPx
+            sheetCard.invalidateOutline()
+            grabberWrap.translationY = morphTopPx
+            hdr.translationY = morphTopPx
+            scrollHost.translationY = morphTopPx
+        }
+
+        val isSliding = sheetClosing || isDraggingSheet || abs(sheetSlideY) > 0.5f
+        if (isSliding) {
+            if (sheetCard.layerType != View.LAYER_TYPE_HARDWARE) {
+                sheetCard.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            }
+        } else if (sheetCard.layerType != View.LAYER_TYPE_NONE) {
+            sheetCard.setLayerType(View.LAYER_TYPE_NONE, null)
+        }
 
         sheetCard.pivotX = sheetCard.width * 0.5f
         sheetCard.pivotY = sheetCard.height.toFloat()
@@ -472,7 +509,12 @@ class EditorSheetView(
         sheetCard.scaleY = sheetScale
         val slideFade = (1f - (sheetSlideY / (visH * 0.78f)).coerceIn(0f, 1f)).let { it * it }
         sheetCard.alpha = if (sheetClosing || sheetSlideY > 0.5f) slideFade else 1f
-        invalidateVisibleGlass(sheetCard)
+
+        if (!isSliding && morphChanged) {
+            sheetCard.invalidate()
+            switchModeBtn.invalidate()
+            doneBtn.invalidate()
+        }
     }
 
     private fun startSheetSpring() {
@@ -1957,13 +1999,15 @@ class EditorSheetView(
             setOnClickListener { onSelect() }
         }
 
+        private val activeBorder = GradientDrawable().apply {
+            cornerRadius = 16f * dens
+            setStroke((1.8f * dens).roundToInt(), 0xFFB3DFFF.toInt())
+        }
+
         private fun applyFontVisuals() {
             sampleTv.setTextColor(if (selectedState) 0xFFE0F2FE.toInt() else Color.WHITE)
             nameTv.setTextColor(if (selectedState) 0xFFB3DFFF.toInt() else Color.argb(165, 255, 255, 255))
-            foreground = if (selectedState) GradientDrawable().apply {
-                cornerRadius = 16f * dens
-                setStroke((1.8f * dens).roundToInt(), 0xFFB3DFFF.toInt())
-            } else null
+            foreground = if (selectedState) activeBorder else null
             invalidate()
         }
 
@@ -2058,7 +2102,7 @@ class EditorSheetView(
         }
         fontScroll = RubberHorizontalScrollView(context).apply {
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
-            onScrollOrRubber = { invalidateVisibleGlass(this@EditorSheetView.sheetCard) }
+            onScrollOrRubber = { invalidateVisibleGlass(this) }
         }
         for (f in ClockFont.entries) {
             val chip = GlassFontChip(context, f) {
@@ -2083,9 +2127,16 @@ class EditorSheetView(
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
         }
         for (cId in AppConstants.CLOCK_COLORS) {
+            val dotGrad = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(if (cId == "auto") 0xFF475569.toInt() else AppConstants.parseHexColor(cId))
+                setStroke((1f * dens).roundToInt(), Color.argb(80, 255, 255, 255))
+            }
+            colorSwatchGrads[cId] = dotGrad
             val dot = View(context).apply {
                 val s = (30f * dens).roundToInt()
                 layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = (8f * dens).roundToInt() }
+                background = dotGrad
                 setOnClickListener {
                     cfg.color = cId
                     syncProFromColor()
@@ -2201,15 +2252,30 @@ class EditorSheetView(
                 marginEnd = (8f * dens).roundToInt()
             }
         }
+        val barPad = (7f * dens).roundToInt()
+        val trackStroke = max(1, (0.6f * dens).roundToInt())
+        proSwatchGrad = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.WHITE)
+            setStroke((1.5f * dens).roundToInt(), Color.argb(140, 255, 255, 255))
+        }
         proSwatch = View(context).apply {
             val s = (26f * dens).roundToInt()
             layoutParams = LinearLayout.LayoutParams(s, s)
+            background = proSwatchGrad
             setOnClickListener { openHexColorDialog() }
         }
         proTop.addView(proTitle); proTop.addView(smartMatchChip); proTop.addView(proHex); proTop.addView(proSwatch)
         proCard.addView(proTop)
 
         proCard.addView(miniSliderLabel("درجة اللون"))
+        hueTrackGrad = GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(0xFFFF3B30.toInt(), 0xFFFFCC00.toInt(), 0xFF34C759.toInt(), 0xFF00C7BE.toInt(), 0xFF007AFF.toInt(), 0xFFAF52DE.toInt(), 0xFFFF2D55.toInt(), 0xFFFF3B30.toInt())
+        ).apply {
+            cornerRadius = 99f
+            setStroke(trackStroke, Color.argb(48, 255, 255, 255))
+        }
         hueSeek = makeSeekBar(0, 360) { v, fromUser ->
             if (!fromUser || suppressSeek) return@makeSeekBar
             proHue = v.toFloat()
@@ -2217,10 +2283,22 @@ class EditorSheetView(
             cfg.color = AppConstants.toHex(rgb)
             callbacks.onColorOrOpacityChanged()
             syncFromConfig()
-        }.apply { layoutDirection = LAYOUT_DIRECTION_LTR }
+        }.apply {
+            layoutDirection = LAYOUT_DIRECTION_LTR
+            progressTintList = null
+            progressBackgroundTintList = null
+            progressDrawable = android.graphics.drawable.InsetDrawable(hueTrackGrad, 0, barPad, 0, barPad)
+        }
         proCard.addView(hueSeek)
 
         proCard.addView(miniSliderLabel("السطوع"))
+        toneTrackGrad = GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(Color.BLACK, 0xFF0088FF.toInt(), Color.WHITE)
+        ).apply {
+            cornerRadius = 99f
+            setStroke(trackStroke, Color.argb(48, 255, 255, 255))
+        }
         toneSeek = makeSeekBar(0, 100) { v, fromUser ->
             if (!fromUser || suppressSeek) return@makeSeekBar
             proTone = v.toFloat()
@@ -2229,19 +2307,35 @@ class EditorSheetView(
             cfg.color = AppConstants.toHex(rgb)
             callbacks.onColorOrOpacityChanged()
             syncFromConfig()
-        }.apply { layoutDirection = LAYOUT_DIRECTION_LTR }
+        }.apply {
+            layoutDirection = LAYOUT_DIRECTION_LTR
+            progressTintList = null
+            progressBackgroundTintList = null
+            progressDrawable = android.graphics.drawable.InsetDrawable(toneTrackGrad, 0, barPad, 0, barPad)
+        }
         proCard.addView(toneSeek)
 
         val (opHdr, opTv) = secHeaderWithValue("شفافية لون الساعة", "14%", compact = true)
         opacityVal = opTv
         proCard.addView(opHdr)
+        opacityTrackGrad = GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(Color.argb(38, 255, 255, 255), Color.WHITE)
+        ).apply {
+            cornerRadius = 99f
+            setStroke(trackStroke, Color.argb(48, 255, 255, 255))
+        }
         opacitySeek = makeSeekBar(0, 100) { v, fromUser ->
             if (!fromUser || suppressSeek) return@makeSeekBar
             cfg.clockOpacity = v
             opacityVal.text = "$v%"
             callbacks.onColorOrOpacityChanged()
-            syncProUi()
-        }.apply { layoutDirection = LAYOUT_DIRECTION_LTR }
+        }.apply {
+            layoutDirection = LAYOUT_DIRECTION_LTR
+            progressTintList = null
+            progressBackgroundTintList = null
+            progressDrawable = android.graphics.drawable.InsetDrawable(opacityTrackGrad, 0, barPad, 0, barPad)
+        }
         proCard.addView(opacitySeek)
 
         val (glHdr, glTv) = secHeaderWithValue("نسبة Liquid Glass", "0%", compact = true)
@@ -2336,9 +2430,16 @@ class EditorSheetView(
             layoutDirection = LAYOUT_DIRECTION_LTR
         }
         for (cHex in AppConstants.INNER_COLORS) {
+            val dotGrad = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(AppConstants.parseHexColor(cHex))
+                setStroke((1f * dens).roundToInt(), Color.argb(80, 255, 255, 255))
+            }
+            innerSwatchGrads[cHex] = dotGrad
             val dot = View(context).apply {
                 val s = (26f * dens).roundToInt()
                 layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = (8f * dens).roundToInt() }
+                background = dotGrad
                 setOnClickListener {
                     cfg.innerColor = cHex
                     callbacks.onInnerShadowChanged()
@@ -2360,7 +2461,7 @@ class EditorSheetView(
         val wallCard = GlassSectionCard(context, padHdp = 12f, padVdp = 10f)
         val wallScroll = RubberHorizontalScrollView(context).apply {
             layoutParams = LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
-            onScrollOrRubber = { invalidateVisibleGlass(this@EditorSheetView.sheetCard) }
+            onScrollOrRubber = { invalidateVisibleGlass(this) }
         }
         val wallRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -2368,10 +2469,16 @@ class EditorSheetView(
             gravity = Gravity.CENTER_VERTICAL
         }
         for (pw in PresetWall.entries) {
+            val boxGrad = GradientDrawable().apply {
+                cornerRadius = 13f * dens
+                setStroke((0.8f * dens).roundToInt(), Color.argb(40, 255, 255, 255))
+            }
+            wallThumbGrads[pw.id] = boxGrad
             val box = FrameLayout(context).apply {
                 layoutParams = LinearLayout.LayoutParams((54f * dens).roundToInt(), (68f * dens).roundToInt()).apply {
                     marginEnd = (8f * dens).roundToInt()
                 }
+                foreground = boxGrad
                 val img = ImageView(context).apply {
                     layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
                     scaleType = ImageView.ScaleType.CENTER_CROP
@@ -2599,29 +2706,36 @@ class EditorSheetView(
 
         fmtSegment.setSelectedIndex(if (cfg.hour24) 1 else 0, animated = isOpen && currentMode == Mode.CLOCK)
 
-        for ((id, v) in colorSwatches) {
-            val active = cfg.color.equals(id, ignoreCase = true)
-            v.background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                if (id == "auto") {
-                    setColor(0xFF475569.toInt())
-                } else {
-                    setColor(AppConstants.parseHexColor(id))
+        val curColorNorm = cfg.color.lowercase()
+        if (curColorNorm != lastActiveSwatchId) {
+            for ((id, dotGrad) in colorSwatchGrads) {
+                val active = curColorNorm == id.lowercase()
+                val wasActive = lastActiveSwatchId == id.lowercase()
+                if (active || wasActive || lastActiveSwatchId.isEmpty()) {
+                    dotGrad.setStroke(
+                        (if (active) 2.5f else 1f * dens).roundToInt(),
+                        if (active) 0xFFB3DFFF.toInt() else Color.argb(80, 255, 255, 255)
+                    )
+                    colorSwatches[id]?.invalidate()
                 }
-                setStroke(
-                    (if (active) 2.5f else 1f * dens).roundToInt(),
-                    if (active) 0xFFB3DFFF.toInt() else Color.argb(80, 255, 255, 255)
-                )
             }
+            lastActiveSwatchId = curColorNorm
         }
         syncProUi()
 
-        for ((id, box) in wallThumbs) {
-            val active = cfg.wall == id
-            box.foreground = GradientDrawable().apply {
-                cornerRadius = 13f * dens
-                setStroke((if (active) 2.2f else 0.8f * dens).roundToInt(), if (active) 0xFFB3DFFF.toInt() else Color.argb(40, 255, 255, 255))
+        if (cfg.wall != lastActiveWallId) {
+            for ((id, boxGrad) in wallThumbGrads) {
+                val active = cfg.wall == id
+                val wasActive = lastActiveWallId == id
+                if (active || wasActive || lastActiveWallId.isEmpty()) {
+                    boxGrad.setStroke(
+                        (if (active) 2.2f else 0.8f * dens).roundToInt(),
+                        if (active) 0xFFB3DFFF.toInt() else Color.argb(40, 255, 255, 255)
+                    )
+                    wallThumbs[id]?.invalidate()
+                }
             }
+            lastActiveWallId = cfg.wall
         }
 
         inOpSeek.progress = cfg.innerOpacity
@@ -2633,16 +2747,20 @@ class EditorSheetView(
         inFadeSeek.progress = cfg.innerFade.coerceIn(0, 100)
         inFadeVal.text = "${cfg.innerFade}%"
 
-        for ((hex, v) in innerSwatches) {
-            val active = cfg.innerColor.equals(hex, ignoreCase = true)
-            v.background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(AppConstants.parseHexColor(hex))
-                setStroke(
-                    (if (active) 2.5f else 1f * dens).roundToInt(),
-                    if (active) 0xFFB3DFFF.toInt() else Color.argb(80, 255, 255, 255)
-                )
+        val curInnerNorm = cfg.innerColor.lowercase()
+        if (curInnerNorm != lastActiveInnerHex) {
+            for ((hex, dotGrad) in innerSwatchGrads) {
+                val active = curInnerNorm == hex.lowercase()
+                val wasActive = lastActiveInnerHex == hex.lowercase()
+                if (active || wasActive || lastActiveInnerHex.isEmpty()) {
+                    dotGrad.setStroke(
+                        (if (active) 2.5f else 1f * dens).roundToInt(),
+                        if (active) 0xFFB3DFFF.toInt() else Color.argb(80, 255, 255, 255)
+                    )
+                    innerSwatches[hex]?.invalidate()
+                }
             }
+            lastActiveInnerHex = curInnerNorm
         }
 
         togWeather.setChecked(cfg.weather)
@@ -2659,11 +2777,12 @@ class EditorSheetView(
         syncProFromColor()
         val isAuto = cfg.color == "auto"
         val col = if (isAuto) Color.WHITE else AppConstants.parseHexColor(cfg.color, Color.WHITE)
-        proHex.text = if (isAuto) "تلقائي" else cfg.color.uppercase()
-        proSwatch.background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(col)
-            setStroke((1.5f * dens).roundToInt(), Color.argb(140, 255, 255, 255))
+        val hexTxt = if (isAuto) "تلقائي" else cfg.color.uppercase()
+        if (proHex.text != hexTxt) proHex.text = hexTxt
+        if (col != lastSyncedProSwatchCol) {
+            lastSyncedProSwatchCol = col
+            proSwatchGrad.setColor(col)
+            proSwatch.invalidate()
         }
         hueSeek.progress = proHue.roundToInt().coerceIn(0, 360)
         toneSeek.progress = proTone.roundToInt().coerceIn(0, 100)
@@ -2676,48 +2795,23 @@ class EditorSheetView(
         bevelSeek.progress = cfg.clockBevel.coerceIn(0, 220)
         bevelVal.text = "${cfg.clockBevel}%"
 
-        val barPad = (7f * dens).roundToInt()
-        val trackStroke = max(1, (0.6f * dens).roundToInt())
-        hueSeek.progressTintList = null
-        hueSeek.progressBackgroundTintList = null
-        hueSeek.progressDrawable = android.graphics.drawable.InsetDrawable(
-            GradientDrawable(
-                GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(0xFFFF3B30.toInt(), 0xFFFFCC00.toInt(), 0xFF34C759.toInt(), 0xFF00C7BE.toInt(), 0xFF007AFF.toInt(), 0xFFAF52DE.toInt(), 0xFFFF2D55.toInt(), 0xFFFF3B30.toInt())
-            ).apply {
-                cornerRadius = 99f
-                setStroke(trackStroke, Color.argb(48, 255, 255, 255))
-            },
-            0, barPad, 0, barPad
-        )
-
-        val pureHue = AppConstants.hslToRgbInt(proHue, 86f, 52f)
-        toneSeek.progressTintList = null
-        toneSeek.progressBackgroundTintList = null
-        toneSeek.progressDrawable = android.graphics.drawable.InsetDrawable(
-            GradientDrawable(
-                GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(Color.BLACK, pureHue, Color.WHITE)
-            ).apply {
-                cornerRadius = 99f
-                setStroke(trackStroke, Color.argb(48, 255, 255, 255))
-            },
-            0, barPad, 0, barPad
-        )
+        if (abs(proHue - lastSyncedToneHue) >= 0.5f) {
+            lastSyncedToneHue = proHue
+            val pureHue = AppConstants.hslToRgbInt(proHue, 86f, 52f)
+            toneTrackGrad.colors = intArrayOf(Color.BLACK, pureHue, Color.WHITE)
+            toneSeek.invalidate()
+        }
 
         val opTarget = if (isAuto) Color.WHITE else col
-        opacitySeek.progressTintList = null
-        opacitySeek.progressBackgroundTintList = null
-        opacitySeek.progressDrawable = android.graphics.drawable.InsetDrawable(
-            GradientDrawable(
-                GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(Color.argb(38, Color.red(opTarget), Color.green(opTarget), Color.blue(opTarget)), opTarget)
-            ).apply {
-                cornerRadius = 99f
-                setStroke(trackStroke, Color.argb(48, 255, 255, 255))
-            },
-            0, barPad, 0, barPad
-        )
+        if (opTarget != lastSyncedOpCol || isAuto != lastSyncedOpIsAuto) {
+            lastSyncedOpCol = opTarget
+            lastSyncedOpIsAuto = isAuto
+            opacityTrackGrad.colors = intArrayOf(
+                Color.argb(38, Color.red(opTarget), Color.green(opTarget), Color.blue(opTarget)),
+                opTarget
+            )
+            opacitySeek.invalidate()
+        }
     }
 
     private fun animateScrimTo(targetAlpha: Int, durationMs: Long = 240L) {
@@ -2746,14 +2840,14 @@ class EditorSheetView(
             clockScrollView.visibility = VISIBLE
             clockScrollView.alpha = 1f
             clockScrollView.translationX = 0f
-            wallScrollView.visibility = GONE
+            wallScrollView.visibility = INVISIBLE
         } else {
             titleView.text = "تخصيص الخلفية"
             switchModeBtn.setLabel("الساعة")
             wallScrollView.visibility = VISIBLE
             wallScrollView.alpha = 1f
             wallScrollView.translationX = 0f
-            clockScrollView.visibility = GONE
+            clockScrollView.visibility = INVISIBLE
         }
     }
 
@@ -2784,14 +2878,14 @@ class EditorSheetView(
         wallScrollView.scrollTo(0, 0)
         fontScroll.userInteracted = false
         syncFromConfig()
-        updatePerfUi(perf.snapshot())
+        post { if (isOpen && !sheetClosing) updatePerfUi(perf.snapshot()) }
         if (mode == Mode.CLOCK) {
             fontScroll.post {
                 val activeChip = fontBtns[cfg.font]
                 if (activeChip != null) {
                     val maxX = max(0, (fontScroll.getChildAt(0)?.width ?: 0) - fontScroll.width)
                     val targetX = (activeChip.left - (fontScroll.width - activeChip.width) / 2).coerceIn(0, maxX)
-                    fontScroll.smoothScrollToX(targetX)
+                    fontScroll.scrollTo(targetX, 0)
                 }
             }
         }
@@ -2855,9 +2949,10 @@ class EditorSheetView(
             .translationX(-shift)
             .setDuration(155L)
             .setInterpolator(DecelerateInterpolator(1.4f))
+            .withLayer()
             .withEndAction {
                 if (currentMode != mode) return@withEndAction
-                outScroll.visibility = GONE
+                outScroll.visibility = INVISIBLE
                 outScroll.alpha = 1f
                 outScroll.translationX = 0f
             }
@@ -2871,7 +2966,10 @@ class EditorSheetView(
             .translationX(0f)
             .setDuration(235L)
             .setInterpolator(crossSlideEase)
-            .setUpdateListener { invalidateVisibleGlass(inScroll) }
+            .withLayer()
+            .withEndAction {
+                if (currentMode == mode) invalidateVisibleGlass(inScroll)
+            }
             .start()
 
         if (toClock) {

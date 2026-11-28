@@ -186,6 +186,10 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private var stageCurOffsetY = 0f
     private var stageCurFit = 1f
     private var hasStageSmoothState = false
+    private var lastAppliedWallZoom = -1f
+    private var lastClockShaderLift = Float.NaN
+    private var lastClockShaderZoom = -1f
+    private var lastChromeWasVisible = false
 
     private val layoutSpringCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
@@ -1661,7 +1665,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
 
         // Keep wallpaper & foreground depth subject 100% locked together during notification scroll so depth cutout stays intact!
         val wallZoom = (1f + yDp * 0.00028f + passcodeProgress * 0.015f) * (1f - 0.018f * wallEditorStageFrac)
-        if (!isDepthRevealAnimating) {
+        if (!isDepthRevealAnimating && abs(wallZoom - lastAppliedWallZoom) > 0.00005f) {
+            lastAppliedWallZoom = wallZoom
             wallView.scaleX = wallZoom
             wallView.scaleY = wallZoom
             subjectView.scaleX = wallZoom
@@ -1752,13 +1757,25 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         }
 
         backdrop.updateZoomOnly(phoneShell.width, phoneShell.height, wallZoom)
-        if (clockContainer.alpha > 0.02f) clockView.invalidate()
-        if (npCard.alpha > 0.02f) npCard.invalidate()
-        if (::notificationCenter.isInitialized && notificationCenter.alpha > 0.02f) notificationCenter.invalidateCards()
-        if (bottomRow.alpha > 0.02f) {
-            dndPill.invalidate()
-            shLeft.invalidate()
-            shRight.invalidate()
+        if (clockContainer.alpha > 0.02f &&
+            (pullEff > 0.5f || exp > 0.005f || lastClockShaderLift.isNaN() ||
+                abs(clockLift - lastClockShaderLift) >= 0.5f || abs(wallZoom - lastClockShaderZoom) >= 0.004f)
+        ) {
+            lastClockShaderLift = clockLift
+            lastClockShaderZoom = wallZoom
+            clockView.invalidate()
+        }
+        val chromeRestored = anyEditStage <= 0.02f && lockOverlayAlpha > 0.02f
+        val needChromeShaderRefresh = pullEff > 0.5f || exp > 0.005f || (chromeRestored && !lastChromeWasVisible)
+        lastChromeWasVisible = chromeRestored
+        if (needChromeShaderRefresh) {
+            if (npCard.alpha > 0.02f) npCard.invalidate()
+            if (::notificationCenter.isInitialized && notificationCenter.alpha > 0.02f) notificationCenter.invalidateCards()
+            if (bottomRow.alpha > 0.02f) {
+                dndPill.invalidate()
+                shLeft.invalidate()
+                shRight.invalidate()
+            }
         }
     }
 
@@ -1822,6 +1839,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     }
                     if (::musicLibraryOverlay.isInitialized && musicLibraryOverlay.isOpen) {
                         musicLibraryOverlay.refreshGlass()
+                    }
+                    if (::editorSheet.isInitialized && editorSheet.isOpen) {
+                        editorSheet.refreshGlass()
                     }
                 }
             }
