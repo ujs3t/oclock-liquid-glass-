@@ -1861,10 +1861,11 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val wallKey = if (cfg.wall == "custom") "custom:${bmp.generationId}" else cfg.wall
         val startCols = prevColorsOverride ?: currentColors ?: adaptive.sample(wallKey, bmp, cfg)
         val startCfg = prevConfigOverride ?: cfg.copy()
+        val analysisCfg = cfg.copy()
         val targetGlassPreset = cfg.clockGlassPreset
 
         bgExecutor.execute {
-            val style = WallpaperThemeAI.analyze(bmp, startCfg, glassPreset = targetGlassPreset)
+            val style = WallpaperThemeAI.analyze(bmp, analysisCfg, glassPreset = targetGlassPreset)
             mainHandler.post {
                 if (myToken != smartWallToken || isDestroyed) return@post
 
@@ -1888,7 +1889,12 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                     val topY = clockContainer.y
                     val botY = topY + max(clockContainer.height.toFloat(), 160f * resources.displayMetrics.density)
                     harmonyAuraView.playSweep(style.paletteDots, topY, botY)
-                    harmonyPillView.showPalette(style.paletteDots, style.clockGlass, style.clockRefraction, style.profileLabel)
+                    val badge = if (targetGlassPreset) {
+                        "زجاج ${style.clockGlass}% · انكسار ${style.clockRefraction}%"
+                    } else {
+                        "شفافية ${style.clockOpacity}% · ظل ${style.innerAngle.roundToInt()}°"
+                    }
+                    harmonyPillView.showPalette(style.paletteDots, style.profileLabel, badge)
                 }
 
                 if (!animated) {
@@ -2940,6 +2946,11 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             )
             return
         }
+        if (!enabled) {
+            cfg.clockGlass = 0
+            cfg.clockRefraction = 127
+            cfg.clockBevel = 124
+        }
         if (!enabled && cfg.smartWallTheme && bmp != null) {
             store.save(cfg)
             runSmartWallpaperHarmony(
@@ -2957,9 +2968,11 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         if (!enabled) {
             cfg.color = "auto"
             cfg.clockOpacity = 14
-            cfg.clockGlass = 75
-            cfg.clockRefraction = 100
-            cfg.clockBevel = 100
+            cfg.innerOpacity = 100
+            cfg.innerThickness = 0.3f
+            cfg.innerAngle = 76f
+            cfg.innerFade = 100
+            cfg.innerColor = "#e2e8f0"
         }
         store.save(cfg)
         if (::editorSheet.isInitialized) editorSheet.syncFromConfig()
@@ -2975,6 +2988,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val targetCols = adaptive.sample(wallKey, bmp, cfg)
         val fromMode = if (prevCfg.clockGlassPreset) 1f else 0f
         val toMode = if (cfg.clockGlassPreset) 1f else 0f
+        val fromInnerInt = AppConstants.parseHexColor(prevCfg.innerColor, Color.WHITE)
+        val toInnerInt = AppConstants.parseHexColor(cfg.innerColor, Color.WHITE)
         val interpCfg = cfg.copy()
         clockView.liveGlassModeOverride = fromMode
         clockView.colors = startCols
@@ -2993,6 +3008,8 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 interpCfg.clockGlass = (prevCfg.clockGlass + (cfg.clockGlass - prevCfg.clockGlass) * t).roundToInt()
                 interpCfg.clockRefraction = (prevCfg.clockRefraction + (cfg.clockRefraction - prevCfg.clockRefraction) * t).roundToInt()
                 interpCfg.clockBevel = (prevCfg.clockBevel + (cfg.clockBevel - prevCfg.clockBevel) * t).roundToInt()
+                interpCfg.innerAngle = WallpaperThemeAI.lerpAngleDeg(prevCfg.innerAngle, cfg.innerAngle, t)
+                interpCfg.innerColor = AppConstants.toHex(WallpaperThemeAI.lerpArgb(fromInnerInt, toInnerInt, t))
                 clockView.liveGlassModeOverride = fromMode + (toMode - fromMode) * t
                 clockView.colors = curCols
                 clockView.config = interpCfg

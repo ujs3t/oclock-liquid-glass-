@@ -2244,7 +2244,7 @@ class EditorSheetView(
         }.apply { layoutDirection = LAYOUT_DIRECTION_LTR }
         proCard.addView(opacitySeek)
 
-        val (glHdr, glTv) = secHeaderWithValue("نسبة Liquid Glass", "75%", compact = true)
+        val (glHdr, glTv) = secHeaderWithValue("نسبة Liquid Glass", "0%", compact = true)
         glassVal = glTv
         proCard.addView(glHdr)
         glassSeek = makeSeekBar(0, 100) { v, fromUser ->
@@ -2255,7 +2255,7 @@ class EditorSheetView(
         }.apply { layoutDirection = LAYOUT_DIRECTION_LTR }
         proCard.addView(glassSeek)
 
-        val (rfHdr, rfTv) = secHeaderWithValue("نسبة الانكسار", "100%", compact = true)
+        val (rfHdr, rfTv) = secHeaderWithValue("نسبة الانكسار", "127%", compact = true)
         refractVal = rfTv
         proCard.addView(rfHdr)
         refractSeek = makeSeekBar(0, 150) { v, fromUser ->
@@ -2266,7 +2266,7 @@ class EditorSheetView(
         }.apply { layoutDirection = LAYOUT_DIRECTION_LTR }
         proCard.addView(refractSeek)
 
-        val (bvHdr, bvTv) = secHeaderWithValue("سماكة انكسار الحافة (Bevel)", "100%", compact = true)
+        val (bvHdr, bvTv) = secHeaderWithValue("سماكة انكسار الحافة (Bevel)", "124%", compact = true)
         bevelVal = bvTv
         proCard.addView(bvHdr)
         bevelSeek = makeSeekBar(0, 220) { v, fromUser ->
@@ -2304,7 +2304,7 @@ class EditorSheetView(
         }
         innerCard.addView(inThSeek)
 
-        val (iaH, iaV) = secHeaderWithValue("اتجاه الظل", "59°", compact = true)
+        val (iaH, iaV) = secHeaderWithValue("اتجاه الظل", "76°", compact = true)
         inAngVal = iaV
         innerCard.addView(iaH)
         inAngSeek = makeSeekBar(0, 360) { v, fromUser ->

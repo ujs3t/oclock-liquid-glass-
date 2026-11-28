@@ -79,7 +79,7 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(stateKt.includes('innerFade'));
   assert.ok(stateKt.includes('innerOpacity: Int = 100'));
   assert.ok(stateKt.includes('innerThickness: Float = 0.3f'));
-  assert.ok(stateKt.includes('innerAngle: Float = 59f'));
+  assert.ok(stateKt.includes('innerAngle: Float = 76f'));
   assert.ok(stateKt.includes('innerFade: Int = 100'));
 
   const sheetKt = readFileSync(ktDir + 'EditorSheetView.kt','utf8');
@@ -385,6 +385,20 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(wallAiKt.includes('clockGlass = 45'));
   assert.ok(wallAiKt.includes('clockRefraction = 150'));
   assert.ok(wallAiKt.includes('clockBevel = 0'));
+  assert.ok(wallAiKt.includes('var clockGlass = baseCfg.clockGlass'));
+  assert.ok(wallAiKt.includes('var clockRefraction = baseCfg.clockRefraction'));
+  assert.ok(wallAiKt.includes('var clockBevel = baseCfg.clockBevel'));
+  assert.ok(appStateKt.includes('var clockOpacity: Int = 14'));
+  assert.ok(appStateKt.includes('var innerOpacity: Int = 100'));
+  assert.ok(appStateKt.includes('var innerThickness: Float = 0.3f'));
+  assert.ok(appStateKt.includes('var innerAngle: Float = 76f'));
+  assert.ok(appStateKt.includes('var innerFade: Int = 100'));
+  assert.ok(appStateKt.includes('var innerColor: String = "#e2e8f0"'));
+  assert.ok(appStateKt.includes('var smartWallTheme: Boolean = false'));
+  assert.ok(appStateKt.includes('var clockGlassPreset: Boolean = false'));
+  assert.ok(appStateKt.includes('var clockGlass: Int = 0'));
+  assert.ok(appStateKt.includes('var clockRefraction: Int = 127'));
+  assert.ok(appStateKt.includes('var clockBevel: Int = 124'));
   assert.ok(sheetKt.includes('togClockGlass'));
   assert.ok(sheetKt.includes('bevelSeek'));
   assert.ok(sheetKt.includes('7f * dens'));
@@ -392,6 +406,11 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(sheetKt.includes('onToggleClockGlassPreset'));
   assert.ok(mainKt.includes('onToggleClockGlassPreset'));
   assert.ok(mainKt.includes('liveGlassModeOverride'));
+  assert.ok(mainKt.includes('cfg.clockGlass = 0'));
+  assert.ok(mainKt.includes('cfg.clockRefraction = 127'));
+  assert.ok(mainKt.includes('cfg.clockBevel = 124'));
+  assert.ok(mainKt.includes('cfg.innerAngle = 76f'));
+  assert.ok(mainKt.includes('cfg.innerColor = "#e2e8f0"'));
 
   const perfKt = readFileSync(ktDir + 'PerfMonitor.kt','utf8');
   assert.ok(perfKt.includes('Choreographer'));

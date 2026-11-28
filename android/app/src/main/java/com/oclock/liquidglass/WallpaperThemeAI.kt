@@ -70,7 +70,6 @@ object WallpaperThemeAI {
         if (tiny !== safeBmp) tiny.recycle()
         if (safeBmp !== bmp) safeBmp.recycle()
 
-        val lums = FloatArray(tw * th)
         val clockZoneLums = ArrayList<Float>(tw * th / 2)
         val bins = 24
         val binWeight = FloatArray(bins)
@@ -104,7 +103,6 @@ object WallpaperThemeAI {
                 val g = Color.green(c) / 255f
                 val b = Color.blue(c) / 255f
                 val lum = 0.2126f * r + 0.7152f * g + 0.0722f * b
-                lums[y * tw + x] = lum
 
                 val maxC = max(r, max(g, b))
                 val minC = min(r, min(g, b))
@@ -158,21 +156,6 @@ object WallpaperThemeAI {
             }
         }
 
-        // Local clock-zone texture/edge energy
-        var detailSum = 0f
-        var detailN = 0
-        val yStart = (th * 0.07f).roundToInt().coerceIn(0, th - 2)
-        val yEnd = (th * 0.52f).roundToInt().coerceIn(yStart + 1, th - 1)
-        val xStart = (tw * 0.12f).roundToInt().coerceIn(0, tw - 2)
-        val xEnd = (tw * 0.88f).roundToInt().coerceIn(xStart + 1, tw - 1)
-        for (y in yStart until yEnd) {
-            for (x in xStart until xEnd) {
-                val idx = y * tw + x
-                detailSum += abs(lums[idx] - lums[idx + 1]) + abs(lums[idx] - lums[idx + tw])
-                detailN++
-            }
-        }
-
         clockZoneLums.sort()
         val czSize = clockZoneLums.size
         val clockLumP15 = if (czSize > 0) clockZoneLums[(czSize * 0.15f).toInt().coerceIn(0, czSize - 1)] else 0.3f
@@ -184,7 +167,6 @@ object WallpaperThemeAI {
         val globalLum = globalLumSum / pixelCount
         val brightFrac = brightCount / pixelCount
         val meanSat = satSum / pixelCount
-        val clockDetail = if (detailN > 0) detailSum / detailN else 0f
 
         // Smooth 3-neighbor circular histogram to locate hero dominant & secondary hues
         val smoothW = FloatArray(bins)
@@ -252,7 +234,7 @@ object WallpaperThemeAI {
         }
 
         // Light-source angle in upper wallpaper mapped smoothly onto crisp diagonal spec bevel (36..144 deg)
-        var innerAngle = 59f
+        var innerAngle = 76f
         if (lightW > 0.04f) {
             val lnx = (lightDx / lightW).coerceIn(-0.48f, 0.48f)
             val lny = (lightDy / lightW).coerceIn(-0.48f, 0.48f)
@@ -280,16 +262,14 @@ object WallpaperThemeAI {
         var targetSatPct: Float
         var targetLitPct: Float
         var clockOpacity: Int
-        var clockGlass: Int
-        var clockRefraction: Int
-        var clockBevel: Int
+        var clockGlass = baseCfg.clockGlass
+        var clockRefraction = baseCfg.clockRefraction
+        var clockBevel = baseCfg.clockBevel
         val profileLabel: String
 
         val isTrueDarkHeroScene = clockLum < 0.25f && clockLumP85 < 0.34f && heroChroma > 0.16f && heroSat > 0.38f && peakHasColor
         val isUniformBrightClockBg = clockLumP15 > 0.54f && clockLum > 0.66f
         val isColorfulOrSplitLight = peakHasColor && (meanSat >= 0.15f || heroChroma > 0.11f || clockSpread > 0.28f)
-
-        val detailBoost = (clockDetail * 145f + clockSpread * 16f).coerceIn(0f, 26f)
 
         when {
             glassPreset -> {
@@ -316,30 +296,24 @@ object WallpaperThemeAI {
             }
 
             isTrueDarkHeroScene -> {
-                // Rich dramatic accent tint over deep dark background (e.g. crimson red in dark forest)
+                // Rich dramatic accent tint over deep dark background (keeps clockGlass/clockRefraction/clockBevel untouched)
                 targetSatPct = (heroSat * 100f).coerceIn(68f, 88f)
                 targetLitPct = (heroLit * 82f + 14f).coerceIn(34f, 48f)
                 clockOpacity = (46f + (0.25f - clockLum).coerceIn(0f, 0.25f) * 72f).roundToInt().coerceIn(44, 62)
-                clockGlass = (64f + detailBoost * 0.65f).roundToInt().coerceIn(62, 82)
-                clockRefraction = (98f + detailBoost * 0.95f).roundToInt().coerceIn(96, 126)
-                clockBevel = (112f + detailBoost * 0.55f).roundToInt().coerceIn(110, 128)
-                profileLabel = "تناغم درامي مع ألوان خلفيتك"
+                profileLabel = "تناغم لون الساعة والظل الأبيض مع خلفيتك"
             }
 
             isUniformBrightClockBg -> {
-                // Bright white/snow everywhere behind clock: cool deep crystal contrast so numerals read effortlessly
+                // Bright white/snow everywhere behind clock: cool deep crystal contrast (keeps clockGlass/clockRefraction/clockBevel untouched)
                 targetHue = if (peakHasColor) heroHue else 214f
                 targetSatPct = if (peakHasColor) (heroSat * 68f + 18f).coerceIn(28f, 72f) else 22f
                 targetLitPct = 36f
                 clockOpacity = (30f + (clockLum - 0.66f).coerceIn(0f, 0.34f) * 32f).roundToInt().coerceIn(28, 42)
-                clockGlass = (80f + detailBoost * 0.50f).roundToInt().coerceIn(78, 94)
-                clockRefraction = (118f + detailBoost * 0.90f).roundToInt().coerceIn(115, 142)
-                clockBevel = (128f + detailBoost * 0.50f).roundToInt().coerceIn(126, 144)
-                profileLabel = "تباين بلوري واضح مع الخلفية المضيئة"
+                profileLabel = "تباين لون الساعة والظل الأبيض مع الخلفية المضيئة"
             }
 
             isColorfulOrSplitLight -> {
-                // Luminous translucent Liquid Glass (e.g. sunlit golden room, cyan glacier sky, angelic rose feathers)
+                // Luminous translucent tint (keeps clockGlass/clockRefraction/clockBevel untouched)
                 val isHighKeyPastel = (brightFrac > 0.22f || clockLum > 0.48f) && meanSat < 0.26f
                 if (isHighKeyPastel) {
                     targetSatPct = (heroSat * 60f + 16f).coerceIn(26f, 56f)
@@ -347,26 +321,19 @@ object WallpaperThemeAI {
                     clockOpacity = (26f + brightFrac * 18f).roundToInt().coerceIn(24, 38)
                 } else {
                     targetSatPct = (heroSat * 76f + 22f).coerceIn(52f, 84f)
-                    // Bright crisp crystal lift so colored digits pop against shadows AND refract light beams cleanly
                     targetLitPct = (74f + clockSpread * 12f).coerceIn(72f, 86f)
                     clockOpacity = (20f + meanSat * 14f).roundToInt().coerceIn(18, 30)
                 }
-                clockGlass = (78f + detailBoost * 0.65f).roundToInt().coerceIn(76, 95)
-                clockRefraction = (116f + detailBoost * 1.05f).roundToInt().coerceIn(114, 145)
-                clockBevel = (122f + detailBoost * 0.65f).roundToInt().coerceIn(120, 140)
-                profileLabel = "زجاج سائل متناغم وانكسار واضح"
+                profileLabel = "تناغم لون الساعة والظل الأبيض مع خلفيتك"
             }
 
             else -> {
-                // Moody smoky corridor or monochrome minimalism
+                // Moody smoky corridor or monochrome minimalism (keeps clockGlass/clockRefraction/clockBevel untouched)
                 targetHue = if (peakHasColor && heroChroma > 0.03f) heroHue else 214f
                 targetSatPct = if (peakHasColor) (heroSat * 22f).coerceIn(6f, 18f) else 10f
                 targetLitPct = 80f
                 clockOpacity = (18f + (0.35f - clockLum).coerceIn(0f, 0.35f) * 26f).roundToInt().coerceIn(16, 28)
-                clockGlass = (80f + detailBoost * 0.55f).roundToInt().coerceIn(78, 94)
-                clockRefraction = (114f + detailBoost * 0.90f).roundToInt().coerceIn(110, 138)
-                clockBevel = (118f + detailBoost * 0.50f).roundToInt().coerceIn(116, 134)
-                profileLabel = "زجاج دخاني شفاف بإطار أبيض"
+                profileLabel = "تناغم لون الساعة والظل الأبيض مع خلفيتك"
             }
         }
 
@@ -622,7 +589,7 @@ class WallpaperHarmonyPill(context: Context) : LinearLayout(context) {
         addView(badgeView)
     }
 
-    fun showPalette(palette: IntArray, glassPct: Int, refractPct: Int, label: String) {
+    fun showPalette(palette: IntArray, label: String, badgeText: String) {
         hideJob?.let { removeCallbacks(it) }
         animate().cancel()
 
@@ -642,7 +609,7 @@ class WallpaperHarmonyPill(context: Context) : LinearLayout(context) {
         }
 
         titleView.text = label
-        badgeView.text = "زجاج $glassPct% · انكسار $refractPct%"
+        badgeView.text = badgeText
         (background as? GradientDrawable)?.setStroke(
             (0.95f * dens).roundToInt(),
             Color.argb(95, Color.red(palette[0]), Color.green(palette[0]), Color.blue(palette[0]))
