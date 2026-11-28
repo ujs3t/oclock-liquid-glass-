@@ -125,6 +125,8 @@ class EditorSheetView(
     private lateinit var glassVal: TextView
     private lateinit var refractSeek: SeekBar
     private lateinit var refractVal: TextView
+    private lateinit var bevelSeek: SeekBar
+    private lateinit var bevelVal: TextView
 
     private lateinit var inOpSeek: SeekBar
     private lateinit var inOpVal: TextView
@@ -2263,6 +2265,17 @@ class EditorSheetView(
             callbacks.onColorOrOpacityChanged()
         }.apply { layoutDirection = LAYOUT_DIRECTION_LTR }
         proCard.addView(refractSeek)
+
+        val (bvHdr, bvTv) = secHeaderWithValue("سماكة انكسار الحافة (Bevel)", "100%", compact = true)
+        bevelVal = bvTv
+        proCard.addView(bvHdr)
+        bevelSeek = makeSeekBar(0, 220) { v, fromUser ->
+            if (!fromUser || suppressSeek) return@makeSeekBar
+            cfg.clockBevel = v
+            bevelVal.text = "$v%"
+            callbacks.onColorOrOpacityChanged()
+        }.apply { layoutDirection = LAYOUT_DIRECTION_LTR }
+        proCard.addView(bevelSeek)
         body.addView(proCard)
 
         // 6. Inner White Shadow Card
@@ -2660,6 +2673,8 @@ class EditorSheetView(
         glassVal.text = "${cfg.clockGlass}%"
         refractSeek.progress = cfg.clockRefraction.coerceIn(0, 150)
         refractVal.text = "${cfg.clockRefraction}%"
+        bevelSeek.progress = cfg.clockBevel.coerceIn(0, 220)
+        bevelVal.text = "${cfg.clockBevel}%"
 
         val barPad = (10f * dens).roundToInt()
         hueSeek.progressDrawable = android.graphics.drawable.InsetDrawable(

@@ -308,7 +308,7 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
         jfloat dstX, jfloat dstY, jfloat dstW, jfloat dstH, jfloat wallLeft, jfloat wallTop, jfloat wallScaleX, jfloat wallScaleY,
         jfloat maxAbsPx, jfloat ss,
         jint topColor, jint botColor, jfloat shadowOp, jint shadowTopColor,
-        jint innerColor, jfloat innerThick, jfloat innerOp, jfloat innerAngleDeg, jfloat innerFade, jfloat glassAmt, jfloat glassMode) {
+        jint innerColor, jfloat innerThick, jfloat innerOp, jfloat innerAngleDeg, jfloat innerFade, jfloat glassAmt, jfloat glassMode, jfloat bevelWidth) {
     if (!alphaBmp || !fieldBmp || !wallBmp || !outBmp) return JNI_FALSE;
     AndroidBitmapInfo aI{}, fI{}, wI{}, oI{};
     if (AndroidBitmap_getInfo(env, alphaBmp, &aI) != ANDROID_BITMAP_RESULT_SUCCESS ||
@@ -336,6 +336,10 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
     const float inR = float((innerColor >> 16) & 0xff), inG = float((innerColor >> 8) & 0xff), inB = float(innerColor & 0xff);
     const float gAmt = clamp01f(glassAmt);
     const float gMode = clamp01f(glassMode);
+    const float bevelW = std::max(0.f, std::min(2.2f, bevelWidth));
+    const float bevelNorm = bevelW / 2.2f;
+    const float bevelSpan = (3.0f + (22.5f - 3.0f) * bevelNorm) * ss;
+    const float wideMag = std::max(0.f, bevelW - 0.55f) * 15.5f * ss;
     const float dispScale = 1.0f + 1.85f * gMode;
     const float satBoost = 1.0f + (0.28f - 0.04f * gMode) * gAmt;
     const float brightBoost = 1.0f + (0.055f + 0.005f * gMode) * gAmt;
@@ -362,9 +366,11 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
             float gy = (float(aRow[size_t(x) * 4 + 2]) - 128.f) / 127.f;
             float gl = std::hypot(gx, gy);
             float depthPx = std::max(0.f, float(fd[2]) / 1.5f - 1.f);
+            float bU = clamp01f(depthPx / std::max(1.f, bevelSpan));
+            float bDomeSlope = (1.f - bU) * std::sqrt(std::max(0.01f, 1.f - bU * 0.52f));
             float bShiftMask = clamp01f(depthPx / std::max(1.f, 7.0f * ss));
-            float dx = (float(fd[0]) - 128.f) / 127.f * (maxAbsPx * dispScale) - gx * (8.5f * ss * bShiftMask * gMode);
-            float dy = (float(fd[1]) - 128.f) / 127.f * (maxAbsPx * dispScale) - gy * (8.5f * ss * bShiftMask * gMode);
+            float dx = (float(fd[0]) - 128.f) / 127.f * (maxAbsPx * dispScale) - gx * (bDomeSlope * wideMag + 8.5f * ss * bShiftMask * gMode);
+            float dy = (float(fd[1]) - 128.f) / 127.f * (maxAbsPx * dispScale) - gy * (bDomeSlope * wideMag + 8.5f * ss * bShiftMask * gMode);
             float scrX = dstX + x * scaleX + dx;
             float scrY = dstY + y * scaleY + dy;
             float wx = (scrX - wallLeft) / std::max(0.001f, wallScaleX);
@@ -378,9 +384,12 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
                 sampleBilinearWall(wB, ww, wh, wI.stride, wx, wy, gr, gg, gb_u);
                 sampleBilinearWall(wB, ww, wh, wI.stride, wx - pOffX, wy - pOffY, br_u, bg_u, bb);
                 r = rr; g = gg; b = bb;
-                // Wide creamy frosted interior crystal blur separation
-                float interior = clamp01f((depthPx - 0.45f * ss) / std::max(1.f, 4.15f * ss));
-                float blurW = (0.28f + 0.68f * interior) * (0.60f + 0.40f * gAmt) * gMode;
+                // Wide creamy frosted interior crystal blur separation vs curved bevelSpan
+                float bLo = bevelSpan * 0.16f;
+                float bHi = std::max(2.0f * ss, bevelSpan * 0.78f);
+                float it = clamp01f((depthPx - bLo) / std::max(0.01f, bHi - bLo));
+                float interior = it * it * (3.f - 2.f * it);
+                float blurW = (0.20f + 0.76f * interior) * (0.60f + 0.40f * gAmt) * gMode;
                 if (blurW > 0.01f) {
                     float bSpr = 14.0f / std::max(0.001f, wallScaleX);
                     float dSpr = bSpr * 0.72f;
@@ -420,20 +429,21 @@ Java_com_oclock_liquidglass_NativeGlass_renderClockCpuFallback(
                     float kLit = std::fabs(nx * ax + ny * ay);
                     float upFace = clamp01f(-ny * 0.68f - nx * ax * 0.32f);
                     float litStrength = clamp01f(kLit * 0.70f + upFace * 0.55f);
-                    float wallBand = std::max(0.0001f, 1.f - clamp01f(depthPx / std::max(1.f, 10.8f * ss)));
-                    float outerDarkLip = std::max(0.0001f, 1.f - clamp01f(depthPx / std::max(1.f, 1.7f * ss)));
+                    float wallBand = std::max(0.0001f, 1.f - clamp01f(depthPx / std::max(1.f, bevelSpan * 1.05f)));
+                    float lipW = (1.5f + (2.5f - 1.5f) * bevelNorm) * ss;
+                    float outerDarkLip = std::max(0.0001f, 1.f - clamp01f(depthPx / std::max(1.f, lipW)));
                     float shadowUndercut = (std::pow(wallBand, 1.45f) * (1.f - litStrength) * 0.42f + std::pow(outerDarkLip, 1.6f) * (1.f - litStrength * 0.65f) * 0.24f) * gMode;
                     r *= (1.f - shadowUndercut);
                     g *= (1.f - shadowUndercut);
                     b *= (1.f - shadowUndercut);
-                    float wallGlint = std::min(0.68f, (std::pow(wallBand, 1.35f) * std::pow(std::max(0.0001f, litStrength), 1.35f) * 0.48f + std::pow(outerDarkLip, 2.0f) * std::pow(std::max(0.0001f, kLit), 1.6f) * 0.26f) * gMode);
+                    float wallGlint = std::min(0.70f, (std::pow(wallBand, 1.35f) * std::pow(std::max(0.0001f, litStrength), 1.35f) * 0.50f + std::pow(outerDarkLip, 2.0f) * std::pow(std::max(0.0001f, kLit), 1.6f) * 0.26f) * gMode);
                     r = r * (1.f - wallGlint) + 255.f * wallGlint;
                     g = g * (1.f - wallGlint) + 255.f * wallGlint;
                     b = b * (1.f - wallGlint) + 255.f * wallGlint;
                 }
             } else if (gAmt > 0.01f) {
-                float edgeBand = std::max(0.0001f, 1.f - clamp01f(depthPx / std::max(1.f, 2.6f * ss)));
-                float fresnel = std::pow(edgeBand, 2.3f) * gAmt * 0.14f;
+                float edgeBand = std::max(0.0001f, 1.f - clamp01f(depthPx / std::max(1.f, (2.2f + (10.5f - 2.2f) * bevelNorm) * ss)));
+                float fresnel = std::pow(edgeBand, 2.1f) * gAmt * 0.18f;
                 r = r * (1.f - fresnel) + 255.f * fresnel;
                 g = g * (1.f - fresnel) + 255.f * fresnel;
                 b = b * (1.f - fresnel) + 255.f * fresnel;

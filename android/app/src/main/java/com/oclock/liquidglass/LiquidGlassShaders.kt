@@ -149,6 +149,7 @@ object LiquidGlassShaders {
         uniform float uSS;
         uniform float uGlassAmt;
         uniform float uGlassMode;
+        uniform float uBevelWidth;
         uniform float4 uTintTop;
         uniform float4 uTintBot;
         uniform float4 uShadowTop;
@@ -181,13 +182,20 @@ object LiquidGlassShaders {
 
             float glassMode = clamp(uGlassMode, 0.0, 1.0);
             float glassAmt = clamp(uGlassAmt, 0.0, 1.0);
+            float bevelW = clamp(uBevelWidth, 0.0, 2.2);
             float depthPx = max(0.0, fld.b * 255.0 / 1.5 - 1.0);
             float2 nRaw = ((m0.gb + m1.gb + m2.gb + m3.gb) * 0.25 * 255.0 - 128.0) / 127.0;
             float gl = length(nRaw);
 
+            float bevelSpan = mix(3.0 * uSS, 22.5 * uSS, clamp(bevelW / 2.2, 0.0, 1.0));
+            float bU = clamp(depthPx / max(1.0, bevelSpan), 0.0, 1.0);
+            float bDomeSlope = (1.0 - bU) * sqrt(max(0.01, 1.0 - bU * 0.52));
+            float wideMag = max(0.0, bevelW - 0.55) * 15.5 * uSS;
+            float2 wideBevelDisp = -nRaw * (bDomeSlope * wideMag);
+
             float dispScale = mix(1.0, 2.85, glassMode);
             float2 bodyShift = -nRaw * (8.5 * uSS * smoothstep(0.0, 7.0 * uSS, depthPx) * glassMode);
-            float2 disp = dispNorm * (uMaxAbsPx * dispScale) + bodyShift;
+            float2 disp = dispNorm * (uMaxAbsPx * dispScale) + wideBevelDisp + bodyShift;
             float2 localScaled = float2((fragCoord.x - uDstSize.x * 0.5) * uClockScale.x + uDstSize.x * 0.5, fragCoord.y * uClockScale.y);
             float2 samplePos = uClockOrigin + localScaled + disp;
 
@@ -224,7 +232,7 @@ object LiquidGlassShaders {
 
             float3 col = sharpCol;
             if (glassMode > 0.01) {
-                // Wide creamy iOS 26 frosted crystal bokeh inside body vs bent optical caustics on curved outer bezel
+                // Wide creamy iOS 26 frosted crystal bokeh inside body vs wide bent optical caustics across bevelSpan
                 float2 blurPos = uClockOrigin + localScaled + disp * 0.42;
                 float bRad = 22.0 * glassMode;
                 float3 blurCol = uBlurBackdrop.eval(blurPos).rgb * 0.28
@@ -236,8 +244,8 @@ object LiquidGlassShaders {
                     + uBlurBackdrop.eval(blurPos + float2(-bRad * 0.72, bRad * 0.72)).rgb * 0.07
                     + uBlurBackdrop.eval(blurPos + float2(bRad * 0.72, -bRad * 0.72)).rgb * 0.07
                     + uBlurBackdrop.eval(blurPos + float2(-bRad * 0.72, -bRad * 0.72)).rgb * 0.07;
-                float interiorMask = smoothstep(0.45 * uSS, max(1.8 * uSS, 4.6 * uSS), depthPx);
-                float blurBlend = mix(0.28, 0.96, interiorMask) * mix(0.60, 1.0, glassAmt) * glassMode;
+                float interiorMask = smoothstep(bevelSpan * 0.16, max(2.0 * uSS, bevelSpan * 0.78), depthPx);
+                float blurBlend = mix(0.20, 0.96, interiorMask) * mix(0.60, 1.0, glassAmt) * glassMode;
                 col = mix(sharpCol, blurCol, blurBlend);
             }
 
@@ -258,17 +266,17 @@ object LiquidGlassShaders {
                     float kLit = abs(dot(nCrystal, uInnerDir));
                     float upFace = clamp(-nCrystal.y * 0.68 - nCrystal.x * uInnerDir.x * 0.32, 0.0, 1.0);
                     float litStrength = clamp(kLit * 0.70 + upFace * 0.55, 0.0, 1.0);
-                    float wallBand = max(0.0001, 1.0 - clamp(depthPx / max(1.0, 10.8 * uSS), 0.0, 1.0));
-                    float outerDarkLip = max(0.0001, 1.0 - clamp(depthPx / max(1.0, 1.7 * uSS), 0.0, 1.0));
+                    float wallBand = max(0.0001, 1.0 - clamp(depthPx / max(1.0, bevelSpan * 1.05), 0.0, 1.0));
+                    float outerDarkLip = max(0.0001, 1.0 - clamp(depthPx / max(1.0, mix(1.5, 2.5, clamp(bevelW / 2.2, 0.0, 1.0)) * uSS), 0.0, 1.0));
                     // 3D curved glass bevel: deep smoked refractive shadow on unlit wall + dark outer lip + lush broad white specular bevel on lit curve
                     float shadowUndercut = (pow(wallBand, 1.45) * (1.0 - litStrength) * 0.42 + pow(outerDarkLip, 1.6) * (1.0 - litStrength * 0.65) * 0.24) * glassMode;
                     col *= (1.0 - shadowUndercut);
-                    float wallGlint = (pow(wallBand, 1.35) * pow(max(0.0001, litStrength), 1.35) * 0.48 + pow(outerDarkLip, 2.0) * pow(max(0.0001, kLit), 1.6) * 0.26) * glassMode;
-                    col = mix(col, float3(1.0), clamp(wallGlint, 0.0, 0.68));
+                    float wallGlint = (pow(wallBand, 1.35) * pow(max(0.0001, litStrength), 1.35) * 0.50 + pow(outerDarkLip, 2.0) * pow(max(0.0001, kLit), 1.6) * 0.26) * glassMode;
+                    col = mix(col, float3(1.0), clamp(wallGlint, 0.0, 0.70));
                 }
             } else if (glassAmt > 0.01) {
-                float edgeBand = max(0.0001, 1.0 - clamp(depthPx / max(1.0, 2.6 * uSS), 0.0, 1.0));
-                float fresnel = pow(edgeBand, 2.3) * glassAmt * 0.14;
+                float edgeBand = max(0.0001, 1.0 - clamp(depthPx / max(1.0, mix(2.2, 10.5, clamp(bevelW / 2.2, 0.0, 1.0)) * uSS), 0.0, 1.0));
+                float fresnel = pow(edgeBand, 2.1) * glassAmt * 0.18;
                 col = mix(col, float3(1.0), fresnel);
             }
 

@@ -45,6 +45,7 @@ data class SmartClockStyle(
     val innerFade: Int,
     val clockGlass: Int,
     val clockRefraction: Int,
+    val clockBevel: Int,
     val paletteDots: IntArray,
     val profileLabel: String
 )
@@ -281,6 +282,7 @@ object WallpaperThemeAI {
         var clockOpacity: Int
         var clockGlass: Int
         var clockRefraction: Int
+        var clockBevel: Int
         val profileLabel: String
 
         val isTrueDarkHeroScene = clockLum < 0.25f && clockLumP85 < 0.34f && heroChroma > 0.16f && heroSat > 0.38f && peakHasColor
@@ -291,7 +293,7 @@ object WallpaperThemeAI {
 
         when {
             glassPreset -> {
-                // Ultra-refractive 3D Crystal "Glass" mode (high Snell displacement + frosted blur separation + sheer translucent crystal)
+                // Ultra-refractive 3D Crystal "Glass" mode (high Snell displacement + very wide bevel refraction + frosted blur separation)
                 if (isUniformBrightClockBg) {
                     targetHue = if (peakHasColor) heroHue else 214f
                     targetSatPct = if (peakHasColor) (heroSat * 52f + 14f).coerceIn(22f, 58f) else 20f
@@ -310,6 +312,7 @@ object WallpaperThemeAI {
                 }
                 clockGlass = (94f + detailBoost * 0.18f).roundToInt().coerceIn(94, 98)
                 clockRefraction = (146f + detailBoost * 0.25f).roundToInt().coerceIn(146, 150)
+                clockBevel = (194f + detailBoost * 0.60f).roundToInt().coerceIn(192, 212)
                 profileLabel = "مظهر Glass الكريستالي حسب خلفيتك"
             }
 
@@ -320,6 +323,7 @@ object WallpaperThemeAI {
                 clockOpacity = (46f + (0.25f - clockLum).coerceIn(0f, 0.25f) * 72f).roundToInt().coerceIn(44, 62)
                 clockGlass = (64f + detailBoost * 0.65f).roundToInt().coerceIn(62, 82)
                 clockRefraction = (98f + detailBoost * 0.95f).roundToInt().coerceIn(96, 126)
+                clockBevel = (112f + detailBoost * 0.55f).roundToInt().coerceIn(110, 128)
                 profileLabel = "تناغم درامي مع ألوان خلفيتك"
             }
 
@@ -331,6 +335,7 @@ object WallpaperThemeAI {
                 clockOpacity = (30f + (clockLum - 0.66f).coerceIn(0f, 0.34f) * 32f).roundToInt().coerceIn(28, 42)
                 clockGlass = (80f + detailBoost * 0.50f).roundToInt().coerceIn(78, 94)
                 clockRefraction = (118f + detailBoost * 0.90f).roundToInt().coerceIn(115, 142)
+                clockBevel = (128f + detailBoost * 0.50f).roundToInt().coerceIn(126, 144)
                 profileLabel = "تباين بلوري واضح مع الخلفية المضيئة"
             }
 
@@ -349,6 +354,7 @@ object WallpaperThemeAI {
                 }
                 clockGlass = (78f + detailBoost * 0.65f).roundToInt().coerceIn(76, 95)
                 clockRefraction = (116f + detailBoost * 1.05f).roundToInt().coerceIn(114, 145)
+                clockBevel = (122f + detailBoost * 0.65f).roundToInt().coerceIn(120, 140)
                 profileLabel = "زجاج سائل متناغم وانكسار واضح"
             }
 
@@ -360,6 +366,7 @@ object WallpaperThemeAI {
                 clockOpacity = (18f + (0.35f - clockLum).coerceIn(0f, 0.35f) * 26f).roundToInt().coerceIn(16, 28)
                 clockGlass = (80f + detailBoost * 0.55f).roundToInt().coerceIn(78, 94)
                 clockRefraction = (114f + detailBoost * 0.90f).roundToInt().coerceIn(110, 138)
+                clockBevel = (118f + detailBoost * 0.50f).roundToInt().coerceIn(116, 134)
                 profileLabel = "زجاج دخاني شفاف بإطار أبيض"
             }
         }
@@ -403,6 +410,7 @@ object WallpaperThemeAI {
             innerFade = innerFade,
             clockGlass = clockGlass.coerceIn(0, 100),
             clockRefraction = clockRefraction.coerceIn(0, 150),
+            clockBevel = clockBevel.coerceIn(0, 220),
             paletteDots = intArrayOf(dotHero, chosenColor, dotSecondary),
             profileLabel = profileLabel
         )

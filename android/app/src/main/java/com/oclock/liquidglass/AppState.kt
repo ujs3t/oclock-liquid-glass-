@@ -99,6 +99,7 @@ data class LockConfig(
     var clockGlassPreset: Boolean = false,
     var clockGlass: Int = 75,
     var clockRefraction: Int = 100,
+    var clockBevel: Int = 100,
     var depth: Boolean = false,
     var weather: Boolean = true,
     var music: Boolean = true,
@@ -119,6 +120,7 @@ data class LockConfig(
         innerFade = innerFade.coerceIn(0, 100)
         clockGlass = clockGlass.coerceIn(0, 100)
         clockRefraction = clockRefraction.coerceIn(0, 150)
+        clockBevel = clockBevel.coerceIn(0, 220)
         if ((passcodePin.length != 4 && passcodePin.length != 6) || !passcodePin.all { it in '0'..'9' }) {
             passcodePin = "000000"
         }
@@ -242,6 +244,7 @@ class StateStore(context: Context) {
             cfg.clockGlassPreset = j.optBoolean("clockGlassPreset", cfg.clockGlassPreset)
             cfg.clockGlass = j.optInt("clockGlass", cfg.clockGlass)
             cfg.clockRefraction = j.optInt("clockRefraction", cfg.clockRefraction)
+            cfg.clockBevel = j.optInt("clockBevel", cfg.clockBevel)
             cfg.depth = j.optBoolean("depth", cfg.depth)
             cfg.weather = j.optBoolean("weather", cfg.weather)
             cfg.music = j.optBoolean("music", cfg.music)
@@ -281,6 +284,7 @@ class StateStore(context: Context) {
             put("clockGlassPreset", cfg.clockGlassPreset)
             put("clockGlass", cfg.clockGlass)
             put("clockRefraction", cfg.clockRefraction)
+            put("clockBevel", cfg.clockBevel)
             put("depth", cfg.depth)
             put("weather", cfg.weather)
             put("music", cfg.music)

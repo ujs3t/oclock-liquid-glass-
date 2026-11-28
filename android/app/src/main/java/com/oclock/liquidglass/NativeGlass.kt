@@ -73,7 +73,8 @@ object NativeGlass {
         innerAngleDeg: Float,
         innerFade: Float,
         glassAmt: Float,
-        glassMode: Float
+        glassMode: Float,
+        bevelWidth: Float
     ): Boolean
 
     /**

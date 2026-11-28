@@ -357,8 +357,12 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
 
   // Dedicated "Glass" 3D Crystal Clock Mode (high Snell refraction + chromatic dispersion + frosted interior blur + adaptive wallpaper harmony)
   assert.ok(appStateKt.includes('clockGlassPreset'));
+  assert.ok(appStateKt.includes('clockBevel'));
   assert.ok(shadersKt.includes('uBlurBackdrop'));
   assert.ok(shadersKt.includes('uGlassMode'));
+  assert.ok(shadersKt.includes('uBevelWidth'));
+  assert.ok(shadersKt.includes('bevelSpan'));
+  assert.ok(shadersKt.includes('wideBevelDisp'));
   assert.ok(shadersKt.includes('2.85'));
   assert.ok(shadersKt.includes('bodyShift'));
   assert.ok(shadersKt.includes('outerDarkLip'));
@@ -366,14 +370,19 @@ test('pure native Kotlin Liquid Glass engine and UI parity stay intact', () => {
   assert.ok(shadersKt.includes('blurBlend'));
   assert.ok(shadersKt.includes('wallGlint'));
   assert.ok(jniCpp.includes('glassMode'));
+  assert.ok(jniCpp.includes('bevelWidth'));
+  assert.ok(jniCpp.includes('bevelSpan'));
   assert.ok(jniCpp.includes('outerDarkLip'));
   assert.ok(jniCpp.includes('glassBevelMod'));
   assert.ok(jniCpp.includes('wallGlint'));
   assert.ok(layerKt.includes('uBlurBackdrop'));
   assert.ok(layerKt.includes('uGlassMode'));
+  assert.ok(layerKt.includes('uBevelWidth'));
   assert.ok(layerKt.includes('liveGlassModeOverride'));
   assert.ok(wallAiKt.includes('glassPreset'));
+  assert.ok(wallAiKt.includes('clockBevel'));
   assert.ok(sheetKt.includes('togClockGlass'));
+  assert.ok(sheetKt.includes('bevelSeek'));
   assert.ok(sheetKt.includes('"Glass"'));
   assert.ok(sheetKt.includes('onToggleClockGlassPreset'));
   assert.ok(mainKt.includes('onToggleClockGlassPreset'));

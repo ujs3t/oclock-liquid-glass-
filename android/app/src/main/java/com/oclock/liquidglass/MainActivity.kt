@@ -1875,6 +1875,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 cfg.innerAngle = style.innerAngle
                 cfg.clockGlass = style.clockGlass
                 cfg.clockRefraction = style.clockRefraction
+                cfg.clockBevel = style.clockBevel
                 store.save(cfg)
 
                 val targetCols = adaptive.sample(wallKey, bmp, cfg)
@@ -1923,6 +1924,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                         interpCfg.innerFade = (startCfg.innerFade + (cfg.innerFade - startCfg.innerFade) * t).roundToInt()
                         interpCfg.clockGlass = (startCfg.clockGlass + (cfg.clockGlass - startCfg.clockGlass) * t).roundToInt()
                         interpCfg.clockRefraction = (startCfg.clockRefraction + (cfg.clockRefraction - startCfg.clockRefraction) * t).roundToInt()
+                        interpCfg.clockBevel = (startCfg.clockBevel + (cfg.clockBevel - startCfg.clockBevel) * t).roundToInt()
                         interpCfg.innerColor = AppConstants.toHex(WallpaperThemeAI.lerpArgb(fromInnerInt, toInnerInt, t))
 
                         smartBreathScale = if (playEffect) 1f + 0.018f * kotlin.math.sin(t * kotlin.math.PI).toFloat() else 1f
@@ -2957,6 +2959,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             cfg.clockOpacity = 14
             cfg.clockGlass = 75
             cfg.clockRefraction = 100
+            cfg.clockBevel = 100
         }
         store.save(cfg)
         if (::editorSheet.isInitialized) editorSheet.syncFromConfig()
@@ -2989,6 +2992,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
                 interpCfg.clockOpacity = (prevCfg.clockOpacity + (cfg.clockOpacity - prevCfg.clockOpacity) * t).roundToInt()
                 interpCfg.clockGlass = (prevCfg.clockGlass + (cfg.clockGlass - prevCfg.clockGlass) * t).roundToInt()
                 interpCfg.clockRefraction = (prevCfg.clockRefraction + (cfg.clockRefraction - prevCfg.clockRefraction) * t).roundToInt()
+                interpCfg.clockBevel = (prevCfg.clockBevel + (cfg.clockBevel - prevCfg.clockBevel) * t).roundToInt()
                 clockView.liveGlassModeOverride = fromMode + (toMode - fromMode) * t
                 clockView.colors = curCols
                 clockView.config = interpCfg
