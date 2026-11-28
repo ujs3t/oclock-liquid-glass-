@@ -557,6 +557,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         ).apply {
             onLongPress = {
                 if (!editorSheet.isOpen && !cameraOverlay.isOpen) {
+                    if (resizeOverlay.isOpen) resizeOverlay.close()
                     haptic("heavy")
                     musicLibraryOverlay.open()
                 }
@@ -593,6 +594,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             },
             onScrollExpandChanged = { frac ->
                 notifExpandFrac = frac.coerceIn(0f, 1f)
+                if (notifExpandFrac > 0.02f && ::resizeOverlay.isInitialized && resizeOverlay.isOpen) {
+                    resizeOverlay.close()
+                }
                 applyDepthAndLayerTransforms()
                 if (cfg.music) {
                     val interactive = notifExpandFrac < 0.50f
@@ -602,6 +606,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
             },
             onDragMusicCoupling = { dyPx ->
                 notifCouplingY = dyPx
+                if (abs(dyPx) > 3f * dens && ::resizeOverlay.isInitialized && resizeOverlay.isOpen) {
+                    resizeOverlay.close()
+                }
                 applyDepthAndLayerTransforms()
             },
             onHaptic = { k -> haptic(k) }
@@ -1573,6 +1580,12 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
         val fullyUnlocked = (isUnlocked || unlockedFrac >= 0.995f) && anyEditStage < 0.01f
         val hideLockChrome = if (fullyUnlocked || passFadeT >= 0.995f) View.INVISIBLE else View.VISIBLE
 
+        if (::resizeOverlay.isInitialized && resizeOverlay.isOpen &&
+            (notifExpandFrac > 0.02f || passcodeProgress > 0.02f || isUnlocked)
+        ) {
+            resizeOverlay.close()
+        }
+
         // Keep wallpaper & foreground depth subject 100% locked together during notification scroll so depth cutout stays intact!
         val wallZoom = (1f + yDp * 0.00028f + passcodeProgress * 0.015f) * (1f - 0.018f * wallEditorStageFrac)
         if (!isDepthRevealAnimating) {
@@ -1914,6 +1927,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     }
 
     private fun openCamera(autoShoot: Boolean) {
+        if (::resizeOverlay.isInitialized && resizeOverlay.isOpen) resizeOverlay.close()
         if (flashOn) setFlashlight(false)
         cameraOverlay.open(autoShoot)
     }
@@ -1956,6 +1970,9 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     private fun setUnlocked(unlocked: Boolean) {
         if (isUnlocked == unlocked && unlockAnim?.isRunning != true) return
         isUnlocked = unlocked
+        if (unlocked && ::resizeOverlay.isInitialized && resizeOverlay.isOpen) {
+            resizeOverlay.close()
+        }
         if (unlocked && ::notificationCenter.isInitialized && notificationCenter.expandFrac > 0.05f) {
             notificationCenter.collapseScrollIfExpanded()
         }
@@ -2434,6 +2451,7 @@ class MainActivity : Activity(), EditorSheetView.EditorCallbacks {
     override fun onFontChanged(fontId: String) {
         haptic("tick")
         store.save(cfg)
+        clockView.beginFontTransition()
         scheduleClockRender(force = true)
     }
 

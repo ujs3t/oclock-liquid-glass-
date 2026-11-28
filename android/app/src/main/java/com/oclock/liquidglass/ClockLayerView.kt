@@ -1,5 +1,7 @@
 package com.oclock.liquidglass
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
@@ -22,6 +24,8 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
+import android.view.animation.DecelerateInterpolator
+import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -61,6 +65,7 @@ class ClockGlassView(
     private var lastCommittedSize = 172f
     private var lastCommittedSx = 1.0f
     private var lastCommittedSy = 1.22f
+    private var lastCommittedFont = ""
     private var lastMinuteKey = ""
     private var committedBootKey = ""
     private var committedAvailHDp = 0f
@@ -71,6 +76,19 @@ class ClockGlassView(
     private var latestScheduledSeq = 0L
     private val worker = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    // Light, silky iOS-style cross-dissolve when switching clock fonts
+    private val fontEase = PathInterpolator(0.22f, 1f, 0.36f, 1f)
+    private var fontChangeRequested = false
+    private var fontPrepAnim: ValueAnimator? = null
+    private var fontCrossAnim: ValueAnimator? = null
+    private var fontPrepScale = 1f
+    private var fontPrepAlpha = 1f
+    private var fontSwapStartScale = 1f
+    private var fontSwapStartAlpha = 1f
+    private var fontCrossProg = 1f
+    private var outgoingArtifact: ClockArtifact? = null
+    private var outgoingCpuBmp: Bitmap? = null
 
     private var hostWDp = 390f
     private var availableHDp = 400f
@@ -89,6 +107,25 @@ class ClockGlassView(
     fun committedSize(): Float = lastCommittedSize
     fun committedSx(): Float = lastCommittedSx
     fun committedSy(): Float = lastCommittedSy
+
+    fun beginFontTransition() {
+        fontChangeRequested = true
+        if (activeArtifact == null) return
+        fontPrepAnim?.cancel()
+        val s0 = fontPrepScale
+        val a0 = fontPrepAlpha
+        fontPrepAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 95L
+            interpolator = DecelerateInterpolator(1.5f)
+            addUpdateListener { anim ->
+                val t = anim.animatedValue as Float
+                fontPrepScale = s0 + (0.972f - s0) * t
+                fontPrepAlpha = a0 + (0.78f - a0) * t
+                invalidate()
+            }
+            start()
+        }
+    }
 
     fun updatePreviewTransform(sx: Float, sy: Float) {
         previewScaleX = sx
@@ -109,11 +146,17 @@ class ClockGlassView(
     }
 
     private fun commitArtifactOnUi(art: ClockArtifact, snapCfg: LockConfig, bootKey: String, availH: Float) {
+        val prevArt = activeArtifact
+        val isFontSwitch = prevArt != null && prevArt !== art &&
+            (fontChangeRequested || (lastCommittedFont.isNotEmpty() && lastCommittedFont != snapCfg.font))
+
         activeArtifact = art
         lastMinuteKey = art.minuteKey
         lastCommittedSize = snapCfg.size
         lastCommittedSx = snapCfg.sx
         lastCommittedSy = snapCfg.sy
+        lastCommittedFont = snapCfg.font
+        fontChangeRequested = false
         committedBootKey = bootKey
         committedAvailHDp = availH
         if (!art.isDraft && inFlightBootKey == bootKey) {
@@ -123,7 +166,60 @@ class ClockGlassView(
         previewScaleY = 1f
         scaleX = 1f
         scaleY = 1f
-        cpuFallbackKey = ""
+
+        if (isFontSwitch && prevArt != null) {
+            val swapScale = fontPrepScale
+            val swapAlpha = fontPrepAlpha
+            fontPrepAnim?.cancel()
+            fontCrossAnim?.cancel()
+            fontPrepScale = 1f
+            fontPrepAlpha = 1f
+            fontSwapStartScale = swapScale
+            fontSwapStartAlpha = swapAlpha
+            outgoingArtifact = prevArt
+            outgoingCpuBmp = cpuFallbackBmp?.takeIf { !it.isRecycled && it.width == prevArt.wPx && it.height == prevArt.hPx }
+            cpuFallbackBmp = null
+            cpuFallbackKey = ""
+            fontCrossProg = 0f
+
+            fontCrossAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = 210L
+                interpolator = fontEase
+                var cancelled = false
+                addUpdateListener { anim ->
+                    fontCrossProg = (anim.animatedValue as Float).coerceIn(0f, 1f)
+                    invalidate()
+                }
+                addListener(object : AnimatorListenerAdapter() {
+                    override fun onAnimationCancel(animation: Animator) {
+                        cancelled = true
+                    }
+                    override fun onAnimationEnd(animation: Animator) {
+                        if (cancelled) return
+                        outgoingArtifact = null
+                        outgoingCpuBmp = null
+                        fontCrossProg = 1f
+                        requestLayout()
+                        invalidate()
+                    }
+                })
+                start()
+            }
+        } else {
+            fontPrepAnim?.cancel()
+            fontPrepScale = 1f
+            fontPrepAlpha = 1f
+            if (outgoingArtifact == null) {
+                cpuFallbackKey = ""
+            } else {
+                fontCrossAnim?.cancel()
+                outgoingArtifact = null
+                outgoingCpuBmp = null
+                fontCrossProg = 1f
+                cpuFallbackKey = ""
+            }
+        }
+
         requestLayout()
         invalidate()
         onArtifactCommitted?.invoke(art)
@@ -237,14 +333,19 @@ class ClockGlassView(
     }
 
     fun shutdown() {
+        fontPrepAnim?.cancel()
+        fontCrossAnim?.cancel()
         worker.shutdownNow()
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val dens = resources.displayMetrics.density
         val art = activeArtifact
-        val w = ((art?.wDp ?: 260f) * dens).roundToInt().coerceAtLeast(8)
-        val h = ((art?.hDp ?: 210f) * dens).roundToInt().coerceAtLeast(8)
+        val out = outgoingArtifact
+        val wDp = if (out != null && fontCrossProg < 1f) max(art?.wDp ?: 260f, out.wDp) else (art?.wDp ?: 260f)
+        val hDp = if (out != null && fontCrossProg < 1f) max(art?.hDp ?: 210f, out.hDp) else (art?.hDp ?: 210f)
+        val w = (wDp * dens).roundToInt().coerceAtLeast(8)
+        val h = (hDp * dens).roundToInt().coerceAtLeast(8)
         setMeasuredDimension(w, h)
     }
 
@@ -260,15 +361,76 @@ class ClockGlassView(
         val originX = (parent as? View)?.x?.plus(x) ?: x
         val originY = (parent as? View)?.y?.plus(y) ?: y
 
+        val outArt = outgoingArtifact
+        if (outArt != null && fontCrossProg < 0.999f) {
+            val t = fontCrossProg.coerceIn(0f, 1f)
+            val outAlpha = fontSwapStartAlpha * (1f - t)
+            val outScale = fontSwapStartScale + (0.945f - fontSwapStartScale) * t
+            val outW = (outArt.wDp * dens).coerceAtLeast(1f)
+            val outH = (outArt.hDp * dens).coerceAtLeast(1f)
+            drawClockArtifact(
+                canvas, outArt, cols, wallShader, dens,
+                originX, originY,
+                offsetX = (dstW - outW) * 0.5f,
+                offsetY = (dstH - outH) * 0.5f,
+                artW = outW, artH = outH,
+                scale = outScale, alpha01 = outAlpha, isOutgoing = true
+            )
+
+            val inW = (art.wDp * dens).coerceAtLeast(1f)
+            val inH = (art.hDp * dens).coerceAtLeast(1f)
+            drawClockArtifact(
+                canvas, art, cols, wallShader, dens,
+                originX, originY,
+                offsetX = (dstW - inW) * 0.5f,
+                offsetY = (dstH - inH) * 0.5f,
+                artW = inW, artH = inH,
+                scale = 0.958f + 0.042f * t, alpha01 = t, isOutgoing = false
+            )
+            return
+        }
+
+        drawClockArtifact(
+            canvas, art, cols, wallShader, dens,
+            originX, originY,
+            offsetX = 0f, offsetY = 0f,
+            artW = dstW, artH = dstH,
+            scale = fontPrepScale, alpha01 = fontPrepAlpha, isOutgoing = false
+        )
+    }
+
+    private fun drawClockArtifact(
+        canvas: Canvas,
+        art: ClockArtifact,
+        cols: AdaptiveColors,
+        wallShader: BitmapShader,
+        dens: Float,
+        originX: Float,
+        originY: Float,
+        offsetX: Float,
+        offsetY: Float,
+        artW: Float,
+        artH: Float,
+        scale: Float,
+        alpha01: Float,
+        isOutgoing: Boolean
+    ) {
+        val alphaByte = (alpha01.coerceIn(0f, 1f) * 255f).roundToInt()
+        if (alphaByte <= 1) return
+
+        canvas.save()
+        if (offsetX != 0f || offsetY != 0f) canvas.translate(offsetX, offsetY)
+        if (abs(scale - 1f) > 0.0005f) canvas.scale(scale, scale, artW * 0.5f, artH * 0.5f)
+
         if (Build.VERSION.SDK_INT >= 33 && clockShader != null && art.fieldShader != null && art.alphaShader != null) {
             val t0 = SystemClock.elapsedRealtimeNanos()
             val sh = clockShader!!
             sh.setInputShader("uBackdrop", wallShader)
             sh.setInputShader("uField", art.fieldShader)
             sh.setInputShader("uMask", art.alphaShader)
-            sh.setFloatUniform("uClockOrigin", originX, originY)
-            sh.setFloatUniform("uDstSize", dstW, dstH)
-            sh.setFloatUniform("uClockScale", previewScaleX, previewScaleY)
+            sh.setFloatUniform("uClockOrigin", originX + offsetX, originY + offsetY + artH * 0.5f * (1f - scale))
+            sh.setFloatUniform("uDstSize", artW, artH)
+            sh.setFloatUniform("uClockScale", previewScaleX * scale, previewScaleY * scale)
             sh.setFloatUniform("uFieldSize", art.wPx.toFloat(), art.hPx.toFloat())
             sh.setFloatUniform("uMaxAbsPx", art.maxAbsCss * dens)
             sh.setFloatUniform("uSS", art.ss)
@@ -290,32 +452,48 @@ class ClockGlassView(
             sh.setFloatUniform("uInnerDir", cos(rad).toFloat(), sin(rad).toFloat())
 
             paint.shader = sh
-            canvas.drawRect(0f, 0f, dstW, dstH, paint)
+            paint.alpha = alphaByte
+            canvas.drawRect(0f, 0f, artW, artH, paint)
+            paint.alpha = 255
             paint.shader = null
-            perf.recordWork("clockShaderDraw", (SystemClock.elapsedRealtimeNanos() - t0) / 1_000_000.0)
+            if (!isOutgoing) perf.recordWork("clockShaderDraw", (SystemClock.elapsedRealtimeNanos() - t0) / 1_000_000.0)
         } else {
-            val wallBmp = backdrop.wallBitmap ?: return
-            val key = "${art.maskKey}|${originX.roundToInt()}|${originY.roundToInt()}|${cols.clockTintTop}|${cols.clockTintBot}|${config.innerOpacity}|${config.innerThickness}|${config.innerAngle}|${config.innerFade}|${config.innerColor}"
-            var out = cpuFallbackBmp?.takeIf { it.width == art.wPx && it.height == art.hPx }
-            if (out == null || cpuFallbackKey != key) {
-                if (out == null) {
-                    out = Bitmap.createBitmap(art.wPx, art.hPx, Bitmap.Config.ARGB_8888)
-                    cpuFallbackBmp = out
-                }
-                val innerCol = AppConstants.parseHexColor(config.innerColor, Color.WHITE)
-                NativeGlass.renderClockCpuFallback(
-                    art.alphaBmp, art.fieldBmp, wallBmp, out,
-                    originX, originY, dstW, dstH,
-                    backdrop.wallLeft, backdrop.wallTop, backdrop.wallScaleX, backdrop.wallScaleY,
-                    art.maxAbsCss * dens, art.ss,
-                    cols.clockTintTop, cols.clockTintBot, cols.clockShadowOp, cols.clockShadowTopColor,
-                    innerCol, config.innerThickness, (config.innerOpacity / 100f).coerceIn(0f, 1f), config.innerAngle, (config.innerFade / 100f).coerceIn(0f, 1f)
-                )
-                cpuFallbackKey = key
+            val wallBmp = backdrop.wallBitmap
+            if (wallBmp == null) {
+                canvas.restore()
+                return
             }
-            dstRect.set(0f, 0f, dstW, dstH)
-            canvas.drawBitmap(out, null, dstRect, paint)
+            val out: Bitmap? = if (isOutgoing) {
+                outgoingCpuBmp
+            } else {
+                val key = "${art.maskKey}|${(originX + offsetX).roundToInt()}|${(originY + offsetY).roundToInt()}|${cols.clockTintTop}|${cols.clockTintBot}|${config.innerOpacity}|${config.innerThickness}|${config.innerAngle}|${config.innerFade}|${config.innerColor}"
+                var cur = cpuFallbackBmp?.takeIf { it.width == art.wPx && it.height == art.hPx }
+                if (cur == null || cpuFallbackKey != key) {
+                    if (cur == null) {
+                        cur = Bitmap.createBitmap(art.wPx, art.hPx, Bitmap.Config.ARGB_8888)
+                        cpuFallbackBmp = cur
+                    }
+                    val innerCol = AppConstants.parseHexColor(config.innerColor, Color.WHITE)
+                    NativeGlass.renderClockCpuFallback(
+                        art.alphaBmp, art.fieldBmp, wallBmp, cur,
+                        originX + offsetX, originY + offsetY, artW, artH,
+                        backdrop.wallLeft, backdrop.wallTop, backdrop.wallScaleX, backdrop.wallScaleY,
+                        art.maxAbsCss * dens, art.ss,
+                        cols.clockTintTop, cols.clockTintBot, cols.clockShadowOp, cols.clockShadowTopColor,
+                        innerCol, config.innerThickness, (config.innerOpacity / 100f).coerceIn(0f, 1f), config.innerAngle, (config.innerFade / 100f).coerceIn(0f, 1f)
+                    )
+                    cpuFallbackKey = key
+                }
+                cur
+            }
+            if (out != null && !out.isRecycled) {
+                paint.alpha = alphaByte
+                dstRect.set(0f, 0f, artW, artH)
+                canvas.drawBitmap(out, null, dstRect, paint)
+                paint.alpha = 255
+            }
         }
+        canvas.restore()
     }
 
     @androidx.annotation.RequiresApi(33)
